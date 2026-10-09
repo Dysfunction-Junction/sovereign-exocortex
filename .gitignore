@@ -12,3 +12,16 @@ coverage/
 .DS_Store
 Thumbs.db
 *.tsbuildinfo
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Logs and runtime databases
+*.log
+*.jsonl
+packages/triad/triad/logs/
+triad/logs/
+.triad_proposed_fix.patch

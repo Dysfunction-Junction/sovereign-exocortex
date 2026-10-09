@@ -572,10 +572,17 @@ def _check_dependency_graph_compatibility(parent_root: Path, wt_root: Path) -> T
                     if p_deps != w_deps:
                         return False, "Candidate package.json dependencies differ from parent installation"
                 except Exception:
-                    if p_file.read_bytes() != w_file.read_bytes():
+                    p_raw = p_file.read_bytes().replace(b"\r\n", b"\n")
+                    w_raw = w_file.read_bytes().replace(b"\r\n", b"\n")
+                    if p_raw != w_raw:
                         return False, f"Candidate {name} differs from parent"
             else:
-                if p_file.read_bytes() != w_file.read_bytes():
+                p_raw = p_file.read_bytes()
+                w_raw = w_file.read_bytes()
+                if not name.endswith(".lockb"):
+                    p_raw = p_raw.replace(b"\r\n", b"\n")
+                    w_raw = w_raw.replace(b"\r\n", b"\n")
+                if p_raw != w_raw:
                     return False, f"Candidate lockfile {name} differs from parent installation"
         elif p_file.exists() != w_file.exists():
             return False, f"Dependency manifest presence mismatch for {name}"

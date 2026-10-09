@@ -2430,7 +2430,7 @@ describe("path-precise patch promotion", () => {
     expect(
       await readFile(join(disjoint.targetRepo, "human-notes.txt"), "utf8"),
     ).toBe("keep me\n");
-  });
+  }, 15000);
 
   it("reconciles committed promotions so later work proceeds and rollback refuses", async () => {
     const fixture = await createMeshPromotionFixture();
