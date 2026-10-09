@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_003",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/validation/payment.ts\n+++ b/src/validation/payment.ts\n@@ -8,22 +8,27 @@ interface PaymentInput {\n     expiryMonth: number;\n     expiryYear: number;\n     cvv: string;\n }\n \n+function isExpiryInFuture(month: number, year: number): boolean {\n+    const now = new Date();\n+    const currentYear = now.getFullYear();\n+    const currentMonth = now.getMonth() + 1;\n+    if (year > currentYear) return true;\n+    if (year === currentYear && month >= currentMonth) return true;\n+    return false;\n+}\n+\n export function validatePaymentInput(input: PaymentInput): boolean {\n     if (!input.cardNumber || input.cardNumber.length < 13) {\n         return false;\n     }\n-    const now = new Date();\n-    const currentYear = now.getFullYear();\n-    const currentMonth = now.getMonth() + 1;\n-    if (input.expiryYear < currentYear) return false;\n-    if (input.expiryYear === currentYear && input.expiryMonth < currentMonth) return false;\n+    if (!isExpiryInFuture(input.expiryMonth, input.expiryYear)) {\n+        return false;\n+    }\n     if (!input.cvv || input.cvv.length < 3) {\n         return false;\n     }\n     return true;\n }"
+}

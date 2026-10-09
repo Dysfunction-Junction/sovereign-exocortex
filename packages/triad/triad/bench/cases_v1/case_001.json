@@ -1,0 +1,14 @@
+{
+  "id": "case_001",
+  "diff": "--- a/src/api/pagination.py\n+++ b/src/api/pagination.py\n@@ -10,6 +10,6 @@ def get_paginated_records(db, page: int, page_size: int):\n-    offset = (page - 1) * page_size\n+    offset = page * page_size\n     return db.query(Record).offset(offset).limit(page_size).all()",
+  "bug_description": "off-by-one in pagination offset calculation",
+  "expected_catch": true,
+  "keywords": [
+    "off-by-one",
+    "pagination",
+    "offset",
+    "page - 1",
+    "page 0",
+    "skip"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "case_010",
+  "diff": "--- a/src/auth/tokens.py\n+++ b/src/auth/tokens.py\n@@ -12,5 +12,5 @@ def is_token_expired(expires_at_utc: datetime) -> bool:\n     # expires_at_utc has tzinfo=timezone.utc\n-    now_utc = datetime.now(timezone.utc)\n-    return now_utc >= expires_at_utc\n+    now_local = datetime.now()\n+    return now_local >= expires_at_utc",
+  "bug_description": "naive vs aware timezone comparison TypeError or offset mismatch",
+  "expected_catch": true,
+  "keywords": [
+    "timezone",
+    "naive",
+    "aware",
+    "utc",
+    "datetime",
+    "tzinfo",
+    "offset"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "@exocortex/memory",
+  "version": "1.0.0",
+  "description": "Sovereign Long-Term Memory and Vector/Token overlap storage for the Exocortex",
+  "type": "module",
+  "main": "dist/src/local-ltm.js",
+  "types": "dist/src/local-ltm.d.ts",
+  "exports": {
+    ".": "./src/local-ltm.ts",
+    "./client": "./src/pieces.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx test/runner.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

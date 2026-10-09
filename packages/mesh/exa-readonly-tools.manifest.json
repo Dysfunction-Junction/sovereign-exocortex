@@ -1,0 +1,26 @@
+{
+  "manifestVersion": 1,
+  "encoding": "gzip-base64",
+  "generatedAt": "2026-07-12T23:14:17.689Z",
+  "upstream": {
+    "name": "exa-search-server",
+    "version": "3.2.1",
+    "protocolVersion": "2025-11-25"
+  },
+  "allowlist": [
+    "web_search_exa",
+    "web_fetch_exa"
+  ],
+  "allowlistSha256": "sha256:a1293be7f9ff7a5d28fe5b682599602dbd2515716b84b8910c0545629242ee5d",
+  "payloadSha256": "sha256:9d832b75a784b9482ea5536af76743c963ab24e39611c9013841214ea123074e",
+  "schemaSha256": "sha256:87cf770b5f59cf845c1ba40aa8c7dc8de69d84bee5c315a12bafbf1e70ff1738",
+  "toolsGzipBase64": [
+    "H4sIAAAAAAACE+VU227kRBD9lVKDlERynFnxgGQhHnYBAQq7kGjhYWcV1bTLdmfa1U539XqsKBIfwRfyJajbM4lz0SKe8WO5ui6nzjkfbhVjT6pSI22uAqHX3RXtUBWqpqC9GcQ4VpW6zL9AOoKRNtA4D8gTiBuMBuQaWhLQlpAL8IT1dCruNAYC7ViIpVzzmiF/rylIKlDBD4Zrwy3o6D2xgOHG+R5TywKYxlBAg1pCAQO5wVIB2vUDsqFQQJ4gjORThZtIIT0LgBsX5WG28tD1giR6DhW8SUOC0E4Os0HjXZ/SYQYAPIVoJSxm/i2Sn0DMEKpDaMZnQxkTUxNaGLClAtgJbGkana9DCWu1sa6FwQWZp8/zXhBqybj9HgkG8nlx1rRW+f1azRmfQkpYq/s13idIUah1fqpmVODsITLjk3Y/7CKdd7Ht4NzwlmrDMHjXGEshPTugmTYeSIv5RHa67/VTA51pO2vaTgKgJzAcYtMYbYilgMZZ60aIA4xGusSLq4ZkJhA4zsBs0rHfX5yHUhXK8BDlUnfUo6pulUxDYp7bXJMWVajBu4G8GArp702CfJEWJCGnCtUbPidupVPVq6c0fYsSPVqwyG3Elg4o5GIlXHYu2ho2BAiBemQxGq2dwBvdwaIUuObFu17HsDzuu5ycKxjWNtaL43yT5v4WjvcnOXD4JN2mcTqGA83g7z//AirbEo6eXvZn1zF85wiCa2RMFyBuDRP5o1LdFYpjfzEXWQDFsd+Qf6bgtzmcFnvM8jSPz+KA45oajFYqeLU6KdXdXaE83UTjqVbVh/1FPhYK69rMi/+6OFmDNlChvgz7A6tOZKjOzq6D49M5WDrfntUeGzldfX02x75IiyCzkyz8vElykHdspx8Ni6rER8rbiI+Zo3N438/U1A8u6XiZ7QbiP5y39SL3rlC0Ix1nQG6VYNhexmFwXlSlGuc3pq6J096PbPGe1M8wvSCsARPzE0WOAjTR2ntbwTA7IvTot7UbuczyxUbIw2O/hbEj/pzakt3lQ6WGPCVJZXt6MNPvd+JRS3KXR1Nkc9uyG3nWIbxG0R300YpJHEtBMAyOE3mtLdf8Oa9MntWTYI2Ce+PsKCvkOJz8Z5FHb5fURe9xSjWE+vBc+3dP8c+z72H598XS+x53bzpMQJF/UTS9YdPH/gVv+QV36Q/o+/epNc2wJw/PKCxE9NVqtTp5pqK88v9BRB//ATVEf69dCAAA"
+  ],
+  "policy": {
+    "reviewedToolCount": 2,
+    "allowedToolCount": 2,
+    "basis": "All currently exposed tools are explicitly read-only, non-destructive web retrieval tools.",
+    "excludedTools": []
+  }
+}

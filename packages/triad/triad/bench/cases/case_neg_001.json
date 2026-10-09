@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_001",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/services/userService.ts\n+++ b/src/services/userService.ts\n@@ -10,18 +10,18 @@ export class UserService {\n     constructor(private readonly repo: UserRepository) {}\n \n-    private async fetchUserById(uid: string): Promise<UserEntity | null> {\n-        if (!uid || uid.trim().length === 0) {\n+    private async getUserProfileById(userId: string): Promise<UserEntity | null> {\n+        if (!userId || userId.trim().length === 0) {\n             throw new InvalidArgumentException(\"User ID must be non-empty\");\n         }\n-        const user = await this.repo.findById(uid);\n+        const user = await this.repo.findById(userId);\n         return user ?? null;\n     }\n \n-    async deactivateUserAccount(uid: string, reason: string): Promise<void> {\n-        const existing = await this.fetchUserById(uid);\n+    async deactivateUserAccount(userId: string, reason: string): Promise<void> {\n+        const existing = await this.getUserProfileById(userId);\n         if (!existing) {\n-            throw new NotFoundException(`User ${uid} not found`);\n+            throw new NotFoundException(`User ${userId} not found`);\n         }\n-        await this.repo.markInactive(uid, reason);\n+        await this.repo.markInactive(userId, reason);\n     }\n }"
+}

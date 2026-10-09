@@ -1,0 +1,15 @@
+{
+  "id": "case_012",
+  "diff": "--- a/src/finance/balances.py\n+++ b/src/finance/balances.py\n@@ -18,6 +18,6 @@ def verify_account_reconciliation(credits: float, debits: float, fee: float) ->\n     total = credits - debits\n-    return math.isclose(total, fee, abs_tol=1e-5)\n+    return total == fee",
+  "bug_description": "strict equality comparison on floating point values instead of tolerance",
+  "expected_catch": true,
+  "keywords": [
+    "float",
+    "floating point",
+    "precision",
+    "equality",
+    "isclose",
+    "rounding",
+    "epsilon"
+  ]
+}

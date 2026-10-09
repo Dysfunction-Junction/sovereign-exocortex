@@ -1,0 +1,34 @@
+{
+  "claude": {
+    "state": "closed",
+    "reason": null,
+    "failures": 0,
+    "until": 0,
+    "last_success": 1791516384.3419933,
+    "last_success_start": 1791516368.666389,
+    "last_failure": 1791100664.2304735,
+    "last_failure_start": 1791100660.2865076,
+    "last_call_start": 1791516368.666389
+  },
+  "codex": {
+    "state": "closed",
+    "reason": null,
+    "failures": 0,
+    "until": 0,
+    "last_success": 1791349424.72382,
+    "last_success_start": 1791349401.6569786,
+    "last_failure": 1791095885.84486,
+    "last_failure_start": 1791095585.7183356,
+    "last_call_start": 1791349401.6569786
+  },
+  "nous": {
+    "state": "closed",
+    "reason": null,
+    "failures": 1,
+    "until": 0,
+    "last_failure": 1791095885.9943748,
+    "last_failure_start": 1791095885.8625581,
+    "last_success": null,
+    "last_success_start": null
+  }
+}

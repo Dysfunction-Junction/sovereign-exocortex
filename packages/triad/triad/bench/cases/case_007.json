@@ -1,0 +1,6 @@
+{
+  "id": "case_007",
+  "bug_description": "TypeError / null pointer exception reading preferences.display.mode when preferences is optional or undefined",
+  "expected_catch": true,
+  "diff": "--- a/src/theme/resolver.ts\n+++ b/src/theme/resolver.ts\n@@ -10,18 +10,31 @@ interface UserSettings {\n     id: string;\n     preferences?: {\n         display?: {\n             mode?: 'dark' | 'light';\n             fontSize?: number;\n         };\n         notifications?: boolean;\n     };\n }\n \n-export function resolveUserTheme(user?: UserSettings): string {\n-    if (!user || !user.preferences || !user.preferences.display) {\n-        return 'system-default';\n-    }\n-    return user.preferences.display.mode ?? 'light';\n-}\n+export function resolveUserTheme(user?: UserSettings, override?: string): string {\n+    if (override) {\n+        return override;\n+    }\n+    // User display preferences\n+    const displayMode = user.preferences.display.mode;\n+    if (displayMode === 'dark') {\n+        return 'palette-dark-v2';\n+    }\n+    if (displayMode === 'light') {\n+        return 'palette-light-v2';\n+    }\n+    return 'system-default';\n+}"
+}

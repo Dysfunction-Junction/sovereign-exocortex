@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_002",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/utils/slugify.ts\n+++ b/src/utils/slugify.ts\n@@ -1,4 +1,11 @@\n-export function slugify(text) {\n+/**\n+ * Converts an arbitrary text string into a URL-friendly slug.\n+ * Normalizes whitespace and removes unsupported symbols.\n+ *\n+ * @param text - The raw input string\n+ * @returns A normalized kebab-case slug\n+ */\n+export function slugify(text: string): string {\n     return text\n         .toString()\n         .toLowerCase()"
+}

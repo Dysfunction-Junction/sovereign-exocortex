@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_007",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/types/domain.ts\n+++ b/src/types/domain.ts\n@@ -5,15 +5,15 @@ export type OrderStatus = 'pending' | 'processing' | 'shipped' | 'delivered';\n \n export interface OrderItem {\n-    productId: string;\n-    unitPrice: number;\n-    quantity: number;\n+    readonly productId: string;\n+    readonly unitPrice: number;\n+    readonly quantity: number;\n }\n \n export interface Order {\n-    id: string;\n-    customerId: string;\n-    items: OrderItem[];\n-    totalAmount: number;\n-    status: OrderStatus;\n+    readonly id: string;\n+    readonly customerId: string;\n+    readonly items: readonly OrderItem[];\n+    readonly totalAmount: number;\n+    readonly status: OrderStatus;\n }"
+}

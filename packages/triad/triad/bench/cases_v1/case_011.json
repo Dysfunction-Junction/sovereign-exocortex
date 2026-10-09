@@ -1,0 +1,13 @@
+{
+  "id": "case_011",
+  "diff": "--- a/src/metrics/calculator.py\n+++ b/src/metrics/calculator.py\n@@ -15,6 +15,6 @@ def calculate_conversion_rate(successes: int, total_attempts: int) -> float:\n-    if total_attempts <= 0:\n-        return 0.0\n     return (successes / total_attempts) * 100.0",
+  "bug_description": "division by zero error when total_attempts is 0",
+  "expected_catch": true,
+  "keywords": [
+    "division by zero",
+    "zerodivisionerror",
+    "zero",
+    "total_attempts",
+    "denominator"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "id": "case_006",
+  "diff": "--- a/src/routes/invoices.ts\n+++ b/src/routes/invoices.ts\n@@ -20,6 +20,6 @@ router.delete(\"/api/invoices/:id\", async (req: AuthRequest, res: Response) => {\n     const { id } = req.params;\n-    const invoice = await db.invoices.findOne({ id, ownerId: req.user.id });\n+    const invoice = await db.invoices.findOne({ id });\n     if (!invoice) return res.status(404).json({ error: \"Not found\" });\n     await db.invoices.delete(id);\n     return res.status(204).send();\n });",
+  "bug_description": "insecure direct object reference IDOR missing ownership check",
+  "expected_catch": true,
+  "keywords": [
+    "idor",
+    "authorization",
+    "owner",
+    "ownerid",
+    "permission",
+    "access control",
+    "unauthorized"
+  ]
+}

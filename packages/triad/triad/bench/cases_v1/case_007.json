@@ -1,0 +1,14 @@
+{
+  "id": "case_007",
+  "diff": "--- a/src/utils/formatters.ts\n+++ b/src/utils/formatters.ts\n@@ -8,5 +8,5 @@ interface UserProfile {\n export function getDisplayTheme(profile?: UserProfile): string {\n-    return profile?.settings?.theme?.toLowerCase() ?? \"system\";\n+    return profile.settings.theme.toLowerCase();\n }",
+  "bug_description": "null pointer / undefined property access on optional profile",
+  "expected_catch": true,
+  "keywords": [
+    "undefined",
+    "null",
+    "typeerror",
+    "optional chaining",
+    "null pointer",
+    "cannot read property"
+  ]
+}

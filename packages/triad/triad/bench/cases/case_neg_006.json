@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_006",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/utils/tags.py\n+++ b/src/utils/tags.py\n@@ -1,6 +1,7 @@\n from typing import Tuple\n \n-def filter_tags(tags: frozenset, allowed: tuple):\n+def filter_tags(tags: frozenset, allowed: tuple) -> frozenset:\n+    \"\"\"Filters tags against an optional whitelist.\"\"\"\n     if not allowed:\n         return tags\n     return tags.intersection(allowed)"
+}

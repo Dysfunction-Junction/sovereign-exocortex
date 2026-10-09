@@ -1,0 +1,14 @@
+{
+  "id": "case_004",
+  "diff": "--- a/src/db/users.py\n+++ b/src/db/users.py\n@@ -8,5 +8,5 @@ def find_user_by_email(cursor, email: str):\n-    cursor.execute(\"SELECT id, email, role FROM users WHERE email = %s\", (email,))\n+    cursor.execute(f\"SELECT id, email, role FROM users WHERE email = '{email}'\")\n     return cursor.fetchone()",
+  "bug_description": "sql injection via string interpolation without parameterized query",
+  "expected_catch": true,
+  "keywords": [
+    "sql injection",
+    "injection",
+    "parameterized",
+    "sanitize",
+    "sqli",
+    "prepared statement"
+  ]
+}

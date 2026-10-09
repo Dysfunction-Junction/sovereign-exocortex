@@ -1,0 +1,6 @@
+{
+  "id": "case_neg_005",
+  "bug_description": "",
+  "expected_catch": false,
+  "diff": "--- a/src/auth/service.py\n+++ b/src/auth/service.py\n@@ -1,18 +1,24 @@\n import os\n+import logging\n from typing import Optional\n \n class AuthService:\n     def __init__(self, user_repo: UserRepository, token_provider: TokenProvider):\n         self.user_repo = user_repo\n         self.token_provider = token_provider\n+        self.logger = logging.getLogger(\"auth.service\")\n \n     def authenticate_user(self, credentials: LoginCredentials, client_ip: str) -> Optional[AuthToken]:\n+        self.logger.debug(\"Login attempt initiated\", extra={\"ip\": client_ip})\n         user = self.user_repo.find_by_username(credentials.username)\n         if not user:\n+            self.logger.warning(\"Login failed: user not found\", extra={\"ip\": client_ip})\n             return None\n \n         if not verify_password(credentials.password, user.password_hash):\n+            self.logger.warning(\"Login failed: invalid password\", extra={\"user_id\": user.id, \"ip\": client_ip})\n             return None\n \n         token = self.token_provider.create_access_token(user.id, roles=user.roles)\n+        self.logger.info(\"User authenticated successfully\", extra={\"user_id\": user.id, \"ip\": client_ip})\n         return token\n"
+}

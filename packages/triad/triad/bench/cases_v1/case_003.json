@@ -1,0 +1,14 @@
+{
+  "id": "case_003",
+  "diff": "--- a/src/utils/file_parser.py\n+++ b/src/utils/file_parser.py\n@@ -5,6 +5,6 @@ def parse_config(filepath: str) -> dict:\n-    with open(filepath, 'r') as f:\n-        return json.load(f)\n+    f = open(filepath, 'r')\n+    data = json.load(f)\n+    return data",
+  "bug_description": "resource leak unclosed file handle without context manager",
+  "expected_catch": true,
+  "keywords": [
+    "leak",
+    "close",
+    "context manager",
+    "with open",
+    "unclosed",
+    "file descriptor"
+  ]
+}

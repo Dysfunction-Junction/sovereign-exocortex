@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-triad"
+version = "3.3.0"
+description = "Autonomous multi-agent CLI orchestrator: zero-token MCP stripping, advisory-council failover, isolated worktree gates."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Papa-Bear4216" }]
+keywords = ["ai-agents", "code-review", "pre-commit", "claude", "codex", "orchestration"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = [
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+proc = ["psutil>=5.9"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=5.0",
+    "pytest-xdist>=3.5",  # Parallel test runner for CI and local gating
+    "ruff>=0.6",
+    "bandit>=1.7",
+    "psutil>=5.9",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 200
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+
+[tool.bandit]
+exclude_dirs = ["triad/tests", "triad/bench/.cache"]
+
+[tool.pytest.ini_options]
+testpaths = ["triad/tests"]
+
+[project.scripts]
+triad = "triad.triad_engine:main"
+
+[project.urls]
+Homepage = "https://github.com/Papa-Bear4216/autonomous-triad"
+
+[tool.setuptools]
+packages = ["triad", "triad.bench"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+triad = ["advisors.json", "empty-mcp.json"]
+"triad.bench" = ["swebench_instances.json", "cases/*", "cases_v1/*"]

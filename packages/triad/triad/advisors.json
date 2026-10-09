@@ -1,0 +1,139 @@
+{
+  "advisors": [
+    {
+      "name": "claude",
+      "display_name": "Claude 3.7 Sonnet (Claude Pro)",
+      "binary_path": "~/.local/bin/claude.exe",
+      "fallback_binary": "claude",
+      "priority": 1,
+      "execution_flags": [
+        "-p",
+        "--tools=",
+        "--strict-mcp-config",
+        "--mcp-config",
+        "{empty_mcp}",
+        "--setting-sources",
+        "",
+        "--system-prompt",
+        "You are a rigorous senior engineering advisor. Follow the instructions in the user message exactly.",
+        "--disable-slash-commands"
+      ],
+      "input_mode": "stdin",
+      "output_mode": "stdout",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    },
+    {
+      "name": "codex",
+      "display_name": "OpenAI Codex (gpt-6-astra via ChatGPT Plus)",
+      "binary_path": "{localappdata}/Programs/OpenAI/Codex/bin/codex.exe",
+      "fallback_binary": "codex",
+      "priority": 2,
+      "execution_flags": [
+        "exec",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--skip-git-repo-check",
+        "-s",
+        "read-only",
+        "-C",
+        "{triad_dir}",
+        "-c",
+        "skills.include_instructions=false",
+        "-c",
+        "include_permissions_instructions=false",
+        "-c",
+        "include_apps_instructions=false",
+        "-c",
+        "include_collaboration_mode_instructions=false",
+        "-c",
+        "include_environment_context=false",
+        "--disable",
+        "plugins",
+        "--disable",
+        "multi_agent",
+        "--disable",
+        "tool_suggest",
+        "--disable",
+        "image_generation",
+        "--disable",
+        "in_app_browser",
+        "--disable",
+        "in_app_local_automation",
+        "--disable",
+        "goals",
+        "--disable",
+        "hooks",
+        "--disable",
+        "skill_search",
+        "--disable",
+        "sleep_tool",
+        "--disable",
+        "view_image",
+        "-o",
+        "{output_file}",
+        "-"
+      ],
+      "input_mode": "stdin",
+      "output_mode": "file",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    },
+    {
+      "name": "nous",
+      "display_name": "Nous Research (Hermes Portal)",
+      "binary_path": "python",
+      "fallback_binary": "python3",
+      "priority": 3,
+      "execution_flags": [
+        "{triad_dir}/nous_bridge.py"
+      ],
+      "input_mode": "stdin",
+      "output_mode": "stdout",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    },
+    {
+      "name": "ollama",
+      "display_name": "Ollama Local Advisor (qwen2.5-coder:14b)",
+      "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
+      "fallback_binary": "ollama",
+      "priority": 4,
+      "execution_flags": [
+        "run",
+        "qwen2.5-coder:14b"
+      ],
+      "input_mode": "stdin",
+      "output_mode": "stdout",
+      "readiness_port": "{port_ollama}",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    },
+    {
+      "name": "mock",
+      "display_name": "Mock Test Advisor",
+      "role": "test",
+      "binary_path": "python",
+      "fallback_binary": "python3",
+      "priority": 99,
+      "execution_flags": [
+        "-c",
+        "import sys; c = sys.stdin.read(); print('VERDICT: APPROVED\\n[Mock Advisor]: Approved' if 'pre-commit' in c.lower() or 'verdict' in c.lower() else f'[Mock Advisor]: Successfully processed prompt ({len(c)} characters)')"
+      ],
+      "input_mode": "stdin",
+      "output_mode": "stdout",
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      },
+      "enabled": true
+    }
+  ]
+}

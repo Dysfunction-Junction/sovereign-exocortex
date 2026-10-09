@@ -1,0 +1,14 @@
+{
+  "id": "case_005",
+  "diff": "--- a/src/components/NotificationCounter.tsx\n+++ b/src/components/NotificationCounter.tsx\n@@ -12,5 +12,5 @@ export function NotificationCounter({ pollInterval }: Props) {\n     useEffect(() => {\n         const interval = setInterval(() => {\n             fetchUnreadCount(lastSeenId);\n-        }, pollInterval);\n-    }, [pollInterval, lastSeenId]);\n+        }, pollInterval);\n+    }, [pollInterval]);",
+  "bug_description": "stale closure missing lastSeenId dependency in useEffect hook",
+  "expected_catch": true,
+  "keywords": [
+    "stale closure",
+    "dependency",
+    "lastSeenId",
+    "useeffect",
+    "dependency array",
+    "missing"
+  ]
+}

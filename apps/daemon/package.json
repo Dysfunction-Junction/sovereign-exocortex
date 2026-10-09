@@ -1,0 +1,29 @@
+{
+  "name": "@exocortex/daemon",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "exocortexd: Unified Sovereign Exocortex host daemon and high-speed in-memory event orchestrator.",
+  "main": "dist/server.js",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sentinel": "tsx src/mishmash-sentinel.ts"
+  },
+  "dependencies": {
+    "@exocortex/core": "workspace:*",
+    "@exocortex/memory": "workspace:*",
+    "@exocortex/mesh": "workspace:*",
+    "@pieces-android/allowlist": "workspace:*",
+    "jsonwebtoken": "^9.0.3",
+    "undici": "^8.10.0"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3"
+  }
+}

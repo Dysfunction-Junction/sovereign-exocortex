@@ -1,0 +1,14 @@
+{
+  "id": "case_002",
+  "diff": "--- a/src/services/userService.ts\n+++ b/src/services/userService.ts\n@@ -14,7 +14,7 @@ export async function updateUserPreferences(userId: string, prefs: Preferences) {\n     const sanitized = validate(prefs);\n-    await auditLogRepository.record(userId, \"PREF_UPDATE\");\n+    auditLogRepository.record(userId, \"PREF_UPDATE\");\n     return db.users.update(userId, sanitized);\n }",
+  "bug_description": "unawaited async operation / missing await on auditLogRepository.record",
+  "expected_catch": true,
+  "keywords": [
+    "await",
+    "unawaited",
+    "promise",
+    "async",
+    "floating promise",
+    "race condition"
+  ]
+}

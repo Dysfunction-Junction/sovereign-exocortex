@@ -1,0 +1,13 @@
+{
+  "id": "case_008",
+  "diff": "--- a/src/models/cart.py\n+++ b/src/models/cart.py\n@@ -4,6 +4,6 @@ class CartItem:\n-def create_cart_session(user_id: str, initial_items: list = None):\n-    if initial_items is None:\n-        initial_items = []\n+def create_cart_session(user_id: str, initial_items: list = []):\n     return {\"user_id\": user_id, \"items\": initial_items}",
+  "bug_description": "mutable default argument retaining mutated state across function calls",
+  "expected_catch": true,
+  "keywords": [
+    "mutable default",
+    "default argument",
+    "mutable",
+    "shared across calls",
+    "list = []"
+  ]
+}

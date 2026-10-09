@@ -1,0 +1,14 @@
+{
+  "id": "case_009",
+  "diff": "--- a/src/workers/payment_processor.ts\n+++ b/src/workers/payment_processor.ts\n@@ -25,7 +25,7 @@ export async function processStripeEvent(event: StripeEvent) {\n     try {\n         await handlePaymentSettlement(event);\n     } catch (err) {\n-        logger.error(\"Payment settlement failed\", { error: err, eventId: event.id });\n-        throw err;\n+        // Ignored\n     }\n }",
+  "bug_description": "swallowed error in catch block silently ignoring payment failure",
+  "expected_catch": true,
+  "keywords": [
+    "swallow",
+    "silent",
+    "ignored",
+    "error handling",
+    "empty catch",
+    "suppress"
+  ]
+}
