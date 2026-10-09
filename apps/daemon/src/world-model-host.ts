@@ -30,6 +30,41 @@ import type { ExocortexDatabase } from "@exocortex/core/db";
 
 const MAX_RECORDER_FAILURES = 5;
 
+const SCREEN_STATES = ["ON", "OFF", "UNLOCKED"];
+
+/** Validate untrusted telemetry signals before any state is mutated. Throws TypeError on bad input. */
+function validateSignals(signals: unknown): asserts signals is ContextualSignals {
+  if (!signals || typeof signals !== "object" || Array.isArray(signals)) {
+    throw new TypeError("invalid telemetry: signals must be an object");
+  }
+  const s = signals as Record<string, unknown>;
+  for (const key of ["foregroundApp", "windowTitle"]) {
+    if (s[key] !== undefined && typeof s[key] !== "string") {
+      throw new TypeError(`invalid telemetry: ${key} must be a string`);
+    }
+  }
+  for (const key of ["timestamp", "idleDurationMs", "recentInteractionVelocity", "userDwellMs", "hesitationScore"]) {
+    if (s[key] !== undefined && (typeof s[key] !== "number" || !Number.isFinite(s[key] as number))) {
+      throw new TypeError(`invalid telemetry: ${key} must be a finite number`);
+    }
+  }
+  if (s.hourOfDay !== undefined) {
+    const h = s.hourOfDay;
+    if (typeof h !== "number" || !Number.isFinite(h) || h < 0 || h > 23) {
+      throw new TypeError("invalid telemetry: hourOfDay must be a number between 0 and 23");
+    }
+  }
+  if (s.isWeekend !== undefined && typeof s.isWeekend !== "boolean") {
+    throw new TypeError("invalid telemetry: isWeekend must be a boolean");
+  }
+  if (s.screenState !== undefined && !SCREEN_STATES.includes(s.screenState as string)) {
+    throw new TypeError("invalid telemetry: screenState must be ON, OFF or UNLOCKED");
+  }
+  if (s.manualOverrideMode !== undefined && s.manualOverrideMode !== null && typeof s.manualOverrideMode !== "string") {
+    throw new TypeError("invalid telemetry: manualOverrideMode must be a string or null");
+  }
+}
+
 export class WorldModelHost {
   private static instance: WorldModelHost | null = null;
 
@@ -131,6 +166,7 @@ export class WorldModelHost {
     stagedProposals: ProposalEnvelope[];
     drainedQueue: ProposalEnvelope[];
   } {
+    validateSignals(signals);
     const prevMode = this.cognitiveGate.mode;
     const mode = this.cognitiveGate.classifyMode(signals);
 

@@ -6,7 +6,7 @@ import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
 import { flushUsageEvents } from "./lib/flush";
-import { triageQueue } from "./lib/triageQueue";
+import { triageQueueSafe } from "./lib/triageQueue";
 import { isScreenContextEnabled, isNotificationCaptureEnabled } from "./lib/config";
 import { startPassiveCaptureListener } from "./lib/passiveCapture";
 import { startNotificationCaptureListener } from "./lib/notificationCapture";
@@ -46,9 +46,9 @@ export default function App() {
         // accumulates on subsequent resumes within the same install (user
         // backgrounds pieces-android to use another app, more captures
         // queue, then comes back) — mount alone would miss those.
-        triageQueue();
+        triageQueueSafe();
         CapacitorApp.addListener("appStateChange", ({ isActive }) => {
-          if (isActive) triageQueue();
+          if (isActive) triageQueueSafe();
         }).then((handle) => {
           if (appStateDisposed) handle.remove();
           else removeAppStateListener = () => handle.remove();

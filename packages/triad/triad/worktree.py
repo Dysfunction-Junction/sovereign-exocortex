@@ -161,6 +161,14 @@ def _discover_repo_from_worktree(worktree_path: Path) -> Optional[Path]:
     return None
 
 
+def reject_option_like_ref(ref: object, what: str = "git ref") -> str:
+    """Refuse refs/commit-ish values git could parse as an option (leading '-') or that are empty/NUL-bearing."""
+    text = str(ref)
+    if not text.strip() or text.startswith("-") or "\x00" in text:
+        raise ValueError(f"Invalid {what} {text!r}: must be non-empty and must not start with '-'")
+    return text
+
+
 def create_worktree(
     repo_path: Union[str, Path],
     branch_or_commit: str = "HEAD",
@@ -183,6 +191,7 @@ def create_worktree(
     Returns:
         Path: Resolved absolute path to the newly created worktree.
     """
+    branch_or_commit = reject_option_like_ref(branch_or_commit, "branch or commit")
     root = get_repo_root(repo_path, env=env)
 
     if target_path:
@@ -194,7 +203,7 @@ def create_worktree(
     cmd = ["git", "-C", str(root), "worktree", "add"]
     if detach:
         cmd.append("--detach")
-    cmd.extend([str(wt_path), str(branch_or_commit)])
+    cmd.extend(["--", str(wt_path), str(branch_or_commit)])
 
     run_env = clean_git_env(base_env=env) if env is not None else clean_git_env()
     res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=run_env)
@@ -825,94 +834,95 @@ def deprovision_worktree_dependencies(worktree_path: Union[str, Path]) -> None:
     target_manifest = manifest_file if manifest_file.exists() else (old_manifest_file if old_manifest_file.exists() else None)
 
     if target_manifest and target_manifest.exists():
-        try:
-            raw_data = json.loads(target_manifest.read_text(encoding="utf-8"))
-            entries: List[str] = []
-            if isinstance(raw_data, dict):
-                # Validate schema
-                if raw_data.get("version") == 1 and isinstance(raw_data.get("entries"), list):
-                    stored_wt = raw_data.get("worktree")
-                    if stored_wt and _lexical_clean_path(stored_wt) != clean_wt:
-                        # Manifest worktree mismatch: untrusted manifest, abort processing it
-                        entries = []
-                    else:
-                        entries = raw_data["entries"]
-            elif isinstance(raw_data, list):
-                entries = raw_data
+        # Failures here are deliberately NOT swallowed: callers (e.g. WarmWorktreePool._reset_worktree)
+        # run `git clean -ffdx` afterwards and must not do so while a dependency junction may remain.
+        raw_data = json.loads(target_manifest.read_text(encoding="utf-8"))
+        entries: List[str] = []
+        if isinstance(raw_data, dict):
+            # Validate schema
+            if raw_data.get("version") == 1 and isinstance(raw_data.get("entries"), list):
+                stored_wt = raw_data.get("worktree")
+                if stored_wt and _lexical_clean_path(stored_wt) != clean_wt:
+                    # Manifest worktree mismatch: untrusted manifest, abort processing it
+                    entries = []
+                else:
+                    entries = raw_data["entries"]
+        elif isinstance(raw_data, list):
+            entries = raw_data
 
-            # Filter and strictly validate lexical containment of every entry
-            validated_entries: List[Path] = []
-            for entry_str in entries:
-                if not isinstance(entry_str, str):
-                    continue
-                p = Path(entry_str)
-                clean_p = _lexical_clean_path(p)
+        # Filter and strictly validate lexical containment of every entry
+        validated_entries: List[Path] = []
+        for entry_str in entries:
+            if not isinstance(entry_str, str):
+                continue
+            p = Path(entry_str)
+            clean_p = _lexical_clean_path(p)
 
-                # Strict lexical containment check: must be inside wt / node_modules
-                if not (clean_p == clean_nm or clean_nm in clean_p.parents):
-                    # Entry escapes provisioned dependency folder: ignore!
-                    continue
-                if clean_wt not in clean_p.parents:
-                    # Entry escapes worktree: ignore!
-                    continue
+            # Strict lexical containment check: must be inside wt / node_modules
+            if not (clean_p == clean_nm or clean_nm in clean_p.parents):
+                # Entry escapes provisioned dependency folder: ignore!
+                continue
+            if clean_wt not in clean_p.parents:
+                # Entry escapes worktree: ignore!
+                continue
 
-                # Verify no ancestor between clean_wt and p (exclusive) is a link escaping wt
-                cur_parent = _lexical_clean_path(p.parent)
-                has_escaping_ancestor = False
-                while cur_parent != clean_wt and cur_parent != cur_parent.parent:
-                    if is_reparse_or_link(cur_parent):
-                        # Symlink ancestor inside checkout (including clean_nm): reject
-                        has_escaping_ancestor = True
-                        break
-                    cur_parent = cur_parent.parent
-                if has_escaping_ancestor:
-                    continue
+            # Verify no ancestor between clean_wt and p (exclusive) is a link escaping wt
+            cur_parent = _lexical_clean_path(p.parent)
+            has_escaping_ancestor = False
+            while cur_parent != clean_wt and cur_parent != cur_parent.parent:
+                if is_reparse_or_link(cur_parent):
+                    # Symlink ancestor inside checkout (including clean_nm): reject
+                    has_escaping_ancestor = True
+                    break
+                cur_parent = cur_parent.parent
+            if has_escaping_ancestor:
+                continue
 
-                if is_reparse_or_link(p) or p.exists():
-                    validated_entries.append(p)
+            if is_reparse_or_link(p) or p.exists():
+                validated_entries.append(p)
 
-            # Remove deepest paths first
-            validated_entries.sort(key=lambda p: len(p.parts), reverse=True)
-            for p in validated_entries:
+        # Remove deepest paths first
+        validated_entries.sort(key=lambda p: len(p.parts), reverse=True)
+        for p in validated_entries:
+            clean_p = _lexical_clean_path(p)
+            # Recheck containment immediately before removal
+            if not (clean_p == clean_nm or clean_nm in clean_p.parents):
+                continue
+            if clean_wt not in clean_p.parents:
+                continue
+            cur_parent = _lexical_clean_path(p.parent)
+            has_linked_ancestor = False
+            while cur_parent != clean_wt and cur_parent != cur_parent.parent:
+                if is_reparse_or_link(cur_parent):
+                    has_linked_ancestor = True
+                    break
+                cur_parent = cur_parent.parent
+            if has_linked_ancestor:
+                continue
+
+            if is_reparse_or_link(p):
+                if os.name == "nt" and os.path.isdir(str(p)):
+                    try:
+                        os.rmdir(str(p))
+                    except OSError:
+                        subprocess.run(["cmd.exe", "/c", "rmdir", str(p)], capture_output=True)
+                else:
+                    p.unlink(missing_ok=True)
+                # A link that is still present means the removal failed: never continue.
+                if is_reparse_or_link(p):
+                    raise OSError(f"Failed to remove dependency link {p}; refusing to continue teardown")
+            elif p.is_file():
+                p.unlink(missing_ok=True)
+            elif p.is_dir():
+                # Real (non-link) directory: only removable when empty. A non-empty one holds
+                # ordinary files and no remaining manifest links (deepest entries went first).
                 try:
-                    clean_p = _lexical_clean_path(p)
-                    # Recheck containment immediately before removal
-                    if not (clean_p == clean_nm or clean_nm in clean_p.parents):
-                        continue
-                    if clean_wt not in clean_p.parents:
-                        continue
-                    cur_parent = _lexical_clean_path(p.parent)
-                    has_linked_ancestor = False
-                    while cur_parent != clean_wt and cur_parent != cur_parent.parent:
-                        if is_reparse_or_link(cur_parent):
-                            has_linked_ancestor = True
-                            break
-                        cur_parent = cur_parent.parent
-                    if has_linked_ancestor:
-                        continue
-
+                    os.rmdir(str(p))
+                except OSError:
                     if is_reparse_or_link(p):
-                        if os.name == "nt" and os.path.isdir(str(p)):
-                            try:
-                                os.rmdir(str(p))
-                            except OSError:
-                                subprocess.run(["cmd.exe", "/c", "rmdir", str(p)], capture_output=True)
-                        else:
-                            p.unlink(missing_ok=True)
-                    elif p.is_file():
-                        p.unlink(missing_ok=True)
-                    elif p.is_dir():
-                        try:
-                            os.rmdir(str(p))
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        raise
 
-            target_manifest.unlink(missing_ok=True)
-            return
-        except Exception:
-            pass
+        target_manifest.unlink(missing_ok=True)
 
 
 def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str, Tuple[int, int]]]:
@@ -952,6 +962,39 @@ def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str,
     except Exception:
         pass
     return snapshot
+
+
+TRIAD_WORKTREE_DIR_PREFIX = "triad"
+
+
+def _triad_worktree_root() -> Path:
+    """Root under which create_worktree allocates default worktrees (the system temp dir)."""
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _is_managed_worktree_path(
+    wt_path: Path,
+    main_repo: Optional[Path],
+    env: Optional[Dict[str, str]] = None,
+) -> bool:
+    """
+    True if `wt_path` may be force-deleted: it is registered in `git worktree list --porcelain`
+    of the owning repo (this also covers a registered worktree whose earlier removal only
+    partially succeeded), or it lies under the triad worktree root in a `triad*` directory.
+    """
+    norm = os.path.normcase(str(wt_path))
+    if main_repo is not None and Path(main_repo).exists():
+        try:
+            for entry in list_worktrees(main_repo, env=env):
+                if os.path.normcase(str(entry["worktree"])) == norm:
+                    return True
+        except Exception:
+            pass
+    try:
+        rel = wt_path.relative_to(_triad_worktree_root())
+    except ValueError:
+        return False
+    return bool(rel.parts) and rel.parts[0].lower().startswith(TRIAD_WORKTREE_DIR_PREFIX)
 
 
 def remove_worktree(
@@ -1026,6 +1069,12 @@ def remove_worktree(
             return True
         else:
             return False
+
+    # Force removal is destructive (rmtree fallback). Only act on directories git knows as a
+    # worktree of the owning repo, or that live under the triad worktree root. Anything else is
+    # refused untouched, so a mistyped/hostile path can never be wiped.
+    if wt_path.exists() and not _is_managed_worktree_path(wt_path, main_repo, env):
+        return False
 
     # Force removal: Safely deprovision external dependency links before unlinking or deleting worktree
     deprovision_worktree_dependencies(wt_path)
@@ -1155,8 +1204,9 @@ class WarmWorktreePool:
         self._pool_id = uuid.uuid4().hex[:8]
 
         # Determine exact commit SHA to reset to
+        reject_option_like_ref(base_commit, "base_commit")
         res = subprocess.run(
-            ["git", "-C", str(self.repo_root), "rev-parse", base_commit],
+            ["git", "-C", str(self.repo_root), "rev-parse", "--verify", "--end-of-options", base_commit],
             capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.env
         )
         if res.returncode != 0 or not res.stdout.strip():

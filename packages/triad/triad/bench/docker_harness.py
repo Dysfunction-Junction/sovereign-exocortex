@@ -177,7 +177,7 @@ def _apply_patch(checkout: Path, patch_text: str) -> bool:
     patch_file.write_text(patch_text if patch_text.endswith("\n") else patch_text + "\n", encoding="utf-8")
     try:
         result = subprocess.run(
-            ["git", "-C", str(checkout), "apply", "--recount", str(patch_file)],
+            ["git", "-C", str(checkout), "apply", "--recount", "--", str(patch_file)],
             capture_output=True,
             timeout=60,
         )

@@ -50,12 +50,15 @@ async function withQueueLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function readQueue(): Promise<UsageEvent[]> {
+// Pure read: never writes. Missing ids are backfilled in memory only; every
+// caller that holds the queue lock rewrites the queue anyway, and peekQueue
+// (which doesn't) persists the backfill itself under the lock.
+async function readQueueRaw(): Promise<{ events: UsageEvent[]; backfilled: boolean }> {
   const { value } = await Preferences.get({ key: QUEUE_KEY });
-  if (!value) return [];
+  if (!value) return { events: [], backfilled: false };
   try {
     const raw = JSON.parse(value);
-    if (!Array.isArray(raw)) return [];
+    if (!Array.isArray(raw)) return { events: [], backfilled: false };
     let backfilled = false;
     const events: UsageEvent[] = raw.map((e) => {
       if (!e || typeof e !== "object") return e;
@@ -68,13 +71,14 @@ async function readQueue(): Promise<UsageEvent[]> {
       }
       return e;
     });
-    if (backfilled) {
-      Preferences.set({ key: QUEUE_KEY, value: JSON.stringify(events) }).catch(() => {});
-    }
-    return events;
+    return { events, backfilled };
   } catch {
-    return [];
+    return { events: [], backfilled: false };
   }
+}
+
+async function readQueue(): Promise<UsageEvent[]> {
+  return (await readQueueRaw()).events;
 }
 
 async function writeQueue(events: UsageEvent[]): Promise<void> {
@@ -95,7 +99,21 @@ export async function recordEvent(event: UsageEvent): Promise<void> {
 }
 
 export async function peekQueue(): Promise<UsageEvent[]> {
-  return readQueue();
+  // Must not be called from inside withQueueLock (the lock is not reentrant);
+  // lock-holding code in this module uses readQueue() directly.
+  return withQueueLock(async () => {
+    // Re-read inside the lock so the backfill write can't clobber a
+    // concurrent recordEvent/patch/clear.
+    const { events, backfilled } = await readQueueRaw();
+    if (backfilled) {
+      try {
+        await writeQueue(events);
+      } catch {
+        // best effort: ids are regenerated on the next read
+      }
+    }
+    return events;
+  });
 }
 
 /**

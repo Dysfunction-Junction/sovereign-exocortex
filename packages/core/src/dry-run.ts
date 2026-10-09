@@ -1,4 +1,12 @@
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
+
+function nonceMatches(expected: string, provided: unknown): boolean {
+  if (typeof provided !== "string") return false;
+  const a = Buffer.from(expected, "utf8");
+  const b = Buffer.from(provided, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
 
 export interface SpeculativeProposal {
   proposalId: string;
@@ -74,7 +82,7 @@ export class DryRunCache {
       if (item) this.cache.delete(proposalId);
       return { ok: false, error: "proposal expired or not found", code: 404 };
     }
-    if (item.approvalNonce !== nonce) {
+    if (!nonceMatches(item.approvalNonce, nonce)) {
       return { ok: false, error: "invalid approval nonce", code: 403 };
     }
     this.cache.delete(proposalId);

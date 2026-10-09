@@ -15,7 +15,28 @@ import { appendEntry } from "./captureIndex";
 // ~2-3s, and OnDeviceTriagePlugin's own in-flight guard would just drop
 // concurrent calls anyway. A large backlog triages slowly but correctly,
 // which is the right tradeoff over dropping summaries under load.
-export async function triageQueue(): Promise<void> {
+//
+// Single-flight: mount and every resume can fire this while a prior run is
+// still mid-inference. Concurrent callers share the in-flight run instead of
+// starting a second pass over the same untriaged events.
+let inFlight: Promise<void> | null = null;
+
+export function triageQueue(): Promise<void> {
+  if (inFlight) return inFlight;
+  const run = runTriage().finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  inFlight = run;
+  return run;
+}
+
+// Fire-and-forget variant for lifecycle hooks (App mount/resume): a triage
+// failure must never surface as an unhandled promise rejection.
+export function triageQueueSafe(): void {
+  triageQueue().catch(() => {});
+}
+
+async function runTriage(): Promise<void> {
   const queue = await peekQueue();
   const updated: UsageEvent[] = [];
 

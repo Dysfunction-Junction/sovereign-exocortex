@@ -93,10 +93,29 @@ function watchChild(id: string, child: ChildProcess): Promise<never> {
   return p;
 }
 
-async function waitForPing(id: string, upstream: string, log: () => string): Promise<void> {
-  const deadline = Date.now() + 20_000;
+export async function waitForPing(
+  id: string,
+  upstream: string,
+  log: () => string,
+  child?: ChildProcess,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   let last = "not started";
+  let spawnError: Error | null = null;
+  child?.once("error", (err) => {
+    spawnError = err;
+  });
+  const childFailure = (): string | null => {
+    if (spawnError) return `spawn error: ${(spawnError as Error).message}`;
+    if (child && (child.exitCode !== null || child.signalCode !== null)) {
+      return `exited early with code=${child.exitCode} sig=${child.signalCode}`;
+    }
+    return null;
+  };
   while (Date.now() < deadline) {
+    const failed = childFailure();
+    if (failed) throw new Error(`${id} ${failed}\n${log()}`);
     try {
       const response = await fetch(new URL("/mishmash/delegate", upstream), {
         method: "POST",
@@ -118,6 +137,8 @@ async function waitForPing(id: string, upstream: string, log: () => string): Pro
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  const failed = childFailure();
+  if (failed) throw new Error(`${id} ${failed}\n${log()}`);
   throw new Error(`${id} did not answer ping (${last})\n${log()}`);
 }
 
@@ -200,7 +221,7 @@ export async function startMishmash(options: {
     await Promise.all(
       MISHMASH_LAUNCH.map((spec, i) =>
         Promise.race([
-          waitForPing(spec.id, upstreams[spec.id] as string, logs),
+          waitForPing(spec.id, upstreams[spec.id] as string, logs, children[i] as ChildProcess),
           watchChild(spec.id, children[i] as ChildProcess),
         ])
       )

@@ -5450,6 +5450,46 @@ exit 0
             self.assertEqual(cm.exception.code, 1)
             self.assertFalse(getattr(args, "_validated_tree", None))
 
+    def test_gate_competition_blocks_on_degraded_or_no_quorum_even_with_approved_verdict(self):
+        """T1: a degraded / no-quorum competition council must block even when synthesis says APPROVED."""
+        from triad.triad_engine import _run_gate
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "init.txt").write_text("initial", encoding="utf-8")
+            subprocess.run(["git", "add", "init.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo_dir), capture_output=True, check=True)
+            (repo_dir / "feat.py").write_text("def feat(): return 42\n", encoding="utf-8")
+            subprocess.run(["git", "add", "feat.py"], cwd=str(repo_dir), capture_output=True, check=True)
+
+            for status, quorum in (("degraded", False), ("degraded", True), ("ok", False)):
+                with self.subTest(status=status, quorum_met=quorum):
+                    args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+                    session = {
+                        "status": status,
+                        "quorum_met": quorum,
+                        "synthesis": "## Final Adjudicated Verdict\nVERDICT: APPROVED\nLooks fine.",
+                    }
+                    with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                        with patch("triad.competition.query_competition_council", return_value=session):
+                            with patch("sys.stdout", new=io.StringIO()):
+                                with self.assertRaises(SystemExit) as cm:
+                                    _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+                    self.assertEqual(cm.exception.code, 1)
+                    self.assertFalse(getattr(args, "_validated_tree", None))
+
+            # Control: a healthy council still approves
+            args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+            session = {"status": "ok", "quorum_met": True, "synthesis": "VERDICT: APPROVED\nGood."}
+            with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                with patch("triad.competition.query_competition_council", return_value=session):
+                    with patch("sys.stdout", new=io.StringIO()):
+                        _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+            self.assertTrue(getattr(args, "_validated_tree", None))
+
     def test_worktree_provisions_and_deprovisions_node_modules(self):
         """Verify provision_worktree_dependencies zero-copies node_modules and deprovision cleans it safely."""
         from triad.worktree import provision_worktree_dependencies, deprovision_worktree_dependencies

@@ -144,4 +144,72 @@ describe("audit regressions (core)", () => {
     expect(db.getShadowLabels("prop_tap")[0].label).toBe("not_wanted");
     db.close();
   });
+  function proposalDb(state: "STAGED" | "SURFACED" | "SUPPRESSED" = "SUPPRESSED") {
+    const db = new ExocortexDatabase({ path: ":memory:" });
+    const now = Date.now();
+    db.registerDevice({
+      device_id: "dev_t", name: "dev_t", platform: "linux", pubkey_spki: new Uint8Array([0]),
+      key_attested: 0, scopes: [], enrolled_at: now, revoked_at: null,
+    });
+    const ev = db.ingestEvent("dev_t", { event_id: "evt_t", kind: "telemetry", ts_device: 1, schema_ver: 1, payload: {} });
+    db.insertProposal({
+      proposal_id: "p1", created_seq: ev.event.seq, invariant_id: null, policy_type: "PRAGMATIC",
+      tier: 1, summary: "s", action: "{}", action_hash: new Uint8Array([1]), efe: 1, risk_term: 0.1,
+      ambiguity_term: 0.05, state, shadow: 1, expires_at: now + 60000, updated_at: now,
+    });
+    return db;
+  }
+
+  it("C1: updateProposalState rejects illegal transitions (SUPPRESSED -> EXECUTING) and leaves state unchanged", () => {
+    const db = proposalDb("SUPPRESSED");
+    expect(() => db.updateProposalState("p1", "EXECUTING")).toThrow(/Illegal proposal state transition/);
+    expect(() => db.updateProposalState("p1", "APPROVED")).toThrow(/Illegal/);
+    expect(db.getProposal("p1")?.state).toBe("SUPPRESSED");
+    expect(() => db.updateProposalState("nope", "APPROVED")).toThrow(/unknown proposal/);
+    db.close();
+  });
+
+  it("C1: legal lifecycle STAGED -> APPROVED -> EXECUTING -> SUCCEEDED works, terminal states are final", () => {
+    const db = proposalDb("STAGED");
+    db.updateProposalState("p1", "APPROVED");
+    db.updateProposalState("p1", "EXECUTING");
+    db.updateProposalState("p1", "SUCCEEDED");
+    expect(db.getProposal("p1")?.state).toBe("SUCCEEDED");
+    expect(() => db.updateProposalState("p1", "EXECUTING")).toThrow(/Illegal/);
+    db.close();
+  });
+
+  it("C2: ingestEvent re-checks revocation inside the write transaction", () => {
+    const db = new ExocortexDatabase({ path: ":memory:" });
+    db.registerDevice({
+      device_id: "dev_r", name: "dev_r", platform: "linux", pubkey_spki: new Uint8Array([0]),
+      key_attested: 0, scopes: [], enrolled_at: 1, revoked_at: null,
+    });
+    // Simulate a revoke that lands after any pre-transaction check but before the write lock is used:
+    // the revoke runs as the first statement inside the write transaction.
+    const realTx = db.withTransaction.bind(db);
+    (db as any).withTransaction = (fn: () => unknown) =>
+      realTx(() => {
+        db.revokeDevice("dev_r");
+        return fn();
+      });
+    expect(() =>
+      db.ingestEvent("dev_r", { event_id: "e_race", kind: "telemetry", ts_device: 1, schema_ver: 1, payload: {} }),
+    ).toThrow(/revoked/);
+    expect(db.getEventById("e_race")).toBeNull();
+    db.close();
+  });
+
+  it("C3: DryRunCache.release rejects wrong/short/non-string nonces without consuming, accepts the right one", () => {
+    const cache = new DryRunCache();
+    const p = cache.set("c1", {}, "s");
+    for (const bad of ["", p.approvalNonce.slice(0, -1), p.approvalNonce + "x", undefined as unknown as string, 123 as unknown as string]) {
+      const r = cache.release(p.proposalId, bad);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.code).toBe(403);
+    }
+    expect(cache.get(p.proposalId)).not.toBeNull();
+    const ok = cache.release(p.proposalId, p.approvalNonce);
+    expect(ok.ok).toBe(true);
+  });
 });

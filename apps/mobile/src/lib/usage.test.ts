@@ -104,4 +104,25 @@ describe("usage queue management", () => {
     const remaining = await peekQueue();
     expect(remaining).toHaveLength(0);
   });
+
+  test("peekQueue id-backfill write cannot clobber a concurrent recordEvent", async () => {
+    const legacy = { type: "screen_view", screen: "status", timestamp: "2026-08-31T04:00:00.000Z" };
+    await Preferences.set({ key: QUEUE_KEY, value: JSON.stringify([legacy]) });
+    // Delay the first write (the backfill) so a stale snapshot would land last.
+    const orig = vi.mocked(Preferences.set).getMockImplementation()!;
+    vi.mocked(Preferences.set).mockImplementationOnce(async (o) => {
+      await new Promise((r) => setTimeout(r, 30));
+      return orig(o);
+    });
+    const [peeked] = await Promise.all([
+      peekQueue(),
+      recordEvent({ id: "new-1", type: "screen_view", screen: "recent", timestamp: "2026-08-31T04:01:00.000Z" }),
+    ]);
+    expect(peeked.length).toBeGreaterThanOrEqual(1);
+    await new Promise((r) => setTimeout(r, 60));
+    const final = await peekQueue();
+    expect(final.map((e) => e.id)).toContain("new-1");
+    expect(final).toHaveLength(2);
+    expect(final.every((e) => !!e.id)).toBe(true);
+  });
 });

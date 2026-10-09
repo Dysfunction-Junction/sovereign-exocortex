@@ -1188,7 +1188,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             with repo_lock:
                 try:
                     ret_check = subprocess.run(
-                        ["git", "apply", "--check", "--whitespace=nowarn", "-"],
+                        ["git", "apply", "--check", "--whitespace=nowarn", "--", "-"],
                         input=patch_bytes,
                         cwd=str(repo_dir),
                         env=clean_git_env(),
@@ -1209,7 +1209,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
 
                 try:
                     ret_apply = subprocess.run(
-                        ["git", "apply", "--whitespace=nowarn", "-"],
+                        ["git", "apply", "--whitespace=nowarn", "--", "-"],
                         input=patch_bytes,
                         cwd=str(repo_dir),
                         env=clean_git_env(),

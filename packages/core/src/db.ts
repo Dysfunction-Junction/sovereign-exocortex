@@ -222,6 +222,37 @@ export class DeviceRevokedError extends Error {
   }
 }
 
+/**
+ * Legal proposal state transitions. Derived from the producers/consumers in the repo:
+ * the shadow recorder inserts proposals as GATED/STAGED/SURFACED/SUPPRESSED (mapGateAction);
+ * a human decision (APPROVED/REJECTED) applies to STAGED/SURFACED proposals; only APPROVED proposals
+ * (or GATED auto-execute policies) may execute; terminal states have no exits.
+ */
+export const PROPOSAL_TRANSITIONS: Readonly<Record<ProposalState, readonly ProposalState[]>> = {
+  DRAFT: ["GATED", "SUPPRESSED", "STAGED", "SURFACED", "EXPIRED"],
+  GATED: ["SUPPRESSED", "STAGED", "SURFACED", "EXECUTING", "EXPIRED"],
+  STAGED: ["SURFACED", "SUPPRESSED", "APPROVED", "REJECTED", "EXPIRED"],
+  SURFACED: ["APPROVED", "REJECTED", "EXPIRED"],
+  APPROVED: ["EXECUTING", "EXPIRED"],
+  EXECUTING: ["SUCCEEDED", "FAILED"],
+  SUPPRESSED: [],
+  REJECTED: [],
+  EXPIRED: [],
+  SUCCEEDED: [],
+  FAILED: [],
+};
+
+export class IllegalProposalTransitionError extends Error {
+  constructor(
+    public readonly proposalId: string,
+    public readonly from: ProposalState,
+    public readonly to: ProposalState
+  ) {
+    super(`Illegal proposal state transition for ${proposalId}: ${from} -> ${to}`);
+    this.name = "IllegalProposalTransitionError";
+  }
+}
+
 export class EventIdConflictError extends Error {
   constructor(public readonly eventId: string) {
     super(`Event ID collision across different devices: ${eventId}`);
@@ -383,27 +414,18 @@ export class ExocortexDatabase {
     deviceId: string,
     eventIn: EventIn
   ): { status: 'inserted' | 'duplicate'; event: EventRecord } {
-    // 1. Validate device enrollment
-    const device = this.getDevice(deviceId);
-    if (!device) {
-      throw new DeviceNotEnrolledError(deviceId);
-    }
-    if (device.revoked_at != null) {
-      throw new DeviceRevokedError(deviceId);
-    }
-
-    // 2. Pre-transaction idempotency and cross-device conflict check
-    const existing = this.getEventById(eventIn.event_id);
-    if (existing) {
-      if (existing.device_id !== deviceId) {
-        throw new EventIdConflictError(eventIn.event_id);
-      }
-      return { status: 'duplicate', event: existing };
-    }
-
-    // 3. Atomic insertion with immediate transaction / savepoint
+    // Atomic insertion with immediate transaction / savepoint
     return this.withTransaction(() => {
-      // Re-check idempotency under transaction lock
+      // Validate enrollment/revocation under the write lock so a concurrent revoke cannot race the insert
+      const device = this.getDevice(deviceId);
+      if (!device) {
+        throw new DeviceNotEnrolledError(deviceId);
+      }
+      if (device.revoked_at != null) {
+        throw new DeviceRevokedError(deviceId);
+      }
+
+      // Idempotency and cross-device conflict check under transaction lock
       const lockedExisting = this.getEventById(eventIn.event_id);
       if (lockedExisting) {
         if (lockedExisting.device_id !== deviceId) {
@@ -657,8 +679,18 @@ export class ExocortexDatabase {
   }
 
   public updateProposalState(proposalId: string, state: ProposalState): void {
-    const stmt = this.db.prepare("UPDATE proposals SET state = ?, updated_at = ? WHERE proposal_id = ?");
-    stmt.run(state, Date.now(), proposalId);
+    this.withTransaction(() => {
+      const current = this.getProposal(proposalId);
+      if (!current) {
+        throw new Error(`Cannot update unknown proposal: ${proposalId}`);
+      }
+      if (!PROPOSAL_TRANSITIONS[current.state]?.includes(state)) {
+        throw new IllegalProposalTransitionError(proposalId, current.state, state);
+      }
+      this.db
+        .prepare("UPDATE proposals SET state = ?, updated_at = ? WHERE proposal_id = ? AND state = ?")
+        .run(state, Date.now(), proposalId, current.state);
+    });
   }
 
   // --- Gate Decisions & Shadow Labels ---

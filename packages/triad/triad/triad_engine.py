@@ -613,19 +613,19 @@ def apply_patch_text(patch_text: str, cwd: Optional[Path] = None, env: Optional[
             f.write(raw_diff + "\n")
 
         # 1. Check dry-run with whitespace tolerance for Windows
-        check_cmd = ["git", "apply", "--check", "--whitespace=fix", "--ignore-whitespace", temp_patch_path]
+        check_cmd = ["git", "apply", "--check", "--whitespace=fix", "--ignore-whitespace", "--", temp_patch_path]
         check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
         if check_res.returncode != 0:
             if not allow_3way:
                 return False
             # Fallback retry with 3-way merge (strictly isolated to ephemeral worktrees)
-            check_cmd = ["git", "apply", "--check", "--3way", temp_patch_path]
+            check_cmd = ["git", "apply", "--check", "--3way", "--", temp_patch_path]
             check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
             if check_res.returncode != 0:
                 return False
-            apply_cmd = ["git", "apply", "--3way", temp_patch_path]
+            apply_cmd = ["git", "apply", "--3way", "--", temp_patch_path]
         else:
-            apply_cmd = ["git", "apply", "--whitespace=fix", "--ignore-whitespace", temp_patch_path]
+            apply_cmd = ["git", "apply", "--whitespace=fix", "--ignore-whitespace", "--", temp_patch_path]
 
         # 2. Apply patch
         apply_res = subprocess.run(apply_cmd, cwd=str(target_dir), env=exec_env, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -1627,7 +1627,7 @@ def apply_verified_patch_to_workspace(
             r1, _, _ = run_subprocess_tree_safe(["git", "read-tree", baseline_tree], cwd=target_dir, env=temp_target_env)
             if r1 != 0:
                 return False
-            r2, _, _ = run_subprocess_tree_safe(["git", "apply", "--cached", "--whitespace=nowarn", temp_patch_path], cwd=target_dir, env=temp_target_env)
+            r2, _, _ = run_subprocess_tree_safe(["git", "apply", "--cached", "--whitespace=nowarn", "--", temp_patch_path], cwd=target_dir, env=temp_target_env)
             if r2 != 0:
                 return False
             r3, out_tree, _ = run_subprocess_tree_safe(["git", "write-tree"], cwd=target_dir, env=temp_target_env)
@@ -1814,7 +1814,7 @@ def apply_verified_patch_to_workspace(
             backup_entries[file_p] = entry
 
         # 2. Dry run verify against working tree without modifying index (strictly byte-accurate)
-        check_cmd = ["git", "apply", "--check", "--whitespace=nowarn", temp_patch_path]
+        check_cmd = ["git", "apply", "--check", "--whitespace=nowarn", "--", temp_patch_path]
         check_res = subprocess.run(check_cmd, cwd=str(target_dir), env=exec_env, capture_output=True)
         if check_res.returncode != 0:
             return False
@@ -1837,7 +1837,7 @@ def apply_verified_patch_to_workspace(
 
         # 4. Apply strictly to working tree (NO --index, NO --3way, NO --whitespace=fix)
         application_started = True
-        apply_cmd = ["git", "apply", "--whitespace=nowarn", temp_patch_path]
+        apply_cmd = ["git", "apply", "--whitespace=nowarn", "--", temp_patch_path]
         apply_res = subprocess.run(apply_cmd, cwd=str(target_dir), env=exec_env, capture_output=True)
         if apply_res.returncode != 0:
             rec_path = get_recovery_patch_path(target_dir, unique=True)
@@ -2433,6 +2433,9 @@ def _run_in_isolated_worktree(
     base_env = env if env is not None else os.environ
     _check_apply_verified_safety(args, base_env)
     ref = getattr(args, "ref", "HEAD") or "HEAD"
+    if str(ref).startswith("-"):
+        print(f"\n❌ [Triad Worktree Error] Invalid --ref {ref!r}: a ref must not start with '-'.", file=sys.stderr)
+        sys.exit(1)
     apply_verified = getattr(args, "apply_verified", False)
 
     try:
@@ -3990,6 +3993,17 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
         print("\n❌ [Triad Gate BLOCKED] Advisory Council execution error or service outage.")
         if resp_clean:
             print(f"Details: {resp_clean[:200]}")
+        sys.exit(1)
+
+    # Fail closed: a competition council that ran degraded (one advisor failed) or without
+    # quorum must never approve a pre-commit signoff.
+    if competition and (
+        not isinstance(session, dict)
+        or session.get("status") == "degraded"
+        or not session.get("quorum_met")
+    ):
+        print("\n❌ [Triad Gate BLOCKED] Competition council degraded or quorum not met; refusing to approve.")
+        notify_event("Pre-Commit Gate Blocked", "Competition council degraded or quorum not met.", status="failed", timeout=1.5)
         sys.exit(1)
 
     # Rejection anywhere in the response takes precedence and immediately blocks

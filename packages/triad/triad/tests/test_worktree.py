@@ -171,6 +171,146 @@ class TestGitWorktreeIsolation(unittest.TestCase):
             self.assertTrue((repo / ".git").is_dir())
             self.assertEqual((repo / "keep.txt").read_text(encoding="utf-8"), "precious")
 
+    def test_remove_worktree_force_refuses_unregistered_directory(self):
+        """T2: force removal must not rmtree a directory that is neither registered nor under the triad root."""
+        import shutil
+        victim = Path(tempfile.mkdtemp(prefix="notriad-victim-")).resolve()
+        try:
+            (victim / "precious.txt").write_text("keep", encoding="utf-8")
+            self.assertFalse(remove_worktree(victim, force=True, repo_path=REPO_ROOT))
+            self.assertEqual((victim / "precious.txt").read_text(encoding="utf-8"), "keep")
+        finally:
+            shutil.rmtree(victim, ignore_errors=True)
+
+    def test_remove_worktree_force_removes_registered_worktree_outside_triad_root(self):
+        """T2: a worktree registered with the owning repo is removable even outside the triad root."""
+        import shutil
+        outer = Path(tempfile.mkdtemp(prefix="notriad-reg-")).resolve()
+        try:
+            wt = create_worktree(REPO_ROOT, target_path=outer / "wt")
+            self.assertTrue(any(w["worktree"] == wt for w in list_worktrees(REPO_ROOT)))
+            self.assertTrue(remove_worktree(wt, force=True, repo_path=REPO_ROOT))
+            self.assertFalse(wt.exists())
+        finally:
+            shutil.rmtree(outer, ignore_errors=True)
+            prune_worktrees(REPO_ROOT)
+
+    def test_remove_worktree_force_partial_delete_retry_for_registered_worktree(self):
+        """T2: git worktree remove failing leaves a registered tree; the rmtree retry still cleans it."""
+        import shutil
+        from unittest.mock import patch
+        outer = Path(tempfile.mkdtemp(prefix="notriad-partial-")).resolve()
+        try:
+            wt = create_worktree(REPO_ROOT, target_path=outer / "wt")
+            real_run = subprocess.run
+
+            def fake_run(cmd, *a, **kw):
+                if isinstance(cmd, list) and "remove" in cmd and "worktree" in cmd:
+                    return subprocess.CompletedProcess(cmd, 1, "", "simulated failure")
+                return real_run(cmd, *a, **kw)
+
+            with patch("triad.worktree.subprocess.run", side_effect=fake_run):
+                self.assertTrue(remove_worktree(wt, force=True, repo_path=REPO_ROOT))
+            self.assertFalse(wt.exists())
+        finally:
+            shutil.rmtree(outer, ignore_errors=True)
+            prune_worktrees(REPO_ROOT)
+
+    def _provisioned_plain_worktree(self, base: Path):
+        from triad.worktree import provision_worktree_dependencies
+        parent = base / "parent"
+        (parent / "node_modules" / "pkg").mkdir(parents=True)
+        (parent / "node_modules" / "pkg" / "index.js").write_text("x", encoding="utf-8")
+        wt = base / "wt"
+        wt.mkdir()
+        self.assertTrue(provision_worktree_dependencies(parent, wt))
+        return parent, wt
+
+    def test_deprovision_propagates_failed_link_removal(self):
+        """T3: a dependency link that cannot be removed must raise instead of being swallowed."""
+        from unittest.mock import patch
+        from triad.worktree import deprovision_worktree_dependencies
+        with tempfile.TemporaryDirectory() as td:
+            parent, wt = self._provisioned_plain_worktree(Path(td))
+            noop_run = lambda cmd, *a, **kw: subprocess.CompletedProcess(cmd, 0, b"", b"")
+            try:
+                with patch("triad.worktree.os.rmdir", side_effect=OSError("locked")),                      patch("triad.worktree.subprocess.run", side_effect=noop_run),                      patch("triad.worktree.Path.unlink", lambda self, missing_ok=False: None):
+                    with self.assertRaises(OSError):
+                        deprovision_worktree_dependencies(wt)
+            finally:
+                deprovision_worktree_dependencies(wt)  # real cleanup so TemporaryDirectory never touches the target
+            self.assertTrue((parent / "node_modules" / "pkg" / "index.js").exists())
+
+    def test_reset_worktree_does_not_git_clean_after_failed_deprovision(self):
+        """T3: WarmWorktreePool._reset_worktree must raise and never reach `git clean` when a link survives."""
+        from unittest.mock import patch
+        from triad.worktree import deprovision_worktree_dependencies
+        with tempfile.TemporaryDirectory() as td:
+            parent, wt = self._provisioned_plain_worktree(Path(td))
+            pool = WarmWorktreePool(repo_root=REPO_ROOT)
+            calls = []
+
+            def recorder(cmd, *a, **kw):
+                calls.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 0, str(wt), "")
+
+            try:
+                with patch("triad.worktree.os.rmdir", side_effect=OSError("locked")),                      patch("triad.worktree.subprocess.run", side_effect=recorder),                      patch("triad.worktree.Path.unlink", lambda self, missing_ok=False: None):
+                    with self.assertRaises(Exception):
+                        pool._reset_worktree(wt)
+            finally:
+                deprovision_worktree_dependencies(wt)
+            self.assertFalse(any("clean" in c for c in calls), calls)
+            self.assertTrue((parent / "node_modules" / "pkg" / "index.js").exists())
+
+    def test_create_worktree_rejects_option_like_refs(self):
+        """T4: a ref starting with '-' must be rejected before git ever sees it."""
+        for bad in ("--orphan", "-b", "-fx", "", "   "):
+            with self.subTest(ref=bad):
+                with self.assertRaises(ValueError):
+                    create_worktree(REPO_ROOT, branch_or_commit=bad, prefix="triad-test-inj")
+        with self.assertRaises(ValueError):
+            WarmWorktreePool(repo_root=REPO_ROOT, base_commit="--all")
+
+    def test_create_worktree_separates_path_and_ref_with_double_dash(self):
+        """T4: `git worktree add` is invoked with `--` before the path/commit-ish."""
+        from unittest.mock import patch
+        seen = []
+        real_run = subprocess.run
+
+        def spy(cmd, *a, **kw):
+            seen.append(list(cmd))
+            return real_run(cmd, *a, **kw)
+
+        with patch("triad.worktree.subprocess.run", side_effect=spy):
+            wt = create_worktree(REPO_ROOT, prefix="triad-test-dd")
+        try:
+            adds = [c for c in seen if "worktree" in c and "add" in c]
+            self.assertTrue(adds)
+            self.assertIn("--", adds[0])
+            self.assertEqual(adds[0].index("--"), len(adds[0]) - 3)  # `--`, <path>, <commit-ish>
+        finally:
+            remove_worktree(wt, force=True, repo_path=REPO_ROOT)
+
+    def test_apply_patch_text_uses_double_dash_before_patch_path(self):
+        """T4: every `git apply` issued by apply_patch_text ends with `--` + patch path."""
+        from unittest.mock import patch
+        from triad.triad_engine import apply_patch_text
+        seen = []
+
+        def spy(cmd, *a, **kw):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as td:
+            diff = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
+            with patch("triad.triad_engine.subprocess.run", side_effect=spy):
+                apply_patch_text(diff, cwd=Path(td))
+        applies = [c for c in seen if c[:2] == ["git", "apply"]]
+        self.assertGreaterEqual(len(applies), 2)
+        for c in applies:
+            self.assertEqual(c[-2], "--", c)
+
     def test_cmd_auto_with_worktree_flag(self):
         """Verify cmd_auto --worktree executes inside ephemeral worktree and cleans up."""
         import argparse
