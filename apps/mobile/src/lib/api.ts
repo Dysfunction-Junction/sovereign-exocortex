@@ -317,7 +317,7 @@ export async function postApprovalKeyChallenge(): Promise<string> {
 }
 
 export async function postApprovalKey(
-  payload: { pubkey_b64: string; challenge: string; signature_b64: string },
+  payload: { pubkey_b64: string; challenge: string; signature_b64: string; attestation_chain: string[] },
   enrollToken: string
 ): Promise<void> {
   const res = await authedFetch("/v3/devices/approval-key", {
@@ -329,6 +329,51 @@ export async function postApprovalKey(
     const body = await res.json().catch(() => null);
     throw new Error(body?.error || `HTTP ${res.status}`);
   }
+}
+
+export interface PendingProposal {
+  proposalId: string;
+  candidateId: string;
+  summary: string;
+  riskLevel: "low" | "medium" | "high";
+  requiresBiometric: boolean;
+  approvalNonce: string;
+  expiresAt: number;
+  actionPayload?: Record<string, unknown>;
+}
+
+function isPendingProposal(p: unknown): p is PendingProposal {
+  const o = p as Record<string, unknown> | null;
+  return (
+    !!o &&
+    typeof o.proposalId === "string" &&
+    typeof o.candidateId === "string" &&
+    typeof o.approvalNonce === "string" &&
+    typeof o.expiresAt === "number" &&
+    (o.riskLevel === "low" || o.riskLevel === "medium" || o.riskLevel === "high")
+  );
+}
+
+/** Proposals the daemon surfaced to this device that are still awaiting approval. */
+export async function getPendingProposals(): Promise<PendingProposal[]> {
+  const res = await authedFetch("/v3/proposals/pending");
+  if (!res.ok) throw new Error(`Pending proposals fetch failed: HTTP ${res.status}`);
+  const body = await res.json().catch(() => null);
+  if (!Array.isArray(body?.proposals)) return [];
+  return body.proposals.filter(isPendingProposal).map((p: PendingProposal) => ({
+    ...p,
+    summary: typeof p.summary === "string" ? p.summary : "",
+    requiresBiometric: p.requiresBiometric === true,
+  }));
+}
+
+export async function postPushToken(token: string): Promise<void> {
+  const res = await authedFetch("/v3/devices/push-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token, platform: "fcm" }),
+  });
+  if (!res.ok) throw new Error(`Push token registration failed: HTTP ${res.status}`);
 }
 
 export interface NetworkMapNode {
@@ -355,6 +400,8 @@ export interface SubmitShadowLabelOptions {
   source?: "tap" | "inferred";
   latencyMs?: number;
   actual?: unknown;
+  /** Biometric signature over the label (see signLabel). Without it the server stores the label as "inferred". */
+  attestation?: { v: 1; method: "biometric"; ts: number; sig: string };
 }
 
 export async function submitShadowLabel(
@@ -372,6 +419,7 @@ export async function submitShadowLabel(
         source: options?.source ?? "tap",
         latency_ms: options?.latencyMs,
         actual: options?.actual,
+        attestation: options?.attestation,
       }),
     });
     if (!res.ok) {

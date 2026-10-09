@@ -99,7 +99,13 @@ export async function waitForPing(
   log: () => string,
   child?: ChildProcess,
   timeoutMs = 20_000,
+  deps: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch } = {},
 ): Promise<void> {
+  const env = deps.env ?? process.env;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  // The triad refuses every delegate action without its server token (same rule as forwardDelegate).
+  const authHeader: Record<string, string> =
+    id === "autonomous-triad" && env.TRIAD_SERVER_TOKEN ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` } : {};
   const deadline = Date.now() + timeoutMs;
   let last = "not started";
   let spawnError: Error | null = null;
@@ -117,9 +123,9 @@ export async function waitForPing(
     const failed = childFailure();
     if (failed) throw new Error(`${id} ${failed}\n${log()}`);
     try {
-      const response = await fetch(new URL("/mishmash/delegate", upstream), {
+      const response = await fetchImpl(new URL("/mishmash/delegate", upstream), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader },
         body: pingBody(id),
         signal: AbortSignal.timeout(1500),
       });
@@ -142,7 +148,7 @@ export async function waitForPing(
   throw new Error(`${id} did not answer ping (${last})\n${log()}`);
 }
 
-function buildChildEnv(portVariable: string, port: number, extraEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+export function buildChildEnv(portVariable: string, port: number, extraEnv: Record<string, string> = {}, nodeId?: string): NodeJS.ProcessEnv {
   const allowedKeys = [
     "PATH", "Path", "SYSTEMROOT", "SystemRoot", "WINDIR", "windir",
     "TEMP", "TMP", "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA",
@@ -155,6 +161,10 @@ function buildChildEnv(portVariable: string, port: number, extraEnv: Record<stri
     [portVariable]: String(port),
     ...extraEnv,
   };
+  // Only the triad gets its own server token; no other node child sees it.
+  if (nodeId === "autonomous-triad" && process.env.TRIAD_SERVER_TOKEN) {
+    env.TRIAD_SERVER_TOKEN = process.env.TRIAD_SERVER_TOKEN;
+  }
   for (const key of allowedKeys) {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];
@@ -206,7 +216,7 @@ export async function startMishmash(options: {
     for (const spec of MISHMASH_LAUNCH) {
       const port = options.ports?.[spec.id] ?? spec.port;
       const cwd = join(reposRoot, spec.repo);
-      const childEnv = buildChildEnv(spec.portVariable, port, env);
+      const childEnv = buildChildEnv(spec.portVariable, port, env, spec.id);
       let child: ChildProcess;
       if (spec.runner === "python") {
         child = spawn(pythonBin, ["-m", spec.script], { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });

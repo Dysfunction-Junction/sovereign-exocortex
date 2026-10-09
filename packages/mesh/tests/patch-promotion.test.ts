@@ -180,6 +180,41 @@ function confirmation(record: PatchPromotionRecord): string {
 }
 
 describe("production-safe patch promotion", { timeout: 20000 }, () => {
+  it("refuses to apply a patch that differs from the previewed digests a human approved", async () => {
+    const fixture = await createFixture();
+    try {
+      const preview = await fixture.service.preview({
+        taskId: fixture.task.id,
+        targetRepo: fixture.targetRepo,
+      });
+      const base = {
+        taskId: fixture.task.id,
+        targetRepo: fixture.targetRepo,
+        confirmation: `APPLY ${fixture.task.id}`,
+      };
+      await expect(
+        fixture.service.apply({ ...base, expectedPatchSha256: "0".repeat(64) }),
+      ).rejects.toMatchObject({ code: "ARTIFACT_UNSAFE" });
+      await expect(
+        fixture.service.apply({
+          ...base,
+          expectedPatchSha256: preview.patchSha256,
+          expectedPostFingerprintSha256: "1".repeat(64),
+        }),
+      ).rejects.toMatchObject({ code: "ARTIFACT_UNSAFE" });
+      expect(await readFile(join(fixture.targetRepo, "hello.txt"), "utf8")).toBe("before" + String.fromCharCode(10));
+      expect(await fixture.service.listPromotions()).toEqual([]);
+      const applied = await fixture.service.apply({
+        ...base,
+        expectedPatchSha256: preview.patchSha256,
+        expectedPostFingerprintSha256: preview.expectedPostFingerprint.sha256,
+      });
+      expect(applied.state).toBe("applied");
+    } finally {
+      await cleanup(fixture);
+    }
+  });
+
   it("previews, applies without committing, persists privately, and safely rolls back", async () => {
     const fixture = await createFixture();
     try {

@@ -262,6 +262,7 @@ export class ActiveInferenceEngine {
       candidateId: policy.invariantId,
       summary: policy.title,
       urgency: policy.urgency,
+      // Scores are informational; auto-execution is granted only by AUTO_EXECUTE_ALLOWLIST in the gate.
       confidence: policy.type === 'PRAGMATIC' ? 0.90 : 0.98,
       estimatedRisk: policy.estimatedRisk,
       category: policy.type,

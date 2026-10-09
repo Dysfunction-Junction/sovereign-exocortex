@@ -13,6 +13,7 @@ import androidx.biometric.BiometricPrompt;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.FragmentActivity;
 
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -24,6 +25,7 @@ import java.security.KeyPairGenerator;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.PublicKey;
+import java.security.cert.Certificate;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 
@@ -51,17 +53,34 @@ public class ApprovalKeyPlugin extends Plugin {
         call.resolve(ret);
     }
 
-    /** Creates the key if absent and returns its SPKI public key (base64, no wrap). */
+    /**
+     * With {@code attestationChallenge}: DELETES any existing key and regenerates it with that challenge baked into
+     * the Keystore attestation certificate (the daemon verifies the chain and the challenge). Without it: creates the
+     * key only if absent. Returns the SPKI public key (base64, no wrap) and the attestation certificate chain
+     * (base64 DER, leaf first).
+     */
     @PluginMethod
     public void ensureKey(PluginCall call) {
         try {
+            String challenge = call.getString("attestationChallenge");
             KeyStore ks = loadKeyStore();
-            if (!ks.containsAlias(KEY_ALIAS)) {
-                generateKey();
+            if (challenge != null && !challenge.isEmpty()) {
+                if (ks.containsAlias(KEY_ALIAS)) ks.deleteEntry(KEY_ALIAS);
+                generateKey(challenge.getBytes(StandardCharsets.UTF_8));
+            } else if (!ks.containsAlias(KEY_ALIAS)) {
+                generateKey(null);
             }
             PublicKey pub = ks.getCertificate(KEY_ALIAS).getPublicKey();
+            JSArray chain = new JSArray();
+            Certificate[] certs = ks.getCertificateChain(KEY_ALIAS);
+            if (certs != null) {
+                for (Certificate c : certs) {
+                    chain.put(Base64.encodeToString(c.getEncoded(), Base64.NO_WRAP));
+                }
+            }
             JSObject ret = new JSObject();
             ret.put("publicKeyB64", Base64.encodeToString(pub.getEncoded(), Base64.NO_WRAP));
+            ret.put("attestationChain", chain);
             call.resolve(ret);
         } catch (Exception e) {
             call.reject("Could not create approval key: " + e.getMessage(), "KEY_ERROR");
@@ -159,15 +178,15 @@ public class ApprovalKeyPlugin extends Plugin {
         return ks;
     }
 
-    private void generateKey() throws Exception {
+    private void generateKey(byte[] attestationChallenge) throws Exception {
         try {
-            generateKey(Build.VERSION.SDK_INT >= Build.VERSION_CODES.P);
+            generateKey(Build.VERSION.SDK_INT >= Build.VERSION_CODES.P, attestationChallenge);
         } catch (StrongBoxUnavailableException e) {
-            generateKey(false);
+            generateKey(false, attestationChallenge);
         }
     }
 
-    private void generateKey(boolean strongBox) throws Exception {
+    private void generateKey(boolean strongBox, byte[] attestationChallenge) throws Exception {
         KeyGenParameterSpec.Builder spec = new KeyGenParameterSpec.Builder(KEY_ALIAS, KeyProperties.PURPOSE_SIGN)
             .setAlgorithmParameterSpec(new ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
@@ -178,6 +197,9 @@ public class ApprovalKeyPlugin extends Plugin {
             spec.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG);
         } else {
             spec.setUserAuthenticationValidityDurationSeconds(-1);
+        }
+        if (attestationChallenge != null) {
+            spec.setAttestationChallenge(attestationChallenge);
         }
         if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             spec.setIsStrongBoxBacked(true);

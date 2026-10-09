@@ -7,7 +7,10 @@ import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnve
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
-import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature } from "./approval-attestation.js";
+import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
+import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
+import { buildPendingProposals, defaultPendingFetcher, type PendingFetcher } from "./pending-proposals.js";
+import { defaultPushNotifier } from "./push-notifier.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -143,6 +146,35 @@ function ensureShadowRecorder(): void {
  * table and the immutable hash-chained event log. Authoritatively enforces source placement.
  */
 const approvalKeyChallenges = new ChallengeStore();
+
+/** Scopes /v3/devices/enroll may grant. "admin*" is only ever granted from the PC (grant-scope-cli.ts). */
+export const ENROLL_SCOPE_ALLOWLIST: Record<string, readonly string[]> = {
+  android: ["telemetry:write", "approval:write"],
+  windows: ["telemetry:write", "approval:write", "admin:read"],
+  linux: ["telemetry:write", "approval:write", "admin:read"],
+};
+
+let pendingFetcher: PendingFetcher = defaultPendingFetcher;
+/** Test hook: replace how registry nonces are fetched. */
+export function setPendingFetcherForTest(f: PendingFetcher | null): void {
+  pendingFetcher = f ?? defaultPendingFetcher;
+}
+
+/** A tap label needs a valid device-signed attestation; everything else is "inferred". */
+function labelSource(
+  db: ExocortexDatabase,
+  deviceId: string,
+  proposalId: string,
+  label: string,
+  attestation: unknown,
+  requested: unknown,
+): "tap" | "inferred" {
+  if (requested === "inferred" || attestation === undefined || attestation === null) return "inferred";
+  const dev = db.getDevice(deviceId);
+  if (!dev || dev.revoked_at) return "inferred";
+  const v = verifyLabelAttestation(attestation, { deviceId, proposalId, label }, dev.pubkey_spki, Boolean(dev.key_attested));
+  return v.ok ? "tap" : "inferred";
+}
 
 function applyShadowLabel(
   db: ExocortexDatabase,
@@ -311,7 +343,26 @@ export const server = createServer(async (req, res) => {
         return;
       }
 
-      const scopes = Array.isArray(dev.scopes) ? dev.scopes.filter((s: unknown) => typeof s === "string") : ["telemetry:write"];
+      let scopes: string[] = ["telemetry:write"];
+      if (dev.scopes !== undefined && dev.scopes !== null) {
+        if (!Array.isArray(dev.scopes)) {
+          sendJson(res, 400, { error: "scopes must be an array of strings" });
+          return;
+        }
+        if (dev.scopes.length > 0) {
+          const allowed = ENROLL_SCOPE_ALLOWLIST[dev.platform] ?? [];
+          const offending = dev.scopes.filter((s: unknown) => typeof s !== "string" || !allowed.includes(s));
+          if (offending.length > 0) {
+            sendJson(res, 400, {
+              error: `scopes not allowed for platform ${dev.platform}: ${offending.map((s: unknown) => String(s)).join(", ")}`,
+              offending_scopes: offending.map((s: unknown) => String(s)),
+              allowed_scopes: allowed,
+            });
+            return;
+          }
+          scopes = Array.from(new Set<string>(dev.scopes));
+        }
+      }
 
       try {
         db.registerDevice({
@@ -319,7 +370,8 @@ export const server = createServer(async (req, res) => {
           name: dev.name,
           platform: dev.platform,
           pubkey_spki: new Uint8Array(spki),
-          key_attested: dev.key_attested ? 1 : 0,
+          // Never client-asserted: only /v3/devices/approval-key (verified attestation chain) sets this.
+          key_attested: 0,
           scopes,
           enrolled_at: Date.now(),
           revoked_at: null,
@@ -464,7 +516,7 @@ export const server = createServer(async (req, res) => {
             try {
               const payload = JSON.parse(ev.payload);
               if (payload?.proposal_id && isShadowLabel(payload?.label)) {
-                const source = payload.source === "inferred" ? "inferred" : "tap";
+                const source = labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation, payload.source);
                 applyShadowLabel(db, auth.deviceId, {
                   proposalId: String(payload.proposal_id),
                   label: payload.label,
@@ -859,6 +911,7 @@ export const server = createServer(async (req, res) => {
         source?: string;
         latency_ms?: number;
         actual?: unknown;
+        attestation?: unknown;
       } = {};
       try {
         const parsed = JSON.parse(raw);
@@ -885,7 +938,7 @@ export const server = createServer(async (req, res) => {
       }
       const label = rawLabel;
 
-      const source = payloadObj.source === "inferred" ? "inferred" : "tap";
+      const source = labelSource(db, auth.deviceId, proposalId, label, payloadObj.attestation, payloadObj.source);
 
       let latencyMs: number | null = null;
       if (payloadObj.latency_ms !== undefined) {
@@ -915,6 +968,7 @@ export const server = createServer(async (req, res) => {
         proposal_id: result.proposalId,
         label: result.label,
         source: result.source,
+        attested: result.source === "tap",
         recorded_at: result.recordedAt,
       });
     } catch (err) {
@@ -978,13 +1032,77 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "proof of possession failed" });
         return;
       }
-      if (!getDatabase().setDeviceApprovalKey(auth.deviceId, spki)) {
+      // Hardware attestation: only the explicit dev escape hatch skips the chain checks (not proof of possession).
+      const hatch = allowUnattestedKeys();
+      if (!hatch) {
+        const chain = verifyKeyAttestationChain(body.attestation_chain, { pubkeySpki: spki, challenge });
+        if (!chain.ok) {
+          sendJson(res, 400, { error: `key attestation rejected: ${chain.reason}` });
+          return;
+        }
+      } else {
+        console.warn("[approval-key] EXOCORTEX_ALLOW_UNATTESTED_KEYS=1: key attestation chain NOT verified");
+      }
+      if (!getDatabase().setDeviceApprovalKey(auth.deviceId, spki, true)) {
         sendJson(res, 404, { error: "device not enrolled or revoked" });
         return;
       }
-      sendJson(res, 200, { ok: true, device_id: auth.deviceId });
+      sendJson(res, 200, { ok: true, device_id: auth.deviceId, attested: true, attestation_verified: !hatch });
     } catch (err) {
       sendJson(res, 500, { error: "failed to register approval key", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  // Push token registration: latest token wins; revoked devices are refused.
+  if (method === "POST" && url.pathname === "/v3/devices/push-token") {
+    try {
+      const raw = await readBody(req, 16 * 1024);
+      let body: any;
+      try {
+        body = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON" });
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        sendJson(res, 400, { error: "body must be a JSON object" });
+        return;
+      }
+      if (typeof body.token !== "string" || body.token.length === 0 || body.token.length > 4096) {
+        sendJson(res, 400, { error: "token must be a string of 1-4096 chars" });
+        return;
+      }
+      if (body.platform !== "fcm") {
+        sendJson(res, 400, { error: "platform must be 'fcm'" });
+        return;
+      }
+      if (!getDatabase().setDevicePushToken(auth.deviceId, body.token, "fcm")) {
+        sendJson(res, 403, { error: "device not enrolled or revoked" });
+        return;
+      }
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      sendJson(res, 500, { error: "failed to register push token", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/proposals/pending") {
+    try {
+      const db = getDatabase();
+      const dev = db.getDevice(auth.deviceId);
+      if (!dev || dev.revoked_at) {
+        sendJson(res, 403, { error: `caller device not enrolled or revoked: ${auth.deviceId}` });
+        return;
+      }
+      if (!dev.scopes.includes("approval:write") && !dev.scopes.includes("admin")) {
+        sendJson(res, 403, { error: "forbidden: requires approval:write or admin scope" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, proposals: await buildPendingProposals(db, pendingFetcher) });
+    } catch (err) {
+      sendJson(res, 500, { error: "failed to list pending proposals", reason: err instanceof Error ? err.message : String(err) });
     }
     return;
   }
@@ -1135,6 +1253,22 @@ export const server = createServer(async (req, res) => {
       }
 
       const outcome = await forwardApprove({ proposalId, nonce, reason, action, biometricAttestation });
+      // Authoritative tap label: the approve attestation was verified above and the triad confirmed the release.
+      if (
+        action === "approve" &&
+        outcome.status >= 200 &&
+        outcome.status < 300 &&
+        (outcome.body as { ok?: unknown } | null)?.ok === true
+      ) {
+        try {
+          const db = getDatabase();
+          if (db.getProposal(proposalId)) {
+            applyShadowLabel(db, auth.deviceId, { proposalId, label: "wanted", source: "tap", actual: { via: "approval" } });
+          }
+        } catch (labelErr) {
+          console.error("[approve] failed to record tap label:", labelErr);
+        }
+      }
       sendJson(res, outcome.status, outcome.body);
     } catch (err) {
       sendJson(res, 500, { error: "approval forward failed", reason: err instanceof Error ? err.message : String(err) });
@@ -1217,6 +1351,8 @@ if (process.env.NODE_ENV !== "test") {
   if (HOME_PROXY_BASE_URL) {
     warmUpHomeProxyConnection();
   }
+  // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
+  defaultPushNotifier.start();
 }
 
 

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -650,6 +651,23 @@ describe("instruction proposal control plane", () => {
       ).toThrow(pattern);
     }
     expect(readFileSync(outside, "utf8")).toBe("outside stays unchanged\n");
+
+    mkdirSync(join(root, ".git", "hooks"), { recursive: true });
+    for (const gitPath of [
+      ".git/hooks/pre-commit",
+      ".GIT/config",
+      ".git./config",
+      "GIT~1/config",
+    ]) {
+      const proposal = createApproved(gitPath, "#!/bin/sh\ncalc.exe\n");
+      expect(() =>
+        store.applyProposal({
+          proposalId: proposal.id,
+          expectedDigest: proposal.contentDigest,
+        }),
+      ).toThrow(/Git metadata/);
+    }
+    expect(existsSync(join(root, ".git", "hooks", "pre-commit"))).toBe(false);
 
     const approved = createApproved(
       "AGENTS.md",

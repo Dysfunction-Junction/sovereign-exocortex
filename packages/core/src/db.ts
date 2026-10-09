@@ -155,6 +155,13 @@ CREATE TABLE IF NOT EXISTS shadow_labels (
   ts          INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS device_push_tokens (
+  device_id  TEXT PRIMARY KEY REFERENCES devices(device_id),
+  token      TEXT NOT NULL,
+  platform   TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS mutations (
   mutation_id    TEXT PRIMARY KEY,
   friction_seq   INTEGER NOT NULL REFERENCES events(seq),
@@ -339,15 +346,59 @@ export class ExocortexDatabase {
   }
 
   /**
-   * Bind the device's approval-signing key (EC P-256 SPKI). key_attested=1 is set by the caller's
-   * assertion that the key is hardware-backed and user-auth-gated; the Android key-attestation chain
-   * is NOT verified here. Returns false for unknown or revoked devices.
+   * Bind the device's approval-signing key (EC P-256 SPKI). `attested` must be true only when the caller verified
+   * the Android key-attestation chain (or an explicit dev escape hatch applies); otherwise key_attested is 0 and
+   * approvals stay refused. Returns false for unknown or revoked devices.
    */
-  public setDeviceApprovalKey(deviceId: string, pubkeySpki: Uint8Array): boolean {
+  public setDeviceApprovalKey(deviceId: string, pubkeySpki: Uint8Array, attested: boolean): boolean {
     const res = this.db
-      .prepare("UPDATE devices SET pubkey_spki = ?, key_attested = 1 WHERE device_id = ? AND revoked_at IS NULL")
-      .run(Buffer.from(pubkeySpki), deviceId);
+      .prepare("UPDATE devices SET pubkey_spki = ?, key_attested = ? WHERE device_id = ? AND revoked_at IS NULL")
+      .run(Buffer.from(pubkeySpki), attested ? 1 : 0, deviceId);
     return Number(res.changes) > 0;
+  }
+
+  /** Add a scope to a live device (PC-side CLI only). Returns false for unknown or revoked devices. */
+  public grantDeviceScope(deviceId: string, scope: string): boolean {
+    return this.withTransaction(() => {
+      const dev = this.getDevice(deviceId);
+      if (!dev || dev.revoked_at) return false;
+      const scopes = Array.from(new Set([...dev.scopes, scope]));
+      this.db.prepare("UPDATE devices SET scopes = ? WHERE device_id = ?").run(canonicalJsonStringify(scopes), deviceId);
+      return true;
+    });
+  }
+
+  /** Latest token wins. Revoked or unknown devices cannot register. */
+  public setDevicePushToken(deviceId: string, token: string, platform: string, now = Date.now()): boolean {
+    const dev = this.getDevice(deviceId);
+    if (!dev || dev.revoked_at) return false;
+    this.db
+      .prepare(`INSERT INTO device_push_tokens (device_id, token, platform, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET token = excluded.token, platform = excluded.platform, updated_at = excluded.updated_at`)
+      .run(deviceId, token, platform, now);
+    return true;
+  }
+
+  /** Tokens of non-revoked devices only. */
+  public listActivePushTokens(): Array<{ device_id: string; token: string; platform: string; updated_at: number }> {
+    const rows = this.db
+      .prepare(`SELECT t.device_id, t.token, t.platform, t.updated_at FROM device_push_tokens t
+        JOIN devices d ON d.device_id = t.device_id WHERE d.revoked_at IS NULL`)
+      .all() as any[];
+    return rows.map((r) => ({ device_id: String(r.device_id), token: String(r.token), platform: String(r.platform), updated_at: Number(r.updated_at) }));
+  }
+
+  public deleteDevicePushToken(deviceId: string): void {
+    this.db.prepare("DELETE FROM device_push_tokens WHERE device_id = ?").run(deviceId);
+  }
+
+  public listProposalsByState(states: ProposalState[], notExpiredAt?: number): ProposalRecord[] {
+    if (states.length === 0) return [];
+    const marks = states.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(`SELECT proposal_id FROM proposals WHERE state IN (${marks})${notExpiredAt !== undefined ? " AND expires_at > ?" : ""} ORDER BY updated_at ASC`)
+      .all(...states, ...(notExpiredAt !== undefined ? [notExpiredAt] : [])) as any[];
+    return rows.map((r) => this.getProposal(String(r.proposal_id))!).filter(Boolean);
   }
 
   public revokeDevice(deviceId: string): void {

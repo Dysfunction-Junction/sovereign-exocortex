@@ -444,8 +444,37 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(payload);
 }
 
+/**
+ * A loopback socket does not prove the caller is local software: any web page
+ * can make the browser POST here (CSRF), and a rebound DNS name reaches it with
+ * a loopback peer address. Browsers always attach Origin to POSTs and the Host
+ * header carries the name that was resolved, so both are checked.
+ */
+export function isTrustedDelegateRequest(
+  headers: IncomingMessage["headers"],
+  port: number,
+): boolean {
+  if (headers.origin !== undefined) return false;
+  const host = headers.host;
+  return (
+    typeof host === "string" &&
+    [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(
+      host.toLowerCase(),
+    )
+  );
+}
+
 export function startMeshDelegate(port: number) {
   const server = createServer(async (req, res) => {
+    const address = server.address();
+    if (
+      !address ||
+      typeof address === "string" ||
+      !isTrustedDelegateRequest(req.headers, address.port)
+    ) {
+      send(res, 403, { error: "delegate rejects browser-origin or rebound-host requests" });
+      return;
+    }
     const path = (req.url ?? "/").split("?")[0];
     if (req.method === "GET" && path === "/health") {
       send(res, 200, { ok: true, node: NODE });

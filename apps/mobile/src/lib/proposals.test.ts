@@ -10,9 +10,10 @@ vi.mock("./api", () => ({
 
 vi.mock("./approvalKey", async () => {
   const actual = await vi.importActual<typeof import("./approvalKey")>("./approvalKey");
-  return { ...actual, signApproval: vi.fn() };
+  return { ...actual, signApproval: vi.fn(), signLabel: vi.fn() };
 });
 
+const LABEL_ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_001, sig: "bGFiZWw=" };
 const ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_000, sig: "c2ln" };
 
 describe("proposalManager", () => {
@@ -29,6 +30,7 @@ describe("proposalManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(approvalKey.signApproval).mockResolvedValue(ATTESTATION);
+    vi.mocked(approvalKey.signLabel).mockResolvedValue(LABEL_ATTESTATION);
     proposalManager.clear();
   });
 
@@ -67,7 +69,8 @@ describe("proposalManager", () => {
       })
     );
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("consumed");
-    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "wanted", { source: "tap" });
+    // The daemon records the tap "wanted" label itself after a verified approve.
+    expect(api.submitShadowLabel).not.toHaveBeenCalled();
   });
 
   it("attaches biometric attestation when requiresBiometric is true", async () => {
@@ -205,7 +208,27 @@ describe("proposalManager", () => {
     );
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
     expect(proposalManager.getPending().length).toBe(0);
-    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", { source: "tap" });
+    expect(approvalKey.signLabel).toHaveBeenCalledWith({ proposalId: baseProposal.proposalId, label: "not_wanted" });
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", {
+      source: "tap",
+      attestation: LABEL_ATTESTATION,
+    });
+  });
+
+  it("still rejects but sends the label unsigned (inferred) when the dismiss biometric is cancelled", async () => {
+    vi.mocked(approvalKey.signLabel).mockRejectedValueOnce(
+      new approvalKey.ApprovalUnavailableError("cancelled", "CANCELLED")
+    );
+    vi.mocked(api.submitProposalApproval).mockResolvedValueOnce({ ok: true, status: "rejected" });
+    proposalManager.ingestProposal(baseProposal);
+
+    const result = await proposalManager.reject(baseProposal.proposalId);
+    expect(result.ok).toBe(true);
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", {
+      source: "inferred",
+      attestation: undefined,
+    });
   });
   it("locks the proposal in flight during reject so a concurrent approve cannot submit the same nonce", async () => {
     let resolveApi!: (val: any) => void;
@@ -215,6 +238,7 @@ describe("proposalManager", () => {
     proposalManager.ingestProposal(baseProposal);
 
     const rejectP = proposalManager.reject(baseProposal.proposalId);
+    await vi.waitFor(() => expect(api.submitProposalApproval).toHaveBeenCalled());
     const approveRes = await proposalManager.approve(baseProposal.proposalId);
     expect(approveRes.ok).toBe(false);
     expect(approveRes.status).toBe("already_consumed");

@@ -22,9 +22,10 @@ import {
   type SystemObservation,
   type BeliefSnapshotRecord,
   type ModelParamRecord,
+  type InferencePolicy,
 } from "@exocortex/world-model";
 import { defaultDryRunCache, type SpeculativeProposal, type EventRecord } from "@exocortex/core";
-import type { ShadowRecorder } from "./shadow-recorder.js";
+import { mayActuateAutoExecute, type ShadowRecorder } from "./shadow-recorder.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 
@@ -75,6 +76,7 @@ export class WorldModelHost {
   private shadowRecorder: ShadowRecorder | null = null;
   private recorderFailures = 0;
   private recorderDisabled = false;
+  private autoExecutor: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null = null;
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
@@ -106,6 +108,11 @@ export class WorldModelHost {
       WorldModelHost.instance = new WorldModelHost();
     }
     return WorldModelHost.instance;
+  }
+
+  /** Attach (or detach with null) the actuator invoked for SILENT_AUTO_EXECUTE decisions that pass `mayActuateAutoExecute`. */
+  public setAutoExecutor(fn: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null): void {
+    this.autoExecutor = fn;
   }
 
   /** Attach (or detach with null) the recorder that persists proposals + gate decisions. */
@@ -273,6 +280,23 @@ export class WorldModelHost {
           policy.title,
           300000 // 5 minute TTL
         );
+      }
+
+      // Executor re-check: actuate only if allowlisted, SHADOW=0 and the breaker is clear; else record only.
+      if (this.autoExecutor) {
+        let db: ExocortexDatabase | null = null;
+        try {
+          db = hasDatabase() ? getDatabase() : null;
+        } catch {
+          db = null;
+        }
+        if (mayActuateAutoExecute(gateDecision, proposal, db)) {
+          try {
+            this.autoExecutor(policy, proposal);
+          } catch (err) {
+            console.error(`[auto-execute] failed for ${policy.id}:`, err instanceof Error ? err.message : err);
+          }
+        }
       }
 
       // Persistence must never break observation ingest.

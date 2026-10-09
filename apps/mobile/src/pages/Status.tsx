@@ -30,6 +30,9 @@ export default function Status() {
   const [accessibilityGranted, setAccessibilityGranted] = useState(true);
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [allowlist, setAllowlistState] = useState<Set<string>>(new Set());
+  // Picker working copy. Nothing reaches the native allowlist until the user taps "Save";
+  // "Cancel" discards it (including the first-run recent-apps suggestion).
+  const [draft, setDraft] = useState<Set<string>>(new Set());
   const [showPicker, setShowPicker] = useState(false);
   const [recentPackages, setRecentPackages] = useState<Set<string>>(new Set());
   const [usageAccessGranted, setUsageAccessGranted] = useState(false);
@@ -152,16 +155,17 @@ export default function Status() {
         const { packages: recent, usageMs: usage } = await AccessibilityScanner.getRecentlyUsedPackages({ days: 7 });
         setRecentPackages(new Set(recent));
         setUsageMs(usage ?? {});
+        setAllowlistState(new Set(packages));
         if (packages.length === 0 && recent.length > 0) {
+          // Pre-check only in the picker's draft; persisted solely on Save.
           const installedNames = new Set(apps.map((a: AppEntry) => a.packageName));
-          const suggested = recent.filter((p: string) => installedNames.has(p));
-          setAllowlistState(new Set(suggested));
-          await AccessibilityScanner.setAllowlist({ packages: suggested });
+          setDraft(new Set(recent.filter((p: string) => installedNames.has(p))));
         } else {
-          setAllowlistState(new Set(packages));
+          setDraft(new Set(packages));
         }
       } else {
         setAllowlistState(new Set(packages));
+        setDraft(new Set(packages));
       }
 
       setShowPicker(true);
@@ -177,30 +181,32 @@ export default function Status() {
     setCollapsedCategories(next);
   }
 
-  async function toggleApp(packageName: string) {
-    const next = new Set(allowlist);
+  function toggleApp(packageName: string) {
+    const next = new Set(draft);
     if (next.has(packageName)) next.delete(packageName);
     else next.add(packageName);
-    await applyAllowlist(next);
+    setDraft(next);
   }
 
   // A real toggle, not just "add all" - if every app in the group is
   // already selected, this deselects the whole group instead of being a
   // no-op, so the header checkbox's own checked state stays meaningful
   // (checked = "all of these are in the allowlist").
-  async function toggleGroup(groupApps: AppEntry[]) {
-    const next = new Set(allowlist);
+  function toggleGroup(groupApps: AppEntry[]) {
+    const next = new Set(draft);
     const allSelected = groupApps.every(a => next.has(a.packageName));
     for (const a of groupApps) {
       if (allSelected) next.delete(a.packageName);
       else next.add(a.packageName);
     }
-    await applyAllowlist(next);
+    setDraft(next);
   }
 
-  async function applyAllowlist(next: Set<string>) {
-    setAllowlistState(next);
+  async function saveAllowlist() {
+    const next = new Set(draft);
     await AccessibilityScanner.setAllowlist({ packages: Array.from(next) });
+    setAllowlistState(next);
+    setShowPicker(false);
 
     if (next.size === 0 && passiveMode) {
       setPassiveMode(false);
@@ -208,7 +214,12 @@ export default function Status() {
     }
   }
 
-  async function selectAllApps() {
+  function cancelPicker() {
+    setDraft(new Set(allowlist));
+    setShowPicker(false);
+  }
+
+  function selectAllApps() {
     // apps is already pre-filtered by the Java side (banking/password-manager
     // packages excluded from the list entirely, both by package prefix AND by
     // app-label keyword as of 2026-08-30 — see AccessibilityPlugin.isExcluded),
@@ -221,11 +232,11 @@ export default function Status() {
     // Select All still means every capturable app, matching its existing
     // pre-filter behavior rather than silently changing meaning based on a
     // view toggle's current state.
-    await applyAllowlist(new Set(apps.map(a => a.packageName)));
+    setDraft(new Set(apps.map(a => a.packageName)));
   }
 
-  async function deselectAllApps() {
-    await applyAllowlist(new Set());
+  function deselectAllApps() {
+    setDraft(new Set());
   }
 
   async function scanScreenText() {
@@ -362,7 +373,7 @@ export default function Status() {
                 // even if it has no launcher icon - toggling the filter off
                 // must not make an existing selection disappear from view.
                 const backgroundFiltered = apps.filter(
-                  a => showBackgroundApps || a.hasLauncherIcon || allowlist.has(a.packageName)
+                  a => showBackgroundApps || a.hasLauncherIcon || draft.has(a.packageName)
                 );
                 const hiddenBackgroundCount = apps.length - backgroundFiltered.length;
 
@@ -389,7 +400,7 @@ export default function Status() {
                   <label key={app.packageName} className="app-row">
                     <input
                       type="checkbox"
-                      checked={allowlist.has(app.packageName)}
+                      checked={draft.has(app.packageName)}
                       onChange={() => toggleApp(app.packageName)}
                     />
                     {app.label} <span className="app-row-pkg">({app.packageName})</span>
@@ -508,7 +519,7 @@ export default function Status() {
                           <input
                             type="checkbox"
                             title="Select all in this group"
-                            checked={recentApps.every(a => allowlist.has(a.packageName))}
+                            checked={recentApps.every(a => draft.has(a.packageName))}
                             onChange={() => toggleGroup(recentApps)}
                           />
                           <span className="picker-group-label recent" style={{ cursor: "default" }}>
@@ -528,7 +539,7 @@ export default function Status() {
                             <input
                               type="checkbox"
                               title="Select all in this category"
-                              checked={categoryApps.every(a => allowlist.has(a.packageName))}
+                              checked={categoryApps.every(a => draft.has(a.packageName))}
                               onChange={() => toggleGroup(categoryApps)}
                             />
                             <span className="picker-group-label" onClick={() => toggleCategoryCollapsed(category)}>
@@ -550,7 +561,7 @@ export default function Status() {
                             <input
                               type="checkbox"
                               title="Select all system apps"
-                              checked={sortedSystemApps.every(a => allowlist.has(a.packageName))}
+                              checked={sortedSystemApps.every(a => draft.has(a.packageName))}
                               onChange={() => toggleGroup(sortedSystemApps)}
                             />
                             <span className="picker-group-label" onClick={() => setShowSystemApps(!showSystemApps)}>
@@ -562,9 +573,10 @@ export default function Status() {
                       );
                     })()}
 
-                    <button className="secondary" style={{ marginTop: 8 }} onClick={() => setShowPicker(false)}>
-                      Done
-                    </button>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <button onClick={saveAllowlist}>Save ({draft.size} selected)</button>
+                      <button className="secondary" onClick={cancelPicker}>Cancel</button>
+                    </div>
                   </div>
                 );
               })()}

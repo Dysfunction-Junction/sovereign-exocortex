@@ -80,10 +80,13 @@ test("v3 event store endpoints integration test", async () => {
         platform: "android",
         pubkey_b64: pubkeyB64,
         key_attested: 1,
-        scopes: ["telemetry:write", "approval:write", "admin:read"],
+        scopes: ["telemetry:write", "approval:write"],
       }),
     });
     assert.equal(enrollRes.status, 200);
+    // admin scopes are granted from the PC only (grant-scope-cli), never by enrollment
+    assert.equal(memoryDb.getDevice("dev_s26_ultra")?.key_attested, 0, "enroll must not trust client key_attested");
+    assert.equal(memoryDb.grantDeviceScope("dev_s26_ultra", "admin:read"), true);
     const enrollData = await enrollRes.json();
     assert.equal(enrollData.ok, true);
     assert.equal(enrollData.enrolled, "dev_s26_ultra");

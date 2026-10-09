@@ -2276,6 +2276,42 @@ def get_recovery_patch_path(repo_root: Path, unique: bool = False) -> Path:
         return git_dir / filename
     return Path(repo_root) / f".{filename}"
 
+PROPOSED_FIX_PATCH_NAME = "triad_proposed_fix.patch"
+
+
+def write_proposed_fix_patch(repo_root: Path, text: str) -> Optional[Path]:
+    """Persist an advisor-proposed fix under the repo's git dir (never the working tree).
+
+    The destination is ``<git dir>/triad_proposed_fix.patch``. The data is written to an
+    exclusively-created temp file (O_EXCL|O_NOFOLLOW) in the same directory and moved into
+    place with ``os.replace``, so a pre-planted symlink at the destination is replaced
+    rather than followed. Returns the path, or None if the git dir cannot be resolved.
+    """
+    ret, out, _ = run_subprocess_tree_safe(["git", "rev-parse", "--git-path", PROPOSED_FIX_PATCH_NAME], cwd=repo_root)
+    if ret != 0 or not out.strip():
+        return None
+    dest = Path(out.strip())
+    if not dest.is_absolute():
+        dest = Path(repo_root) / dest
+    # Resolve only the parent directory: resolving the final component would follow a planted symlink.
+    dest = dest.parent.resolve() / dest.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(str(tmp), flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+        os.replace(str(tmp), str(dest))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+    return dest
+
+
 def write_atomic_patch(target_path: Path, data: bytes):
     """Write patch bytes atomically to target path; raises on error."""
     tmp_path = target_path.with_suffix(f".tmp.{uuid.uuid4().hex[:8]}")
@@ -3177,7 +3213,8 @@ def _handle_validation_failure(
       * If the retry budget is exhausted the gate fails closed (exit 1).
       * Otherwise the Advisory Council is asked for a surgical unified diff.
           - Direct (non-worktree) execution never mutates the user's files: the proposed
-            patch is persisted to ``.triad_proposed_fix.patch`` and the gate exits 1.
+            patch is persisted to ``<git dir>/triad_proposed_fix.patch`` (never the working
+            tree) and the gate exits 1.
           - Worktree execution applies the patch, stages it, records it in
             ``args._self_healed_patches`` and returns the new ``(attempt, candidate_tree)``
             so the caller can restart the validation sequence.
@@ -3199,14 +3236,18 @@ def _handle_validation_failure(
     print(f"[Advisory Council Proposed Fix]:\n{advisor_fix}\n")
 
     if not in_worktree:
-        patch_file = cwd / ".triad_proposed_fix.patch"
+        patch_file = None
         try:
-            patch_file.write_text(advisor_fix, encoding="utf-8")
-            print(f"\n[Triad Direct Execution Notice] Self-healing fix proposed by Advisory Council persisted to:\n  {patch_file}")
+            patch_file = write_proposed_fix_patch(cwd, advisor_fix)
         except Exception:
-            pass
+            patch_file = None
+        if patch_file is not None:
+            print(f"\n[Triad Direct Execution Notice] Self-healing fix proposed by Advisory Council persisted to:\n  {patch_file}")
+        else:
+            print("\n[Triad Direct Execution Notice] Could not persist the proposed fix under the git directory; see the output above.")
         print("Direct execution preserves working directory files without uncoordinated in-place mutation.")
-        print("To review or apply the fix: git apply .triad_proposed_fix.patch")
+        if patch_file is not None:
+            print(f"To review or apply the fix: git apply \"{patch_file}\"")
         print("Or run with 'triad gate --worktree --apply-verified' for isolated verification and atomic application.")
         sys.exit(1)
 

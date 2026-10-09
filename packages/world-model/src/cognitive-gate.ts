@@ -81,6 +81,24 @@ const VALID_MODES: readonly CognitiveMode[] = [
   'REST_RECOVERY',
 ];
 
+/**
+ * Action commands that may ever be SILENT_AUTO_EXECUTEd. Everything else is surfaced for approval.
+ * Only `diagnostic_probe` (read-only, idempotent, zero-risk graph/telemetry inspection) is listed;
+ * state-changing commands such as `self_heal_restore` are deliberately absent.
+ */
+export const AUTO_EXECUTE_ALLOWLIST: ReadonlySet<string> = new Set(['diagnostic_probe']);
+
+/**
+ * True when the proposal may be auto-executed: it carries no action to actuate, or its action
+ * command is allowlisted. A malformed/non-string command fails closed.
+ */
+export function isAutoExecuteAllowlisted(proposal: ProposalEnvelope): boolean {
+  const action = proposal.suggestedAction;
+  if (action === undefined || action === null) return true;
+  const command = (action as Record<string, unknown>).command;
+  return typeof command === 'string' && AUTO_EXECUTE_ALLOWLIST.has(command);
+}
+
 /** Hard cap on suppressed proposals so a flood cannot grow the queue without bound. */
 export const MAX_QUEUED_PROPOSALS = 1000;
 
@@ -200,7 +218,9 @@ export class CognitiveModeGate {
 
     // Invariant: Unacceptably high risk requires explicit approval, cannot be auto-executed
     // Fail closed: out-of-range / non-finite scores can never authorize silent execution.
+    // The allowlist (not the numeric scores) is what grants auto-execution of an actionable proposal.
     const canAutoExecute =
+      isAutoExecuteAllowlisted(proposal) &&
       Number.isFinite(proposal.confidence) &&
       Number.isFinite(proposal.estimatedRisk) &&
       proposal.confidence <= 1 &&

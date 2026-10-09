@@ -465,7 +465,10 @@ class TestTriadServer(unittest.TestCase):
             self.assertIn("name", adv)
 
     def test_loopback_delegate_classifies_without_leaving_the_pc(self):
-        status, _headers, body = self._post("/mishmash/delegate", {
+        patcher = patch("triad.server.SERVER_TOKEN", "token-xyz")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        status, _headers, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "0123456789abcdef",
             "from": "pieces-android-companion-seamless",
@@ -481,6 +484,32 @@ class TestTriadServer(unittest.TestCase):
 
     def _post_authed(self, path: str, payload: dict):
         return self._post(path, payload, {"Authorization": "Bearer token-xyz"})
+
+    def test_mishmash_delegate_every_action_requires_token(self):
+        for action in ("ping", "classify", "bogus"):
+            env = {
+                "v": 1, "id": "env-" + action, "from": "test-client",
+                "to": "autonomous-triad", "capability": "intent",
+                "action": action, "payload": {"text": "review this diff"},
+            }
+            # No token configured on the server -> 401 even if the client sends one.
+            with patch("triad.server.SERVER_TOKEN", ""):
+                status, _, body = self._post_authed("/mishmash/delegate", env)
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+                self.assertEqual(body.get("inReplyTo"), "env-" + action)
+                self.assertEqual(body.get("from"), "autonomous-triad")
+            # Token configured, none presented -> 401.
+            with patch("triad.server.SERVER_TOKEN", "token-xyz"):
+                status, _, body = self._post("/mishmash/delegate", env)
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+                # Wrong token -> 401.
+                status, _, body = self._post("/mishmash/delegate", env, {"Authorization": "Bearer nope"})
+                self.assertEqual(status, 401, action)
+                # Correct token is accepted (unknown action then falls through to 400).
+                status, _, _ = self._post_authed("/mishmash/delegate", env)
+                self.assertEqual(status, 400 if action == "bogus" else 200, action)
 
     def test_mishmash_delegate_approve_reject_fail_closed_without_server_token(self):
         for action, extra in (("approve", {"nonce": "nonce_123"}), ("reject", {})):

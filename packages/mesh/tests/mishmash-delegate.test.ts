@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { _resetQuarantineForTest, handleMeshDelegate } from "../src/mishmash-delegate.js";
+import { request as httpRequest, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  _resetQuarantineForTest,
+  handleMeshDelegate,
+  startMeshDelegate,
+} from "../src/mishmash-delegate.js";
 
 const envelope = {
   v: 1,
@@ -402,6 +408,70 @@ describe("mishmash delegate", () => {
     const result = outcome.body.result as any;
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/playbookId string is required/);
+  });
+  describe("loopback HTTP surface", () => {
+    let server: Server | undefined;
+    afterEach(async () => {
+      await new Promise<void>((resolve) =>
+        server ? server.close(() => resolve()) : resolve(),
+      );
+      server = undefined;
+    });
+
+    function post(
+      port: number,
+      headers: Record<string, string>,
+      body: unknown,
+    ): Promise<{ status: number; body: string }> {
+      return new Promise((resolve, reject) => {
+        const payload = JSON.stringify(body);
+        const req = httpRequest(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/mishmash/delegate",
+            method: "POST",
+            headers: { "content-length": Buffer.byteLength(payload), ...headers },
+          },
+          (res) => {
+            let text = "";
+            res.on("data", (chunk) => (text += chunk));
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, body: text }));
+          },
+        );
+        req.on("error", reject);
+        req.end(payload);
+      });
+    }
+
+    it("rejects browser-origin and DNS-rebound requests without changing state", async () => {
+      server = await startMeshDelegate(0);
+      const port = (server.address() as AddressInfo).port;
+      const demote = { ...envelope, action: "demote", payload: { playbookId: "victim" } };
+
+      const crossSite = await post(
+        port,
+        { "content-type": "text/plain", origin: "https://evil.example" },
+        demote,
+      );
+      expect(crossSite.status).toBe(403);
+      const rebound = await post(
+        port,
+        { "content-type": "application/json", host: `evil.example:${port}` },
+        demote,
+      );
+      expect(rebound.status).toBe(403);
+      expect(
+        handleMeshDelegate({ ...envelope, action: "playbook", payload: { playbookId: "victim" } })
+          .status,
+      ).toBe(200);
+
+      const local = await post(port, { "content-type": "application/json" }, {
+        ...envelope,
+        action: "ping",
+      });
+      expect(local.status).toBe(200);
+    });
   });
 });
 

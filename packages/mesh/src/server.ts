@@ -1738,6 +1738,8 @@ server.registerTool(
           taskId: task_id,
           targetRepo: target_repo,
           confirmation,
+          expectedPatchSha256: preview.patchSha256,
+          expectedPostFingerprintSha256: preview.expectedPostFingerprint.sha256,
         }),
       );
     } catch (error) {

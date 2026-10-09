@@ -71,6 +71,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 13+ runtime permission for the FCM proposal wake-up (see apps/mobile/PUSH_SETUP.md). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Runtime-requested via BarcodeScanner.requestPermissions() in Setup's

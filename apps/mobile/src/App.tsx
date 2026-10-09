@@ -13,6 +13,8 @@ import { startNotificationCaptureListener } from "./lib/notificationCapture";
 import { runSmsBackfill } from "./lib/smsBackfill";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
+import { getProposalPoller, startForegroundProposalPolling } from "./lib/proposalPoller";
+import { registerPush } from "./lib/push";
 
 const USAGE_FLUSH_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -74,6 +76,24 @@ export default function App() {
       runSmsBackfill().catch(() => {});
     }
 
+    // Proposal delivery (P6): poll the daemon while foregrounded; an FCM data message just triggers an
+    // immediate poll (the push carries no nonce/summary). Both degrade silently on web or without Firebase.
+    const stopProposalPolling = startForegroundProposalPolling();
+    const pollNow = () => {
+      void getProposalPoller().pollNow();
+    };
+    void registerPush(pollNow);
+    let pushHandle: { remove: () => Promise<void> } | undefined;
+    let pushDisposed = false;
+    CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) void registerPush(pollNow); // retries an FCM token upload that failed earlier
+    })
+      .then((h) => {
+        if (pushDisposed) h.remove();
+        else pushHandle = h;
+      })
+      .catch(() => {});
+
     // Backstop flush for events queued during a long session on one screen
     // (e.g. repeated searches without navigating away) — per-screen mount
     // already flushes on every navigation, this just covers the gap.
@@ -85,6 +105,9 @@ export default function App() {
     const id = setInterval(flushUsageEvents, USAGE_FLUSH_INTERVAL_MS);
     return () => {
       clearInterval(id);
+      stopProposalPolling();
+      pushDisposed = true;
+      void pushHandle?.remove();
       appStateDisposed = true;
       removeAppStateListener?.();
     };

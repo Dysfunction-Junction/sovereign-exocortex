@@ -164,4 +164,16 @@ describe("Search page", () => {
     expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({ query: "cats" }));
     expect(recordEvent).not.toHaveBeenCalledWith(expect.objectContaining({ query: "dog" }));
   });
+
+  test("shows 'Showing on-device results only' when the server call failed but local hits exist", async () => {
+    vi.mocked(semanticSearch).mockResolvedValue({
+      hits: [{ text: "bought a lamp", score: 0.8, timestamp: "2026-02-01T00:00:00Z", source: "local" }],
+      serverSkipped: false,
+      serverFailed: true,
+      mode: "relevant",
+    });
+    render(<Search />);
+    await type("stuff");
+    await waitFor(() => expect(screen.getByText(/showing on-device results only/i)).toBeTruthy());
+  });
 });

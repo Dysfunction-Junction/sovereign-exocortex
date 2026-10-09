@@ -210,6 +210,12 @@ export interface PreviewPatchPromotionInput {
 
 export interface ApplyPatchPromotionInput extends PreviewPatchPromotionInput {
   confirmation: string;
+  /**
+   * Digests a human approved from a prior preview. When present, apply fails
+   * closed if the patch or its simulated result differs from what was shown.
+   */
+  expectedPatchSha256?: string;
+  expectedPostFingerprintSha256?: string;
 }
 
 export interface RollbackPatchPromotionInput {
@@ -2459,6 +2465,18 @@ export class PatchPromotionService {
       await this.reconcileTargetRecordsLocked(targetRepo);
       await this.assertNoActiveTargetPromotion(input.taskId, targetRepo);
       const prepared = await this.prepare(input.taskId, targetRepo);
+      if (
+        (input.expectedPatchSha256 !== undefined &&
+          input.expectedPatchSha256 !== prepared.artifact.sha256) ||
+        (input.expectedPostFingerprintSha256 !== undefined &&
+          input.expectedPostFingerprintSha256 !==
+            prepared.expectedPostFingerprint.sha256)
+      ) {
+        throw new PatchPromotionError(
+          "ARTIFACT_UNSAFE",
+          "Patch changed after it was previewed for approval; preview again.",
+        );
+      }
       const now = new Date().toISOString();
       let record: PatchPromotionRecord = {
         schemaVersion: 2,

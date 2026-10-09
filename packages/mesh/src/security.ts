@@ -310,8 +310,16 @@ export function buildSafeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 
 export function redactSecrets(value: string): string {
   return value
+    // A multi-pair Cookie/Set-Cookie header value runs to the end of the line;
+    // the generic rule below would stop at the first ";" and leak later cookies.
     .replace(
-      /((?:["']?(?:api[_-]?key|access[_-]?(?:token|key)|refresh[_-]?token|auth[_-]?token|client[_-]?secret|password|authorization|cookie)["']?\s*[:=]\s*["']?))[^"'\s,;}]+/gi,
+      /((?:["']?(?:set-)?cookie["']?\s*[:=]\s*["']?))[^"'\r\n]+/gi,
+      "$1[REDACTED]",
+    )
+    .replace(
+      // The optional scheme word is consumed so "Authorization: Bearer <token>"
+      // does not redact only "Bearer" and leave the credential behind.
+      /((?:["']?(?:api[_-]?key|access[_-]?(?:token|key)|refresh[_-]?token|auth[_-]?token|client[_-]?secret|password|authorization|cookie)["']?\s*[:=]\s*["']?))(?:(?:Bearer|Basic|Digest|Token)\s+)?[^"'\s,;}]+/gi,
       "$1[REDACTED]",
     )
     .replace(

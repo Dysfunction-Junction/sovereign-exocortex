@@ -1,4 +1,4 @@
-import { ApprovalUnavailableError, signApproval, type ApprovalAttestation } from "./approvalKey";
+import { ApprovalUnavailableError, signApproval, signLabel, type ApprovalAttestation } from "./approvalKey";
 import { submitProposalApproval, submitShadowLabel, type ProposalApprovalResult } from "./api";
 
 export interface IncomingProposal {
@@ -114,7 +114,7 @@ class ProposalManager {
     if (result.ok) {
       item.state = "consumed";
       item.consumedAt = Date.now();
-      submitShadowLabel(item.proposalId, "wanted", { source: "tap" }).catch(() => {});
+      // No "wanted" tap label from the phone: the daemon records it itself after a verified approve.
     } else {
       // If rejected upstream as expired or nonce mismatch, lock terminal state
       if (result.upstream_status === 404) item.state = "expired";
@@ -141,6 +141,16 @@ class ProposalManager {
     item.state = "in_flight";
     this.notify();
 
+    // A dismiss counts as a human "tap" label only if signed with a fresh biometric. If the user cancels
+    // (or the key is unavailable) the reject still proceeds and its label is sent unsigned, which the
+    // daemon stores as "inferred".
+    let labelAttestation: ApprovalAttestation | undefined;
+    try {
+      labelAttestation = await signLabel({ proposalId: item.proposalId, label: "not_wanted" });
+    } catch {
+      labelAttestation = undefined;
+    }
+
     let result: ProposalApprovalResult;
     try {
       result = await submitProposalApproval({
@@ -158,7 +168,10 @@ class ProposalManager {
     if (result.ok || result.upstream_status === 404 || result.upstream_status === 409) {
       item.state = "rejected";
       item.consumedAt = Date.now();
-      submitShadowLabel(item.proposalId, "not_wanted", { source: "tap" }).catch(() => {});
+      submitShadowLabel(item.proposalId, "not_wanted", {
+        source: labelAttestation ? "tap" : "inferred",
+        attestation: labelAttestation,
+      }).catch(() => {});
     } else {
       item.state = "pending"; // transient upstream failure: the reject did not land, allow retry
     }

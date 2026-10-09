@@ -204,4 +204,36 @@ describe("semanticSearch", () => {
     const res = await semanticSearch("q", { sort: "relevance" });
     expect(res.hits.map((h) => h.text)).toEqual(["2022 hit", "2026 hit"]);
   });
+
+  test("P9: a non-unreachable server failure returns local hits with serverFailed instead of throwing", async () => {
+    vi.mocked(embed).mockResolvedValue({ ok: true, vector: [1, 0] });
+    vi.mocked(readIndex).mockResolvedValue([
+      { id: "local:a", text: "local hit", vector: [1, 0], timestamp: "t", source: "local" },
+    ]);
+    vi.mocked(getWorkstreamSummaries).mockRejectedValue(new Error("Summaries fetch failed: HTTP 404"));
+    const res = await semanticSearch("q");
+    expect(res.serverFailed).toBe(true);
+    expect(res.hits.map((h) => h.text)).toEqual(["local hit"]);
+  });
+
+  test("P9: same fallback in text-fallback mode", async () => {
+    vi.mocked(embedderAvailable).mockResolvedValue(false);
+    vi.mocked(readIndex).mockResolvedValue([
+      { id: "local:a", text: "local hit", vector: [1, 0], timestamp: "t", source: "local" },
+    ]);
+    vi.mocked(getWorkstreamSummaries).mockRejectedValue(new Error("HTTP 500"));
+    const res = await semanticSearch("local");
+    expect(res.mode).toBe("text-fallback");
+    expect(res.serverFailed).toBe(true);
+    expect(res.hits).toHaveLength(1);
+  });
+
+  test("P9: server failure with no local hits keeps the current error behaviour", async () => {
+    vi.mocked(embed).mockResolvedValue({ ok: true, vector: [1, 0] });
+    vi.mocked(readIndex).mockResolvedValue([]);
+    vi.mocked(getWorkstreamSummaries).mockRejectedValue(new Error("boom"));
+    await expect(semanticSearch("q")).rejects.toThrow("boom");
+    vi.mocked(embedderAvailable).mockResolvedValue(false);
+    await expect(semanticSearch("q")).rejects.toThrow("boom");
+  });
 });

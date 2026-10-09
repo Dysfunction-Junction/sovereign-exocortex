@@ -404,6 +404,17 @@ function activeAssetHash(row: Row): string {
   );
 }
 
+/**
+ * True for ".git" and for the spellings Windows resolves to it (trailing dots
+ * or spaces, an NTFS alternate data stream suffix, or the 8.3 short name). A
+ * ruleset write there would plant hooks or config that execute on the next git
+ * operation, so none of these is an instruction file.
+ */
+function isGitMetadataSegment(segment: string): boolean {
+  const base = (segment.split(":", 1)[0] ?? "").replace(/[. ]+$/u, "").toLowerCase();
+  return base === ".git" || /^git~\d+$/u.test(base);
+}
+
 function isWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return (
@@ -1386,6 +1397,9 @@ export class InstructionProposalStore {
     }
     if (segments.some((segment) => !segment || segment === ".")) {
       throw new Error("Repository ruleset path must name a file.");
+    }
+    if (segments.some(isGitMetadataSegment)) {
+      throw new Error("Repository ruleset path must not target Git metadata.");
     }
     const target = resolve(root, ...segments);
     if (!isWithin(root, target) || target === root) {

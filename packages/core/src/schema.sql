@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS shadow_labels (       -- ground truth for calibration
   ts          INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS device_push_tokens (
+  device_id  TEXT PRIMARY KEY REFERENCES devices(device_id),
+  token      TEXT NOT NULL,
+  platform   TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS mutations (
   mutation_id    TEXT PRIMARY KEY,
   friction_seq   INTEGER NOT NULL REFERENCES events(seq),

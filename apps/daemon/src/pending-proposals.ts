@@ -1,0 +1,97 @@
+// GET /v3/proposals/pending support.
+//
+// Approval nonces are minted by registry-app's in-memory DryRunCache (:39403) and exist nowhere else; they are
+// never persisted in the v3 DB. The only existing registry action that lists the cache (`cache_status`) omits the
+// nonce, so this asks registry-app for action `pending_proposals` through the existing forwardDelegate path. If
+// the registry does not implement it (HTTP 400), no proposal can carry a nonce and the list is empty (fail closed).
+
+import type { ExocortexDatabase } from "@exocortex/core/db";
+import { forwardDelegate, GATEWAY_NODE, type DelegateEnvelope } from "./network.js";
+
+export interface RegistryPending {
+  proposalId: string;
+  candidateId?: string;
+  summary?: string;
+  riskLevel?: string;
+  approvalNonce: string;
+  expiresAt: number | string;
+  actionPayload?: Record<string, unknown>;
+}
+
+export type PendingFetcher = () => Promise<RegistryPending[]>;
+
+export const defaultPendingFetcher: PendingFetcher = async () => {
+  const envelope: DelegateEnvelope = {
+    v: 1,
+    id: `pend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    from: GATEWAY_NODE,
+    to: "registry-app",
+    capability: "staging",
+    action: "pending_proposals",
+    payload: {},
+  };
+  const out = await forwardDelegate(envelope);
+  if (out.status !== 200 || !out.body || typeof out.body !== "object") return [];
+  const body = out.body as { ok?: boolean; result?: { proposals?: unknown } };
+  if (body.ok !== true || !Array.isArray(body.result?.proposals)) return [];
+  return body.result!.proposals as RegistryPending[];
+};
+
+function toMs(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = Date.parse(v);
+    if (Number.isFinite(t)) return t;
+  }
+  return NaN;
+}
+
+function riskFrom(reg: string | undefined, riskTerm: number): "low" | "medium" | "high" {
+  if (reg === "low" || reg === "medium" || reg === "high") return reg;
+  return riskTerm < 0.33 ? "low" : riskTerm < 0.66 ? "medium" : "high";
+}
+
+export interface PendingProposal {
+  proposalId: string;
+  candidateId: string;
+  summary: string;
+  riskLevel: "low" | "medium" | "high";
+  requiresBiometric: true;
+  approvalNonce: string;
+  expiresAt: number;
+  actionPayload?: Record<string, unknown>;
+}
+
+export async function buildPendingProposals(
+  db: ExocortexDatabase,
+  fetcher: PendingFetcher = defaultPendingFetcher,
+  now = Date.now(),
+): Promise<PendingProposal[]> {
+  let reg: RegistryPending[] = [];
+  try {
+    reg = await fetcher();
+  } catch {
+    return [];
+  }
+  const out: PendingProposal[] = [];
+  for (const r of reg) {
+    if (!r || typeof r.proposalId !== "string" || typeof r.approvalNonce !== "string" || !r.approvalNonce) continue;
+    const row = db.getProposal(r.proposalId);
+    if (!row || (row.state !== "SURFACED" && row.state !== "STAGED")) continue;
+    const regExp = toMs(r.expiresAt);
+    if (!Number.isFinite(regExp)) continue;
+    const expiresAt = Math.min(row.expires_at, regExp);
+    if (expiresAt <= now) continue;
+    out.push({
+      proposalId: row.proposal_id,
+      candidateId: typeof r.candidateId === "string" ? r.candidateId : row.invariant_id ?? row.proposal_id,
+      summary: typeof r.summary === "string" && r.summary ? r.summary : row.summary,
+      riskLevel: riskFrom(r.riskLevel, row.risk_term),
+      requiresBiometric: true,
+      approvalNonce: r.approvalNonce,
+      expiresAt,
+      ...(r.actionPayload && typeof r.actionPayload === "object" ? { actionPayload: r.actionPayload } : {}),
+    });
+  }
+  return out;
+}

@@ -16,6 +16,7 @@ import type {
   ProposalState,
   RiskTier,
 } from "@exocortex/core";
+import { isAutoExecuteAllowlisted } from "@exocortex/world-model";
 import type { GateAction, GateDecision, InferencePolicy, ProposalEnvelope } from "@exocortex/world-model";
 
 export const HOST_DEVICE_ID = "host:exocortexd";
@@ -36,6 +37,28 @@ export function mapGateAction(action: GateAction): { decision: GateDecisionActio
       const unmapped: never = action;
       throw new Error(`unmapped gate action: ${String(unmapped)}`);
     }
+  }
+}
+
+/**
+ * Executor-side re-check for SILENT_AUTO_EXECUTE decisions. Returns true only when the decision
+ * really is an auto-execute, the proposal's action is allowlisted, SHADOW=0, and the canonical
+ * circuit breaker is readable and not tripped. Anything else (including errors) => record only.
+ */
+export function mayActuateAutoExecute(
+  gate: GateDecision,
+  proposal: ProposalEnvelope,
+  db: Pick<ExocortexDatabase, "isCircuitBreakerTripped"> | null,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (gate.action !== "SILENT_AUTO_EXECUTE") return false;
+  if (!isAutoExecuteAllowlisted(proposal)) return false;
+  if (env.SHADOW !== "0") return false;
+  if (!db) return false;
+  try {
+    return !db.isCircuitBreakerTripped();
+  } catch {
+    return false;
   }
 }
 

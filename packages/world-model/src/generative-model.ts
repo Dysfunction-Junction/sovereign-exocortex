@@ -396,6 +396,8 @@ function makePersistenceB(nStates: number, nActions: number, noOpIndex: number):
  */
 export class LearnedActiveInferenceEngine {
   private factors = new Map<string, DiscreteGenerativeFactor>();
+  /** Running sum of per-step surprisal (nats): -ln P(o_t) under the predictive distribution. */
+  private totalSurprisal = 0;
 
   constructor() {
     this.registerDefaultFactors();
@@ -527,6 +529,11 @@ export class LearnedActiveInferenceEngine {
     // 1. Inference: Bayesian update & Surprisal
     const { posterior, surprisalNats } = factor.updateBelief(obsIndex, actionIdx, prevBelief);
 
+    // Accumulate surprisal (finite-guarded so one bad step cannot poison the running total)
+    if (Number.isFinite(surprisalNats) && surprisalNats >= 0) {
+      this.totalSurprisal += surprisalNats;
+    }
+
     // 2. Learning: Dirichlet conjugate count increments under the observed action
     factor.learn(obsIndex, posterior, actionIdx, prevBelief);
 
@@ -646,7 +653,7 @@ export class LearnedActiveInferenceEngine {
     const mode = (modeStates[maxIdx] ?? "DEEP_FOCUS") as any;
 
     const allBeliefs: Record<string, Record<string, number>> = {};
-    let totalSurprisal = 0;
+    const totalSurprisal = this.totalSurprisal;
 
     for (const factor of this.factors.values()) {
       const map: Record<string, number> = {};
@@ -668,6 +675,9 @@ export class LearnedActiveInferenceEngine {
    * Hydrate in-memory belief states across all factors from a saved BeliefSnapshotRecord.
    */
   public hydrateFromSnapshot(snapshot: BeliefSnapshotRecord): void {
+    if (typeof snapshot.surprisal === "number" && Number.isFinite(snapshot.surprisal) && snapshot.surprisal >= 0) {
+      this.totalSurprisal = snapshot.surprisal;
+    }
     try {
       const qObj = JSON.parse(snapshot.q) as Record<string, Record<string, number>>;
       if (!qObj || typeof qObj !== "object") return;

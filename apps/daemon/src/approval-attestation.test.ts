@@ -112,6 +112,7 @@ function deviceRow(id: string) {
 test("approval key registration + /network/approve enforce the device-bound signature", async () => {
   const prevShadow = process.env.SHADOW;
   process.env.SHADOW = "0";
+  process.env.EXOCORTEX_ALLOW_UNATTESTED_KEYS = "1"; // chain verification has its own tests (key-attestation.test.ts)
   const db = new ExocortexDatabase({ path: ":memory:" });
   db.registerDevice(deviceRow("dev_phone"));
   setDatabase(db);
@@ -173,6 +174,7 @@ test("approval key registration + /network/approve enforce the device-bound sign
     assert.notEqual(ok.status, 422);
     assert.notEqual(ok.status, 428);
   } finally {
+    delete process.env.EXOCORTEX_ALLOW_UNATTESTED_KEYS;
     if (prevShadow === undefined) delete process.env.SHADOW;
     else process.env.SHADOW = prevShadow;
     await new Promise<void>((r) => server.close(() => r()));

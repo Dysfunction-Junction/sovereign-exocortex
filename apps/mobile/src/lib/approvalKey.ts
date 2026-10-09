@@ -7,7 +7,8 @@ import { extractDeviceIdFromToken } from "./jwtDisplay";
 
 interface ApprovalKeyNative {
   isAvailable(): Promise<{ available: boolean; status: number }>;
-  ensureKey(): Promise<{ publicKeyB64: string }>;
+  /** Deletes any existing key and regenerates it with the server challenge as the attestation challenge. */
+  ensureKey(options?: { attestationChallenge?: string }): Promise<{ publicKeyB64: string; attestationChain: string[] }>;
   resetKey(): Promise<void>;
   sign(options: { message: string; title?: string; subtitle?: string }): Promise<{ signatureB64: string }>;
 }
@@ -32,6 +33,7 @@ export class ApprovalUnavailableError extends Error {
 
 const APPROVAL_MSG_PREFIX = "exo-approval-v1";
 const APPROVAL_KEY_MSG_PREFIX = "exo-approval-key-v1";
+const LABEL_MSG_PREFIX = "exo-label-v1";
 
 function join(prefix: string, fields: string[]): string {
   for (const f of fields) {
@@ -45,6 +47,10 @@ export function approvalMessage(
   ts: number
 ): string {
   return join(APPROVAL_MSG_PREFIX, [p.deviceId, p.proposalId, p.nonce, p.action, String(ts)]);
+}
+
+export function labelMessage(p: { deviceId: string; proposalId: string; label: string }, ts: number): string {
+  return join(LABEL_MSG_PREFIX, [p.deviceId, p.proposalId, p.label, String(ts)]);
 }
 
 export function approvalKeyMessage(deviceId: string, challenge: string): string {
@@ -90,6 +96,20 @@ export async function signApproval(p: {
 }
 
 /**
+ * Prompts for a strong biometric and signs (deviceId, proposalId, label, ts) so the daemon can count the
+ * label as a human tap. Throws on any failure (the caller decides whether to fall back to an unsigned label).
+ */
+export async function signLabel(p: { proposalId: string; label: string }): Promise<ApprovalAttestation> {
+  const deviceId = await getDeviceId();
+  const ts = Date.now();
+  const message = labelMessage({ deviceId, ...p }, ts);
+  const { signatureB64 } = await callNative(() =>
+    ApprovalKey.sign({ message, title: "Confirm dismiss", subtitle: "Authenticate to confirm this choice" })
+  );
+  return { v: 1, method: "biometric", ts, sig: signatureB64 };
+}
+
+/**
  * One-time (per key) registration: creates the Keystore key, fetches a server challenge, signs it
  * (biometric prompt) and binds the public key to this device. Requires the PC-side enrollment token.
  */
@@ -98,10 +118,15 @@ export async function registerApprovalKey(enrollToken: string): Promise<void> {
   const { available } = await callNative(() => ApprovalKey.isAvailable());
   if (!available) throw new ApprovalUnavailableError("Strong biometrics are not set up on this phone", "NO_BIOMETRIC");
   const deviceId = await getDeviceId();
-  const { publicKeyB64 } = await callNative(() => ApprovalKey.ensureKey());
-
   const { postApprovalKeyChallenge, postApprovalKey } = await import("./api");
   const challenge = await postApprovalKeyChallenge();
+  // Regenerates the key with the challenge baked into its Keystore attestation certificate.
+  const { publicKeyB64, attestationChain } = await callNative(() =>
+    ApprovalKey.ensureKey({ attestationChallenge: challenge })
+  );
+  if (!Array.isArray(attestationChain) || attestationChain.length === 0) {
+    throw new ApprovalUnavailableError("This phone did not produce a hardware key attestation", "NO_ATTESTATION");
+  }
   const { signatureB64 } = await callNative(() =>
     ApprovalKey.sign({
       message: approvalKeyMessage(deviceId, challenge),
@@ -109,5 +134,8 @@ export async function registerApprovalKey(enrollToken: string): Promise<void> {
       subtitle: "Authenticate to bind this phone's approval key",
     })
   );
-  await postApprovalKey({ pubkey_b64: publicKeyB64, challenge, signature_b64: signatureB64 }, enrollToken.trim());
+  await postApprovalKey(
+    { pubkey_b64: publicKeyB64, challenge, signature_b64: signatureB64, attestation_chain: attestationChain },
+    enrollToken.trim()
+  );
 }

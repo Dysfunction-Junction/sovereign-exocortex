@@ -142,6 +142,16 @@ describe("security policy", () => {
     expect(redactSecrets("Authorization: bearer-secret-value")).toContain("[REDACTED]");
   });
 
+  it("redacts the credential after an Authorization scheme and every cookie pair", () => {
+    const opaque = "meshd_abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+    expect(redactSecrets(`Authorization: Bearer ${opaque}`)).not.toContain(opaque);
+    expect(redactSecrets(`authorization=Bearer ${opaque}`)).not.toContain(opaque);
+    expect(redactSecrets(`{"authorization":"Basic ${opaque}"}`)).not.toContain(opaque);
+    const cookies = redactSecrets("Cookie: first=aaaaaaaa; second=bbbbbbbb; third=cccccccc");
+    expect(cookies).not.toContain("second=bbbbbbbb");
+    expect(cookies).not.toContain("third=cccccccc");
+  });
+
   it("summarizes provider events without retaining prompts or answers", () => {
     const summary = summarizeEventForLog({
       type: "user",

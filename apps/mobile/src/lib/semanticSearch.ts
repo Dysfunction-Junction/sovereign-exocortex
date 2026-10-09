@@ -32,6 +32,9 @@ export type SearchHit = {
 export type SearchResult = {
   hits: SearchHit[];
   serverSkipped: boolean; // home node unreachable / proxy not configured
+  // The server summaries call failed for any other reason; local hits are returned instead.
+  // The Search page shows "Showing on-device results only".
+  serverFailed?: boolean;
   mode: "relevant" | "text-fallback";
 };
 
@@ -147,6 +150,7 @@ export async function semanticSearch(
 
   // Server summaries
   let serverSkipped = false;
+  let serverError: unknown;
   try {
     const summaries = await getWorkstreamSummaries();
     const missing = summaries.filter((s) => !serverVectorCache.has(s.id));
@@ -171,12 +175,13 @@ export async function semanticSearch(
     if (err instanceof HomeNodeUnreachableError || err instanceof ProxyNotConfiguredError) {
       serverSkipped = true;
     } else {
-      throw err;
+      serverError = err;
     }
   }
 
   const ranked = rankHits(hits, sortMode, limit);
-  return { hits: ranked, serverSkipped, mode: "relevant" };
+  if (serverError !== undefined && ranked.length === 0) throw serverError;
+  return { hits: ranked, serverSkipped, mode: "relevant", ...(serverError !== undefined ? { serverFailed: true } : {}) };
 }
 
 async function textFallback(query: string, limit: number, sortMode: SearchSortMode = "hybrid"): Promise<SearchResult> {
@@ -197,6 +202,7 @@ async function textFallback(query: string, limit: number, sortMode: SearchSortMo
   }
 
   let serverSkipped = false;
+  let serverError: unknown;
   try {
     const summaries = await getWorkstreamSummaries();
     for (const s of summaries) {
@@ -208,14 +214,16 @@ async function textFallback(query: string, limit: number, sortMode: SearchSortMo
     if (err instanceof HomeNodeUnreachableError || err instanceof ProxyNotConfiguredError) {
       serverSkipped = true;
     } else {
-      throw err;
+      serverError = err;
     }
   }
 
   const ranked = rankHits(hits, sortMode, limit);
+  if (serverError !== undefined && ranked.length === 0) throw serverError;
   return {
     hits: ranked,
     serverSkipped,
     mode: "text-fallback",
+    ...(serverError !== undefined ? { serverFailed: true } : {}),
   };
 }

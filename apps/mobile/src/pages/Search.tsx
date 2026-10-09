@@ -6,7 +6,7 @@ import { SearchIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from "../com
 type State =
   | { kind: "idle" }
   | { kind: "searching" }
-  | { kind: "results"; hits: SearchHit[]; serverSkipped: boolean; fallback: boolean }
+  | { kind: "results"; hits: SearchHit[]; serverSkipped: boolean; serverFailed: boolean; fallback: boolean }
   | { kind: "error"; message: string };
 
 const DEBOUNCE_MS = 400;
@@ -46,6 +46,7 @@ export default function Search() {
         kind: "results",
         hits: result.hits,
         serverSkipped: result.serverSkipped,
+        serverFailed: result.serverFailed === true,
         fallback: result.mode === "text-fallback",
       });
       setExpanded(null);
@@ -171,6 +172,11 @@ export default function Search() {
           {state.fallback && (
             <p className="hint setup-note" style={{ color: "var(--warning)" }}>
               Meaning-based search isn't available on this device — showing text matches.
+            </p>
+          )}
+          {state.serverFailed && (
+            <p className="hint setup-note" style={{ color: "var(--warning)" }}>
+              Showing on-device results only.
             </p>
           )}
           {state.serverSkipped && (

@@ -870,7 +870,8 @@ class TestRealRepoInvariants(unittest.TestCase):
                         _run_gate(args, in_worktree=False)
                     self.assertIn("Self-healing fix proposed by Advisory Council persisted to", out.getvalue())
                     self.assertIn("Direct execution preserves working directory files without uncoordinated in-place mutation", out.getvalue())
-                    self.assertTrue((self.repo / ".triad_proposed_fix.patch").exists())
+                    self.assertFalse((self.repo / ".triad_proposed_fix.patch").exists())
+                    self.assertTrue((self.repo / ".git" / "triad_proposed_fix.patch").exists())
 
     def test_candidate_tree_unstaged_selection_working_vs_commit_semantics(self):
         """Verify candidate_tree selects working tree for require_index=False (auto) and index for require_index=True (gate)."""
@@ -5711,13 +5712,39 @@ exit 0
                         self.assertEqual(cm.exception.code, 1)
 
             # 1. Patch file must be persisted
-            patch_file = repo / ".triad_proposed_fix.patch"
-            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .triad_proposed_fix.patch")
+            patch_file = repo / ".git" / "triad_proposed_fix.patch"
+            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .git/triad_proposed_fix.patch")
             self.assertEqual(patch_file.read_text(encoding="utf-8"), fake_fix)
+            self.assertFalse((repo / ".triad_proposed_fix.patch").exists(), "Proposed fix must not be written into the working tree")
+            self.assertFalse((repo / "triad_proposed_fix.patch").exists())
 
             # 2. Working tree file MUST NOT have been mutated in place!
             self.assertEqual(test_file.read_bytes(), orig_test_bytes, "Direct execution must NEVER mutate working directory files in place")
 
+
+    def test_proposed_fix_patch_does_not_follow_planted_symlink(self):
+        """P10: a symlink pre-planted at the destination is replaced, never written through; nothing lands in the working tree."""
+        from triad.triad_engine import write_proposed_fix_patch
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as victim_dir:
+            repo = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
+            victim = Path(victim_dir) / "victim.txt"
+            victim.write_text("ORIGINAL", encoding="utf-8")
+            dest = repo / ".git" / "triad_proposed_fix.patch"
+            try:
+                os.symlink(str(victim), str(dest))
+            except (OSError, NotImplementedError, AttributeError):
+                self.skipTest("symlinks not available")
+
+            written = write_proposed_fix_patch(repo, "diff --git a/x b/x\n")
+
+            self.assertEqual(Path(written).resolve(), dest.resolve())
+            self.assertEqual(victim.read_text(encoding="utf-8"), "ORIGINAL")
+            self.assertFalse(dest.is_symlink())
+            self.assertEqual(dest.read_text(encoding="utf-8"), "diff --git a/x b/x\n")
+            self.assertEqual([p.name for p in repo.iterdir()], [".git"])
+            self.assertEqual([p.name for p in dest.parent.glob("*.tmp")], [])
 
     def test_gate_with_provisioned_node_modules_without_gitignore(self):
         """[Codex R13 Finding 1] Verify _run_gate succeeds with provisioned node_modules even when .gitignore is absent."""

@@ -807,6 +807,18 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
         return host in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
     def _handle_delegate(self, body: Dict[str, Any]):
+        # Every delegate action (ping/classify/approve/reject/unknown) is fail-closed:
+        # TRIAD_SERVER_TOKEN must be configured AND presented.
+        if not SERVER_TOKEN or not self._is_authorized():
+            self._send_json(401, {
+                "v": 1,
+                "inReplyTo": body.get("id", ""),
+                "from": "autonomous-triad",
+                "to": body.get("from", ""),
+                "ok": False,
+                "error": "Unauthorized: delegate requires valid TRIAD_SERVER_TOKEN",
+            })
+            return
         if body.get("v") != 1 or body.get("to") != "autonomous-triad":
             self._send_json(400, {"error": "envelope is not addressed to autonomous-triad"})
             return

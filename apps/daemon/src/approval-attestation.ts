@@ -8,6 +8,7 @@
 import { createPublicKey, createVerify, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const APPROVAL_MSG_PREFIX = "exo-approval-v1";
+export const LABEL_MSG_PREFIX = "exo-label-v1";
 export const APPROVAL_KEY_MSG_PREFIX = "exo-approval-key-v1";
 /** Loose on purpose: phone and PC clocks drift, and the nonce is what makes an approval single-use. */
 export const APPROVAL_TS_WINDOW_MS = 10 * 60 * 1000;
@@ -29,6 +30,21 @@ function joinFields(prefix: string, fields: string[]): Buffer {
 
 export function approvalMessage(ctx: ApprovalContext, ts: number): Buffer {
   return joinFields(APPROVAL_MSG_PREFIX, [ctx.deviceId, ctx.proposalId, ctx.nonce, ctx.action, String(ts)]);
+}
+
+export interface LabelContext {
+  deviceId: string;
+  proposalId: string;
+  label: string;
+}
+
+/** "exo-label-v1
+{deviceId}
+{proposalId}
+{label}
+{ts}" */
+export function labelMessage(ctx: LabelContext, ts: number): Buffer {
+  return joinFields(LABEL_MSG_PREFIX, [ctx.deviceId, ctx.proposalId, ctx.label, String(ts)]);
 }
 
 export function approvalKeyMessage(deviceId: string, challenge: string): Buffer {
@@ -76,6 +92,27 @@ export function verifyApprovalAttestation(
   keyAttested: boolean,
   now = Date.now(),
 ): AttestationResult {
+  return verifyBiometricAttestation(attestation, (ts) => approvalMessage(ctx, ts), deviceKeySpki, keyAttested, now);
+}
+
+/** Same signature scheme and +-10min window as approvals, over the label message. */
+export function verifyLabelAttestation(
+  attestation: unknown,
+  ctx: LabelContext,
+  deviceKeySpki: Uint8Array | null,
+  keyAttested: boolean,
+  now = Date.now(),
+): AttestationResult {
+  return verifyBiometricAttestation(attestation, (ts) => labelMessage(ctx, ts), deviceKeySpki, keyAttested, now);
+}
+
+function verifyBiometricAttestation(
+  attestation: unknown,
+  buildMessage: (ts: number) => Buffer,
+  deviceKeySpki: Uint8Array | null,
+  keyAttested: boolean,
+  now: number,
+): AttestationResult {
   if (!deviceKeySpki || !keyAttested) return { ok: false, reason: "device has no registered approval key" };
   let att = attestation;
   if (typeof att === "string") {
@@ -94,7 +131,7 @@ export function verifyApprovalAttestation(
   if (typeof a.sig !== "string" || a.sig.length === 0) return { ok: false, reason: "attestation signature missing" };
   let msg: Buffer;
   try {
-    msg = approvalMessage(ctx, ts);
+    msg = buildMessage(ts);
   } catch {
     return { ok: false, reason: "invalid approval fields" };
   }
