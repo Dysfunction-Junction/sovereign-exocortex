@@ -128,16 +128,32 @@ class ProposalManager {
       return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
     }
 
-    const result = await submitProposalApproval({
-      proposalId: item.proposalId,
-      nonce: item.approvalNonce,
-      action: "reject",
-      reason: reason ?? "User rejected on mobile UI",
-    });
+    // Lock synchronously (like approve) so a concurrent approve/reject can't
+    // submit the same nonce while this request is in flight.
+    item.state = "in_flight";
+    this.notify();
 
-    item.state = "rejected";
-    item.consumedAt = Date.now();
-    submitShadowLabel(item.proposalId, "not_wanted", { source: "tap" }).catch(() => {});
+    let result: ProposalApprovalResult;
+    try {
+      result = await submitProposalApproval({
+        proposalId: item.proposalId,
+        nonce: item.approvalNonce,
+        action: "reject",
+        reason: reason ?? "User rejected on mobile UI",
+      });
+    } catch (err) {
+      item.state = "pending"; // network exception allows retry
+      this.notify();
+      throw err;
+    }
+
+    if (result.ok || result.upstream_status === 404 || result.upstream_status === 409) {
+      item.state = "rejected";
+      item.consumedAt = Date.now();
+      submitShadowLabel(item.proposalId, "not_wanted", { source: "tap" }).catch(() => {});
+    } else {
+      item.state = "pending"; // transient upstream failure: the reject did not land, allow retry
+    }
     this.notify();
     return result;
   }

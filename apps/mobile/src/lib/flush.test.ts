@@ -239,4 +239,36 @@ describe("flushUsageEvents & usageEventToV3", () => {
     expect(usage.clearSentEvents).toHaveBeenCalledWith([multiEvents[0]]);
     expect(usage.clearSentEvents).toHaveBeenCalledWith([multiEvents[1]]);
   });
+
+  it("isolation pass stops on a non-400 response or thrown fetch without resending cleared events", async () => {
+    const evs: UsageEvent[] = [1, 2, 3].map((n) => ({
+      type: "screen_view",
+      screen: "status",
+      timestamp: "2026-10-09T10:00:00.000Z",
+      id: `evt_${n}`,
+    }));
+    for (const failure of [
+      () => Promise.resolve({ ok: false, status: 503 }),
+      () => Promise.reject(new Error("timeout")),
+    ]) {
+      vi.clearAllMocks();
+      vi.mocked(usage.peekQueue).mockResolvedValueOnce(evs);
+      vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+        { baseUrl: "http://127.0.0.1:8788", token: "t", mode: "lan" },
+        { baseUrl: "https://remote.example", token: "t", mode: "remote" },
+      ]);
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: false, status: 400 })
+        .mockResolvedValueOnce({ ok: true, status: 200 })
+        .mockImplementationOnce(failure);
+      vi.stubGlobal("fetch", mockFetch);
+
+      await flushUsageEvents();
+
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(usage.clearSentEvents).toHaveBeenCalledTimes(1);
+      expect(usage.clearSentEvents).toHaveBeenCalledWith([evs[0]]);
+    }
+  });
 });

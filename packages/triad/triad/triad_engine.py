@@ -3979,7 +3979,14 @@ def _run_gate_impl(args, env: Optional[Dict[str, str]] = None, in_worktree: bool
 
     # Parse verdict fail-closed: distinguish outages from explicit verdicts
     resp_clean = (resp or "").strip()
-    if not resp_clean or resp_clean.startswith("[Error") or resp_clean.startswith("[error"):
+    council_errored = bool(competition and isinstance(session, dict) and session.get("status") == "error")
+    if (
+        not resp_clean
+        or resp_clean.startswith("[Error")
+        or resp_clean.startswith("[error")
+        or council_errored
+        or classify_advisor_response(resp_clean) in ("limit", "error", "timeout", "empty")
+    ):
         print("\n❌ [Triad Gate BLOCKED] Advisory Council execution error or service outage.")
         if resp_clean:
             print(f"Details: {resp_clean[:200]}")

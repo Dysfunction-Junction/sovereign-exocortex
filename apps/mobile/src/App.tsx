@@ -33,6 +33,7 @@ export default function App() {
     // own check, so this doesn't register a no-op listener for users who
     // never opted in.
     let removeAppStateListener: (() => void) | undefined;
+    let appStateDisposed = false;
     isScreenContextEnabled().then((enabled) => {
       if (enabled && Capacitor.isNativePlatform()) {
         startPassiveCaptureListener();
@@ -49,7 +50,8 @@ export default function App() {
         CapacitorApp.addListener("appStateChange", ({ isActive }) => {
           if (isActive) triageQueue();
         }).then((handle) => {
-          removeAppStateListener = () => handle.remove();
+          if (appStateDisposed) handle.remove();
+          else removeAppStateListener = () => handle.remove();
         });
       }
     });
@@ -83,6 +85,7 @@ export default function App() {
     const id = setInterval(flushUsageEvents, USAGE_FLUSH_INTERVAL_MS);
     return () => {
       clearInterval(id);
+      appStateDisposed = true;
       removeAppStateListener?.();
     };
   }, []);

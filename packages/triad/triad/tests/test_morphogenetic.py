@@ -3,6 +3,7 @@
 Unit tests for Frontier 3 Morphogenetic Software Engine (test_morphogenetic.py).
 """
 
+import sys
 import unittest
 import os
 import subprocess
@@ -109,6 +110,32 @@ class TestMorphogeneticEngine(unittest.TestCase):
         self.assertIn("mutation is a no-op", candidate.verification_output)
 
 
+
+
+    def test_mutation_preserves_lf_line_endings_in_verified_diff(self):
+        """Writing the mutation must not rewrite every line of an LF file as CRLF (Windows write_text)."""
+        import tempfile
+        NL = chr(10)
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            base = ["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "core.autocrlf=false"]
+            subprocess.run(base + ["config", "core.autocrlf", "false"], check=True)
+            (repo / "f.py").write_bytes(("a = 1" + NL + "b = 2" + NL + "c = 3" + NL).encode("utf-8"))
+            subprocess.run(base + ["add", "."], check=True)
+            subprocess.run(base + ["commit", "-qm", "init"], check=True)
+
+            engine = MorphogeneticEngine(repo)
+            candidate = MutationCandidate(
+                candidate_id="eol",
+                description="single line change",
+                target_file="f.py",
+                original_code="",
+                mutated_code="a = 1" + NL + "b = 99" + NL + "c = 3" + NL,
+            )
+            self.assertTrue(engine.evaluate_mutation_in_sandbox(candidate, [sys.executable, "-c", "pass"]))
+            changed = [l for l in candidate.unified_diff.splitlines() if l[:1] in "+-" and l[:3] not in ("+++", "---")]
+            self.assertEqual(changed, ["-b = 2", "+b = 99"])
 
 
 if __name__ == "__main__":

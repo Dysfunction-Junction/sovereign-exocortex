@@ -33,7 +33,9 @@ export function decodeJwtForDisplay(token: string): JwtDisplayInfo | null {
 
   let payload: Record<string, unknown>;
   try {
-    payload = JSON.parse(base64UrlDecode(parts[1]));
+    const parsed: unknown = JSON.parse(base64UrlDecode(parts[1]));
+    if (!parsed || typeof parsed !== "object") return null;
+    payload = parsed as Record<string, unknown>;
   } catch {
     return null;
   }

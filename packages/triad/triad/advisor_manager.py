@@ -743,7 +743,9 @@ def query_configured_advisor(
                     header = f"[Advisor Auto-Failover: Preceding advisors failed ({prior}). Active Advisor: {adv.get('display_name')}]\n\n"
                     return header + res
                 return res
-            fail_notes.append(f"{name}: {res.strip()[:60]}")
+            # Collapse whitespace so a failed advisor output cannot inject extra lines (e.g. a
+            # forged "VERDICT: APPROVED") that would sit outside the single-line failover header.
+            fail_notes.append(f"{name}: {' '.join(res.split())[:60]}")
 
         # Circuit protection: if every ready advisor was skipped by an open circuit,
         # respect the cooldown until expiry to prevent retry stampedes, unless force_probe is explicitly requested.
@@ -757,7 +759,7 @@ def query_configured_advisor(
                 if not is_failed_advisor_response(res):
                     header = f"[Advisor Circuit Fallback: Preceding advisors in cooldown. Active Advisor: {best_fallback.get('display_name')}]\n\n"
                     return header + res
-                fail_notes.append(f"{name} (fallback): {res.strip()[:60]}")
+                fail_notes.append(f"{name} (fallback): {' '.join(res.split())[:60]}")
             else:
                 earliest_adv = min(circuit_skipped, key=lambda a: circuit_remaining(str(a.get("name") or "")))
                 rem = int(circuit_remaining(str(earliest_adv.get("name") or "")))

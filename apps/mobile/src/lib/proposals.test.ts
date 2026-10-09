@@ -175,4 +175,44 @@ describe("proposalManager", () => {
     expect(proposalManager.getPending().length).toBe(0);
     expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", { source: "tap" });
   });
+  it("locks the proposal in flight during reject so a concurrent approve cannot submit the same nonce", async () => {
+    let resolveApi!: (val: any) => void;
+    vi.mocked(api.submitProposalApproval).mockImplementation(
+      () => new Promise((resolve) => { resolveApi = resolve; }) as any
+    );
+    proposalManager.ingestProposal(baseProposal);
+
+    const rejectP = proposalManager.reject(baseProposal.proposalId);
+    const approveRes = await proposalManager.approve(baseProposal.proposalId);
+    expect(approveRes.ok).toBe(false);
+    expect(approveRes.status).toBe("already_consumed");
+
+    resolveApi({ ok: true, status: "rejected" });
+    await rejectP;
+    expect(api.submitProposalApproval).toHaveBeenCalledTimes(1);
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
+  });
+
+  it("does not mark a proposal rejected when the upstream reject failed transiently", async () => {
+    vi.mocked(api.submitProposalApproval).mockResolvedValueOnce({
+      ok: false,
+      status: "release_failed",
+      upstream_status: 502,
+      error: "HTTP 502",
+    });
+    proposalManager.ingestProposal(baseProposal);
+
+    const result = await proposalManager.reject(baseProposal.proposalId);
+    expect(result.ok).toBe(false);
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
+    expect(api.submitShadowLabel).not.toHaveBeenCalled();
+  });
+
+  it("restores pending when the reject request throws", async () => {
+    vi.mocked(api.submitProposalApproval).mockRejectedValueOnce(new Error("network down"));
+    proposalManager.ingestProposal(baseProposal);
+
+    await expect(proposalManager.reject(baseProposal.proposalId)).rejects.toThrow("network down");
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
+  });
 });

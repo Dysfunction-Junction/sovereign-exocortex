@@ -64,6 +64,7 @@ export class ActiveInferenceEngine {
   private lastObservations = new Map<string, SystemObservation>();
   private lifeGraph: LivingLifeGraph;
   private anomalyThresholdNats = 2.0; // ~ln(7.4) unexpectedness threshold
+  private policySeq = 0; // disambiguates policy ids generated within the same millisecond
 
   constructor(lifeGraph: LivingLifeGraph) {
     this.lifeGraph = lifeGraph;
@@ -138,8 +139,9 @@ export class ActiveInferenceEngine {
    * Ingest an observation and evaluate its variational surprisal against prior beliefs.
    */
   public evaluateObservation(obs: SystemObservation): SurprisalMetric {
-    this.lastObservations.set(obs.invariantId, obs);
     const invariant = this.invariants.get(obs.invariantId);
+    // Only retain observations for registered invariants; arbitrary ids would grow the map unboundedly
+    if (invariant) this.lastObservations.set(obs.invariantId, obs);
 
     if (!invariant) {
       return {
@@ -153,15 +155,19 @@ export class ActiveInferenceEngine {
     }
 
     const matches = obs.observedState === invariant.preferredState;
+    // priorProbability outside (0,1) (or NaN) would give Infinity/negative/NaN surprisal; clamp to a valid range
+    const prior = Number.isFinite(invariant.priorProbability)
+      ? Math.min(0.999, Math.max(0.001, invariant.priorProbability))
+      : 0.5;
     let probObserved: number;
     let divergence: number;
 
     if (matches) {
-      probObserved = invariant.priorProbability;
+      probObserved = prior;
       divergence = 0;
     } else {
       // Divergence from expected prior
-      probObserved = Math.max(0.001, 1.0 - invariant.priorProbability);
+      probObserved = Math.max(0.001, 1.0 - prior);
       divergence = 1.0;
     }
 
@@ -199,7 +205,7 @@ export class ActiveInferenceEngine {
 
       // 1. Pragmatic Policy: Direct corrective action restoring the prior preferred state
       const pragmaticPolicy: InferencePolicy = {
-        id: `policy_pragmatic_${invariant.id}_${Date.now()}`,
+        id: `policy_pragmatic_${invariant.id}_${Date.now()}_${this.policySeq++}`,
         type: 'PRAGMATIC',
         title: `Restore Homeostasis: ${invariant.name}`,
         description: `Direct action to bring state '${String(metric.observedState)}' back to preferred '${String(metric.preferredState)}'.`,
@@ -221,7 +227,7 @@ export class ActiveInferenceEngine {
 
       // 2. Epistemic Policy: Exploratory diagnostic probe reducing entropy/ambiguity
       const epistemicPolicy: InferencePolicy = {
-        id: `policy_epistemic_${invariant.id}_${Date.now()}`,
+        id: `policy_epistemic_${invariant.id}_${Date.now()}_${this.policySeq++}`,
         type: 'EPISTEMIC',
         title: `Investigate Anomaly: ${invariant.name}`,
         description: `Inspect causal context and collect diagnostic telemetry around entity ${invariant.targetEntityId}.`,

@@ -313,7 +313,11 @@ _KEYWORD_DESTRUCTIVE = re.compile(
 
 _DEVICE_ACTUATION = re.compile(
     r"(?<![a-z0-9])(?:tap|click|swipe|press|type|input|send|call|install|reset|reboot|restart|"
-    r"shutdown|power|set|enable|disable|unlock|lock|launch|open|pay|format|flash|push|pull)",
+    r"shutdown|power|set|enable|disable|unlock|lock|launch|open|pay|format|flash|push|pull|"
+    r"reply|respond|answer|dial|text|forward|transfer|toggle|turn|grant|revoke|allow|deny|share|post|"
+    r"write|approve|confirm|buy|purchase|play|record|mute|unmute|accept|decline|connect|disconnect|pair|"
+    r"sync|run|execute|trigger|schedule|submit|upload|download|move|copy|rename|clear|change|update|edit|"
+    r"add|remove|sign|authori[sz]e|book|order|cancel|stop|start|silence|dismiss|wake|sleep|volume|brightness)",
     re.I,
 )
 

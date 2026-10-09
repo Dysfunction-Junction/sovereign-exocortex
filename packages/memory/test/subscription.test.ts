@@ -52,7 +52,7 @@ function scriptedSpawn(script: {
         return true;
       },
       on(event, listener) {
-        if (event === "exit") {
+        if (event === "close") {
           exitListeners.push(listener as (code: number | null, signal: NodeJS.Signals | null) => void);
         }
       },
@@ -86,6 +86,8 @@ test("subscriptionChildEnv removes metered API keys from the CLI environment", (
     OPENROUTER_API_KEY: "sk-or-v1-sentinel",
     GEMINI_API_KEY: "gemini-sentinel",
     GOOGLE_API_KEY: "google-sentinel",
+    ANTHROPIC_AUTH_TOKEN: "tok-sentinel",
+    ANTHROPIC_BASE_URL: "https://proxy.example",
     PATH: "C:\\Windows",
   });
   assert.equal(env.ANTHROPIC_API_KEY, undefined);
@@ -93,6 +95,8 @@ test("subscriptionChildEnv removes metered API keys from the CLI environment", (
   assert.equal(env.OPENROUTER_API_KEY, undefined);
   assert.equal(env.GEMINI_API_KEY, undefined);
   assert.equal(env.GOOGLE_API_KEY, undefined);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, undefined);
+  assert.equal(env.ANTHROPIC_BASE_URL, undefined);
   assert.equal(env.PATH, "C:\\Windows");
 });
 
@@ -289,4 +293,79 @@ test("resolveReasoningClient selects a provider from REASONING_PROVIDER", () => 
     () => resolveReasoningClient(openRouter, { REASONING_PROVIDER: "browser-cookie" }),
     /Unknown REASONING_PROVIDER/
   );
+});
+
+test("Subscription CLI waits for stdio close so late stdout is not truncated", async () => {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  let closeListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+  let exitListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+  const spawnFn: SpawnFn = () => ({
+    stdin: {
+      write() {},
+      end() {
+        // exit fires first; the result arrives on stdout afterwards, then close.
+        setImmediate(() => {
+          exitListener?.(0, null);
+          stdout.emit("data", Buffer.from('{"result":"late answer"}'));
+          closeListener?.(0, null);
+        });
+      },
+    },
+    stdout,
+    stderr,
+    kill: () => true,
+    on(event: string, listener: any) {
+      if (event === "close") closeListener = listener;
+      if (event === "exit") exitListener = listener;
+    },
+  } as SpawnStreams);
+  const client = new SubscriptionCliClient({ provider: "claude", spawnFn, credentialCheck: () => true });
+  const res = await client.chat("hello");
+  assert.equal(res.content, "late answer");
+});
+
+test("Subscription CLI survives an async EPIPE error on stdin", async () => {
+  const stdout = new EventEmitter();
+  const stderr = new EventEmitter();
+  const stdinEmitter = new EventEmitter();
+  let closeListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+  const spawnFn: SpawnFn = () => ({
+    stdin: Object.assign(stdinEmitter, {
+      write() {},
+      end() {
+        setImmediate(() => {
+          // Without an error listener this emit throws (uncaught in production).
+          stdinEmitter.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+          stderr.emit("data", Buffer.from("bad flag"));
+          closeListener?.(2, null);
+        });
+      },
+    }),
+    stdout,
+    stderr,
+    kill: () => true,
+    on(event: string, listener: any) {
+      if (event === "close") closeListener = listener;
+    },
+  } as SpawnStreams);
+  const client = new SubscriptionCliClient({ provider: "claude", spawnFn, credentialCheck: () => true });
+  await assert.rejects(
+    () => client.chat("hello"),
+    (err: unknown) => err instanceof OpenRouterError && err.code === "UPSTREAM_ERROR"
+  );
+});
+
+test("Subscription CLI never forwards a model id that starts with a dash", async () => {
+  let seenArgs: string[] = [];
+  const { spawnFn } = scriptedSpawn({
+    stdout: '{"result":"ok"}',
+    onInvoke: (_c, args) => {
+      seenArgs = args;
+    },
+  });
+  const client = new SubscriptionCliClient({ provider: "claude", spawnFn, credentialCheck: () => true });
+  await client.chat("hello", undefined, { model: "--dangerously-skip-permissions" });
+  assert.equal(seenArgs.includes("--dangerously-skip-permissions"), false);
+  assert.equal(seenArgs.includes("--model"), false);
 });

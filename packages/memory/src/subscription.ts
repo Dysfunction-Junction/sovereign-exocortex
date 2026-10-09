@@ -29,15 +29,16 @@ export type SubscriptionProvider = "claude" | "codex" | "antigravity";
 
 const OUTPUT_CAP_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 60_000;
-const MODEL_PATTERN = /^[a-zA-Z0-9_\-./:]+$/;
+const MODEL_PATTERN = /^[a-zA-Z0-9_][a-zA-Z0-9_\-./:]*$/;
 
 export interface SpawnStreams {
-  stdin: { write(data: string): void; end(): void };
+  stdin: { write(data: string): void; end(): void; on?(event: "error", listener: (err: Error) => void): unknown };
   stdout: { on(event: "data", listener: (chunk: Buffer | string) => void): void };
   stderr: { on(event: "data", listener: (chunk: Buffer | string) => void): void };
   kill(signal?: NodeJS.Signals): boolean;
   on(event: "error", listener: (err: Error) => void): void;
-  on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  // "close" (not "exit"): stdio can still hold unread data when "exit" fires.
+  on(event: "close", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
 }
 
 export interface SpawnOptions {
@@ -84,6 +85,8 @@ export function subscriptionChildEnv(parent: NodeJS.ProcessEnv = process.env): N
   delete env.OPENROUTER_API_KEY;
   delete env.GEMINI_API_KEY;
   delete env.GOOGLE_API_KEY;
+  delete env.ANTHROPIC_AUTH_TOKEN;
+  delete env.ANTHROPIC_BASE_URL;
   return env;
 }
 
@@ -518,7 +521,7 @@ export class SubscriptionCliClient {
         });
       });
 
-      child.on("exit", (code) => {
+      child.on("close", (code) => {
         finish(() => {
           const text = stdout.text();
           if (code === 0 || (input.acceptNonZero && text.trim().length > 0)) {
@@ -535,6 +538,9 @@ export class SubscriptionCliClient {
         });
       });
 
+      // An async EPIPE (CLI exits before reading stdin) would otherwise be an
+      // unhandled 'error' event and crash the gateway; "close" reports the failure.
+      child.stdin.on?.("error", () => {});
       try {
         child.stdin.write(input.prompt);
         child.stdin.end();

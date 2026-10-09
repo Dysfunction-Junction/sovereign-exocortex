@@ -93,29 +93,28 @@ export async function flushUsageEvents(): Promise<void> {
       const getSignal = () => AbortSignal.timeout(Math.max(500, deadline - Date.now()));
       const deviceId = extractDeviceIdFromToken(target.token) || "device_phone_galaxy";
 
-      try {
+      const post = async (batch: UsageEvent[], v3: V3EventIn[], signal: () => AbortSignal) => {
+        const headers = { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` };
         let res = await fetch(`${target.baseUrl}/v3/events`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${target.token}`,
-          },
-          body: JSON.stringify({ device_id: deviceId, events: v3Events }),
-          signal: getSignal(),
+          headers,
+          body: JSON.stringify({ device_id: deviceId, events: v3 }),
+          signal: signal(),
         });
-
         // Graceful fallback to legacy /mobile/usage-report if /v3/events is not supported (404) or scope forbidden (403)
         if (res.status === 404 || res.status === 403) {
           res = await fetch(`${target.baseUrl}/mobile/usage-report`, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${target.token}`,
-            },
-            body: JSON.stringify({ events: toSend }),
-            signal: getSignal(),
+            headers,
+            body: JSON.stringify({ events: batch }),
+            signal: signal(),
           });
         }
+        return res;
+      };
+
+      try {
+        const res = await post(toSend, v3Events, getSignal);
 
         if (res.ok) {
           await clearSentEvents(toSend);
@@ -126,23 +125,24 @@ export async function flushUsageEvents(): Promise<void> {
         if (res.status === 401 || res.status === 403 || res.status >= 500) continue;
 
         // 400/409: a malformed or duplicate event. A single event is cleared so it cannot block the queue.
-        // A larger batch is re-sent one event at a time: accepted and rejected events are cleared,
-        // anything else stops the pass so valid events are never dropped and the queue cannot wedge.
+        // A larger batch is re-sent one event at a time (same endpoint chain, shared deadline): accepted and
+        // rejected events are cleared as they resolve; anything else stops the pass or fails over, and the
+        // already-cleared events are never re-sent.
         if (res.status === 400 || res.status === 409) {
           if (toSend.length === 1) {
             await clearSentEvents(toSend);
             return;
           }
+          const isoDeadline = Date.now() + 8000;
+          const isoSignal = () => AbortSignal.timeout(Math.max(500, isoDeadline - Date.now()));
           for (const ev of toSend) {
-            const single = await fetch(`${target.baseUrl}/v3/events`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${target.token}`,
-              },
-              body: JSON.stringify({ device_id: deviceId, events: [usageEventToV3(ev)] }),
-              signal: AbortSignal.timeout(8000),
-            });
+            if (Date.now() >= isoDeadline) return;
+            let single: Response;
+            try {
+              single = await post([ev], [usageEventToV3(ev)], isoSignal);
+            } catch {
+              return; // network error mid-pass: keep the rest queued, don't resend cleared events elsewhere
+            }
             if (single.ok || single.status === 400 || single.status === 409) {
               await clearSentEvents([ev]);
             } else {

@@ -362,6 +362,15 @@ export class DiscreteGenerativeFactor {
   }
 }
 
+/** True when `v` is a nested array with exactly the given dims whose leaves are finite numbers (>= 0 if nonNeg). */
+function hasShape(v: unknown, dims: number[], nonNeg: boolean): boolean {
+  if (dims.length === 0) {
+    return typeof v === "number" && Number.isFinite(v) && (!nonNeg || v >= 0);
+  }
+  if (!Array.isArray(v) || v.length !== dims[0]) return false;
+  return v.every((child) => hasShape(child, dims.slice(1), nonNeg));
+}
+
 function makePersistenceB(nStates: number, nActions: number, noOpIndex: number): number[][][] {
   const bCounts: number[][][] = [];
   for (let a = 0; a < nActions; a++) {
@@ -598,14 +607,21 @@ export class LearnedActiveInferenceEngine {
 
       try {
         const parsed = JSON.parse(rec.counts);
-        if (rec.kind === "A" && Array.isArray(parsed)) {
+        const nS = factor.states.length;
+        const nO = factor.observations.length;
+        const nA = factor.actions.length;
+        // Reject tables with wrong dimensions / non-finite / negative counts: they would
+        // crash or silently poison every later belief update.
+        if (rec.kind === "A" && hasShape(parsed, [nO, nS], true)) {
           factor.aCounts = parsed;
-        } else if (rec.kind === "B" && Array.isArray(parsed)) {
+        } else if (rec.kind === "B" && hasShape(parsed, [nA, nS, nS], true)) {
           factor.bCounts = parsed;
-        } else if (rec.kind === "C" && Array.isArray(parsed)) {
+        } else if (rec.kind === "C" && hasShape(parsed, [nO], false)) {
           factor.cPreferences = parsed;
-        } else if (rec.kind === "D" && Array.isArray(parsed)) {
+        } else if (rec.kind === "D" && hasShape(parsed, [nS], true)) {
           factor.dCounts = parsed;
+        } else {
+          continue;
         }
         factor.version = Math.max(factor.version, rec.version);
       } catch {
@@ -659,6 +675,7 @@ export class LearnedActiveInferenceEngine {
         const factor = this.factors.get(factorName);
         if (!factor || !stateMap || typeof stateMap !== "object") continue;
         const newBelief = factor.states.map((s) => Number(stateMap[s] ?? 0));
+        if (!newBelief.every((v) => Number.isFinite(v) && v >= 0)) continue;
         const sum = newBelief.reduce((a, b) => a + b, 0);
         if (sum > 0) {
           factor.currentBelief = newBelief.map((v) => v / sum);
@@ -684,7 +701,12 @@ export class LearnedActiveInferenceEngine {
       count++;
       const extracted = eventToObservation(event);
       if (extracted && this.factors.has(extracted.factor)) {
-        this.processObservation(extracted.factor, extracted.obs, extracted.action);
+        try {
+          this.processObservation(extracted.factor, extracted.obs, extracted.action);
+        } catch {
+          // A poison event (unknown observation/action name for a known factor) must not
+          // abort replay of the entire append-only log; skip it deterministically.
+        }
       }
       snapshots.push(this.createBeliefSnapshot(event.seq));
     }

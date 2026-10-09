@@ -73,6 +73,17 @@ export interface ModeGateConfig {
   queueMaxAgeMs: number; // default 8 hours (28,800,000 ms)
 }
 
+const VALID_MODES: readonly CognitiveMode[] = [
+  'DEEP_FOCUS',
+  'HIGH_VELOCITY_EXECUTION',
+  'EXPLORATORY_LEARNING',
+  'MAINTENANCE_SURFACING',
+  'REST_RECOVERY',
+];
+
+/** Hard cap on suppressed proposals so a flood cannot grow the queue without bound. */
+export const MAX_QUEUED_PROPOSALS = 1000;
+
 const DEFAULT_CONFIG: ModeGateConfig = {
   autoExecuteMinConfidence: 0.88,
   autoExecuteMaxRisk: 0.15,
@@ -105,7 +116,7 @@ export class CognitiveModeGate {
     this.lastSignals = signals;
 
     // 1. Manual override takes highest priority
-    if (signals.manualOverrideMode) {
+    if (signals.manualOverrideMode && VALID_MODES.includes(signals.manualOverrideMode)) {
       this.currentMode = signals.manualOverrideMode;
       return this.currentMode;
     }
@@ -188,7 +199,12 @@ export class CognitiveModeGate {
     const now = Date.now();
 
     // Invariant: Unacceptably high risk requires explicit approval, cannot be auto-executed
+    // Fail closed: out-of-range / non-finite scores can never authorize silent execution.
     const canAutoExecute =
+      Number.isFinite(proposal.confidence) &&
+      Number.isFinite(proposal.estimatedRisk) &&
+      proposal.confidence <= 1 &&
+      proposal.estimatedRisk >= 0 &&
       proposal.confidence >= this.config.autoExecuteMinConfidence &&
       proposal.estimatedRisk <= this.config.autoExecuteMaxRisk;
 
@@ -345,6 +361,19 @@ export class CognitiveModeGate {
           evaluatedAt: now,
         };
       }
+
+      default: {
+        // Unknown mode (corrupt state): fail closed by suppressing and queueing
+        this.queueProposal(proposal);
+        return {
+          action: 'SUPPRESS_AND_QUEUE',
+          mode: activeMode,
+          reason: `Unknown cognitive mode '${String(activeMode)}': suppressed and queued (fail closed).`,
+          targetDelivery: 'BACKGROUND_QUEUE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
     }
   }
 
@@ -354,6 +383,9 @@ export class CognitiveModeGate {
   private queueProposal(proposal: ProposalEnvelope): void {
     proposal.stagedAt = proposal.stagedAt ?? Date.now();
     this.queuedProposals.push(proposal);
+    if (this.queuedProposals.length > MAX_QUEUED_PROPOSALS) {
+      this.queuedProposals.splice(0, this.queuedProposals.length - MAX_QUEUED_PROPOSALS);
+    }
   }
 
   /**
@@ -380,6 +412,6 @@ export class CognitiveModeGate {
    * Size of current suppressed queue.
    */
   public get queueSize(): number {
-    return this.queuedProposals.length;
+    return this.getPendingQueue().length; // evicts TTL-expired entries so the size is not stale
   }
 }

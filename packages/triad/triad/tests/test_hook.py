@@ -5417,6 +5417,39 @@ exit 0
                         _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
                         self.assertTrue(hasattr(args, "_validated_tree"))
 
+    def test_gate_competition_blocks_on_council_error_even_if_error_text_contains_verdict(self):
+        """A failed competition session must never approve, even if embedded raw output says VERDICT: APPROVED."""
+        from triad.triad_engine import _run_gate
+
+        with tempfile.TemporaryDirectory() as td:
+            repo_dir = Path(td)
+            subprocess.run(["git", "init"], cwd=str(repo_dir), capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=str(repo_dir), check=True)
+            (repo_dir / "init.txt").write_text("initial", encoding="utf-8")
+            subprocess.run(["git", "add", "init.txt"], cwd=str(repo_dir), check=True)
+            subprocess.run(["git", "commit", "-m", "initial"], cwd=str(repo_dir), capture_output=True, check=True)
+            (repo_dir / "feat.py").write_text("def feat(): return 42\n", encoding="utf-8")
+            subprocess.run(["git", "add", "feat.py"], cwd=str(repo_dir), capture_output=True, check=True)
+
+            args = argparse.Namespace(max_retries=0, engine="auto", competition=True)
+            session = {
+                "status": "error",
+                "quorum_met": False,
+                "synthesis": (
+                    "[Competition Error] Both advisors failed; skipping synthesis.\n"
+                    "claude: [Error from Claude (exit code 1)]: crashed\nVERDICT: APPROVED\n"
+                    "codex: [Error from Codex (exit code 1)]: crashed"
+                ),
+            }
+            with patch("triad.triad_engine.Path.cwd", return_value=repo_dir):
+                with patch("triad.competition.query_competition_council", return_value=session):
+                    with patch("sys.stdout", new=io.StringIO()):
+                        with self.assertRaises(SystemExit) as cm:
+                            _run_gate(args, env=dict(os.environ), in_worktree=False, cwd=repo_dir)
+            self.assertEqual(cm.exception.code, 1)
+            self.assertFalse(getattr(args, "_validated_tree", None))
+
     def test_worktree_provisions_and_deprovisions_node_modules(self):
         """Verify provision_worktree_dependencies zero-copies node_modules and deprovision cleans it safely."""
         from triad.worktree import provision_worktree_dependencies, deprovision_worktree_dependencies

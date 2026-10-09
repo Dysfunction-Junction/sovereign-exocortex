@@ -58,6 +58,7 @@ export function clusterEventsToPatterns(events: unknown[], nowIso: string = new 
     const rec = asRecord(item);
     if (!rec) continue;
     const key = (typeof rec.package === 'string' && rec.package.trim())
+      || (typeof rec.packageName === 'string' && rec.packageName.trim())
       || (typeof rec.app === 'string' && rec.app.trim())
       || (typeof rec.screen === 'string' && rec.screen.trim())
       || 'unknown';
@@ -66,7 +67,9 @@ export function clusterEventsToPatterns(events: unknown[], nowIso: string = new 
       || key;
     const ts = typeof rec.timestamp === 'string' && !Number.isNaN(Date.parse(rec.timestamp))
       ? new Date(rec.timestamp).toISOString()
-      : nowIso;
+      : typeof rec.timestamp === 'number' && Number.isFinite(rec.timestamp) && Math.abs(rec.timestamp) <= 8.64e15
+        ? new Date(rec.timestamp).toISOString()
+        : nowIso;
     const existing = clusters.get(key);
     if (existing) {
       existing.count += 1;

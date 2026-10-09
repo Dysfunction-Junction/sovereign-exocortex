@@ -51,7 +51,10 @@ export default function BiometricApprovalModal() {
     setSubmitting(true);
     setError(null);
     try {
-      await proposalManager.reject(active.proposalId, "User dismissed from mobile modal");
+      const res = await proposalManager.reject(active.proposalId, "User dismissed from mobile modal");
+      if (!res.ok && res.status !== "not_found") {
+        setError(res.error || res.status || "Dismiss failed");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -27,11 +27,15 @@ export class CandidatePool {
     now: Date = new Date()
   ): PoolUpdateResult {
     // 1. Decay all existing candidates up to current time
+    // lastObservedAt is advanced to `now` for non-touched items so the decay is not
+    // re-applied from the stale timestamp on the next call (compounding double-decay).
+    const nowValid = now instanceof Date && !isNaN(now.getTime());
     const updatedPool = currentPool.map((item) => {
       const decayed = applyDecay(item.promotionScore, item.lastObservedAt, now);
       return {
         ...item,
         promotionScore: decayed,
+        ...(nowValid ? { lastObservedAt: now.toISOString() } : {}),
       };
     });
 
@@ -70,6 +74,10 @@ export class CandidatePool {
     }
 
     // Case C: Pool is full -> find weakest occupant
+    if (updatedPool.length === 0) {
+      // Zero/invalid capacity: nothing to evict and nothing may be inserted
+      return { pool: updatedPool, insertedOrUpdated: false };
+    }
     let minIndex = 0;
     let minScore = updatedPool[0].promotionScore;
 

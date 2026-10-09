@@ -60,6 +60,8 @@ export class LivingLifeGraph {
   private edges = new Map<string, GraphEdge>();
   private adjacency = new Map<string, Set<string>>(); // sourceId -> Set<edgeId>
   private reverseAdjacency = new Map<string, Set<string>>(); // targetId -> Set<edgeId>
+  // Time up to which decay has already been applied, so repeated decay() calls don't compound.
+  private decayedAt = new WeakMap<object, number>();
 
   /**
    * Add or update an entity in the graph.
@@ -108,6 +110,10 @@ export class LivingLifeGraph {
       throw new Error(`Target entity not found in LifeGraph: ${targetId}`);
     }
 
+    // Validate numeric inputs: NaN/negative weights or non-positive half-lives corrupt decay and ranking
+    weight = Number.isNaN(weight) ? 0 : Math.min(1.0, Math.max(0, weight));
+    if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) halfLifeDays = 30;
+
     const edgeId = `${sourceId}:${relation}:${targetId}`;
     const existing = this.edges.get(edgeId);
 
@@ -137,6 +143,7 @@ export class LivingLifeGraph {
     if (!entity) return;
     entity.activation = Math.min(1.0, entity.activation + amount);
     entity.lastActive = Date.now();
+    this.decayedAt.delete(entity);
   }
 
   /**
@@ -146,8 +153,10 @@ export class LivingLifeGraph {
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
     for (const entity of this.entities.values()) {
-      const elapsedDays = (currentTime - entity.lastActive) / MS_PER_DAY;
+      const base = Math.max(entity.lastActive, this.decayedAt.get(entity) ?? -Infinity);
+      const elapsedDays = (currentTime - base) / MS_PER_DAY;
       if (elapsedDays > 0) {
+        this.decayedAt.set(entity, currentTime);
         // Base entity activation half-life is 7 days
         const halfLife = 7;
         const decayFactor = Math.pow(0.5, elapsedDays / halfLife);
@@ -156,8 +165,10 @@ export class LivingLifeGraph {
     }
 
     for (const edge of this.edges.values()) {
-      const elapsedDays = (currentTime - edge.lastObserved) / MS_PER_DAY;
+      const base = Math.max(edge.lastObserved, this.decayedAt.get(edge) ?? -Infinity);
+      const elapsedDays = (currentTime - base) / MS_PER_DAY;
       if (elapsedDays > 0) {
+        this.decayedAt.set(edge, currentTime);
         const halfLife = edge.halfLifeDays ?? 30;
         const decayFactor = Math.pow(0.5, elapsedDays / halfLife);
         edge.weight = Math.max(0.01, edge.weight * decayFactor);

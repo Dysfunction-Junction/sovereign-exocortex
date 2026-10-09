@@ -1,5 +1,6 @@
 import { registerPlugin } from "@capacitor/core";
-import { recordEvent } from "./usage";
+import { recordEvent, peekQueue, MAX_QUEUE_SIZE } from "./usage";
+import { flushUsageEvents } from "./flush";
 import { getSmsBackfillHighWater, setSmsBackfillHighWater } from "./config";
 
 const SmsReader = registerPlugin<any>("SmsReader");
@@ -86,6 +87,21 @@ export async function resetSmsBackfillToRecent(days = 30): Promise<number> {
   return target;
 }
 
+// recordEvent evicts the OLDEST queue entries past MAX_QUEUE_SIZE, and the
+// high-water mark advances per page — so ingesting a page into a queue without
+// room would silently and permanently drop messages. Flush to make room, and
+// pause the run (high-water untouched) if the queue still can't take a page.
+async function ensureQueueRoom(needed: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const before = (await peekQueue()).length;
+    if (MAX_QUEUE_SIZE - before >= needed) return true;
+    await flushUsageEvents();
+    const after = (await peekQueue()).length;
+    if (after >= before) return false; // flush made no progress (offline / untriaged head)
+  }
+  return false;
+}
+
 /**
  * Pull SMS history newer than the stored high-water mark into the usage queue,
  * up to MAX_PER_RUN messages per call. Flushed in the background by flushUsageEvents.
@@ -112,6 +128,7 @@ export async function runSmsBackfill(
   let ingested = 0;
 
   while (ingested < MAX_PER_RUN) {
+    if (!(await ensureQueueRoom(PAGE_SIZE))) return { ingested, done: false };
     const page = (await SmsReader.backfill({
       sinceMillis: since,
       limit: PAGE_SIZE,

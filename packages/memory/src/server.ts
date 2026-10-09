@@ -320,6 +320,11 @@ export function createGatewayApp(config: ServerConfig = {}) {
         sendJson(res, 400, { error: "invalid JSON" }, origin);
         return;
       }
+      // "null", numbers, strings and arrays parse fine but would throw on body.to below.
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        sendJson(res, 400, { error: "envelope must be a JSON object" }, origin);
+        return;
+      }
       if (body.to !== "pieces-for-all" || body.v !== 1) {
         sendJson(res, 400, { error: "envelope is not addressed to pieces-for-all" }, origin);
         return;
@@ -537,7 +542,7 @@ export function createGatewayApp(config: ServerConfig = {}) {
           typeof requestedModel !== "string" ||
           requestedModel.trim().length === 0 ||
           requestedModel.length > MAX_MODEL_NAME_LENGTH ||
-          !/^[a-zA-Z0-9_\-\.\/:]+$/.test(requestedModel.trim())
+          !/^[a-zA-Z0-9_][a-zA-Z0-9_\-\.\/:]*$/.test(requestedModel.trim())
         ) {
           sendJson(res, 400, { error: "Field 'model' must be a valid model identifier string" }, origin);
           return;

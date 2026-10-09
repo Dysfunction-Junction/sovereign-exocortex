@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { getDatabase, hasDatabase } from "./db-host.js";
+import { getDatabase, hasDatabase, getDefaultDbPath } from "./db-host.js";
 import type { DeviceRecord as V3DeviceRecord } from "@exocortex/core";
 
 // A stateless JWT alone cannot be revoked - the whole point of a device
@@ -16,6 +16,12 @@ export interface DeviceRecord {
 
 export interface DeviceRegistry {
   devices: DeviceRecord[];
+}
+
+// The v3 DB may not be open yet in this process (fresh daemon start, revoke CLI) even though it
+// exists on disk with enrolled/revoked devices; skipping it would ignore v3 revocations.
+function v3DbAvailable(): boolean {
+  return hasDatabase() || existsSync(getDefaultDbPath());
 }
 
 const REGISTRY_PATH = process.env.DEVICE_REGISTRY_PATH ?? "./devices.json";
@@ -44,7 +50,7 @@ export function addDevice(deviceId: string, label: string): DeviceRecord {
 
 export function revokeDevice(deviceId: string): void {
   let foundAny = false;
-  if (hasDatabase()) {
+  if (v3DbAvailable()) {
     try {
       const db = getDatabase();
       if (db.getDevice(deviceId)) {
@@ -67,7 +73,7 @@ export function revokeDevice(deviceId: string): void {
 
 export function isRevoked(deviceId: string): boolean {
   let v3Dev: V3DeviceRecord | null | undefined;
-  if (hasDatabase()) {
+  if (v3DbAvailable()) {
     try {
       v3Dev = getDatabase().getDevice(deviceId);
     } catch {

@@ -66,12 +66,13 @@ export class PreCognitiveEngine {
         }
       }
 
+      const ready = this.getReadyProposal();
       return {
         urgencyIntent: 'CASUAL',
         wakeupLatencyMs: 0,
         hesitationScore: 0,
-        isPreStaged: this.preStagedProposal !== null,
-        preStagedProposalId: this.preStagedProposal?.proposalId,
+        isPreStaged: ready !== null,
+        preStagedProposalId: ready?.proposalId,
       };
     }
 
@@ -89,12 +90,13 @@ export class PreCognitiveEngine {
       urgencyIntent = 'CASUAL';
     }
 
+    const readyOnWake = this.getReadyProposal();
     return {
       urgencyIntent,
       wakeupLatencyMs,
       hesitationScore: this.computeHesitationScore(),
-      isPreStaged: this.preStagedProposal !== null && !this.cache.isExpired(this.preStagedProposal),
-      preStagedProposalId: this.preStagedProposal?.proposalId,
+      isPreStaged: readyOnWake !== null,
+      preStagedProposalId: readyOnWake?.proposalId,
     };
   }
 
@@ -119,7 +121,8 @@ export class PreCognitiveEngine {
    * Freeze frames (>1800ms dwell) on complex screens indicate hesitation.
    */
   public computeHesitationScore(): number {
-    const dwell = this.lastSignals.touchDwellDurationMs ?? 0;
+    const rawDwell = this.lastSignals.touchDwellDurationMs ?? 0;
+    const dwell = Number.isNaN(rawDwell) ? 0 : rawDwell; // NaN would otherwise propagate as a NaN score
     if (dwell <= 400) return 0.05; // Fluid, automatic interaction
     if (dwell <= 1200) return 0.25; // Normal consideration
     if (dwell <= 1800) return 0.55; // Moderate pause
@@ -132,7 +135,8 @@ export class PreCognitiveEngine {
    */
   public getReadyProposal(): SpeculativeProposal | null {
     if (!this.preStagedProposal) return null;
-    if (this.cache.isExpired(this.preStagedProposal)) {
+    // Also drop it if it was released/rejected/evicted from the cache (single-use)
+    if (this.cache.isExpired(this.preStagedProposal) || this.cache.get(this.preStagedProposal.proposalId) === null) {
       this.preStagedProposal = null;
       return null;
     }

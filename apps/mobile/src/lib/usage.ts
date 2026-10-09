@@ -6,7 +6,7 @@ import { Preferences } from "@capacitor/preferences";
 // explicitly chose full detail over anonymized/aggregated tracking.
 
 const QUEUE_KEY = "pieces-android:usageQueue";
-const MAX_QUEUE_SIZE = 500; // backstop against unbounded growth if flush stays broken for a long time
+export const MAX_QUEUE_SIZE = 500; // backstop against unbounded growth if flush stays broken for a long time
 
 export type UsageEvent = (
   | { type: "ask"; screen: "ask"; query: string; result: "answered" | "unavailable" | "error"; timestamp: string }
@@ -148,7 +148,7 @@ export async function clearSentEvents(sent: Array<string | UsageEvent> | number)
         idsToRemove.add(item);
       } else if (item && typeof item === "object") {
         if (item.id) idsToRemove.add(item.id);
-        if (item.type && item.timestamp) {
+        else if (item.type && item.timestamp) {
           fingerprintsToRemove.add(`${item.type}:${item.timestamp}`);
         }
       }

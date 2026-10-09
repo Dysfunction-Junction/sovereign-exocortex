@@ -125,3 +125,26 @@ test("POST /memorize distills local capture, logs it, and saves through /assets/
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("PiecesClient.createAsset does not retry after the caller aborted", async () => {
+  const controller = new AbortController();
+  let createCalls = 0;
+  const fetchFn: typeof fetch = async (url) => {
+    const urlStr = String(url);
+    if (urlStr.endsWith("/applications")) {
+      return new Response(JSON.stringify({
+        iterable: [{ id: "cli-app", name: "PIECES_FOR_DEVELOPERS_CLI" }],
+      }), { status: 200 });
+    }
+    if (urlStr.includes("/assets/create")) {
+      createCalls++;
+      controller.abort();
+      throw new Error("This operation was aborted");
+    }
+    return new Response("no", { status: 404 });
+  };
+  const pieces = new PiecesClient({ baseUrl: "http://127.0.0.1:39300", fetchFn });
+  const saved = await pieces.createAsset({ name: "x", content: "y" }, { signal: controller.signal });
+  assert.equal(saved.ok, false);
+  assert.equal(createCalls, 1);
+});

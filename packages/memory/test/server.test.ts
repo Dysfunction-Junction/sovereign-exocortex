@@ -291,6 +291,24 @@ test("Server /ask - rejects invalid model identifier with 400", async () => {
   }
 });
 
+test("Server /ask - rejects a model identifier with a leading dash", async () => {
+  const app = createGatewayApp({ openRouterClient: new OpenRouterClient({ apiKey: "key" }) });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+
+  try {
+    const res = await makeLocalRequest(srv, {
+      method: "POST",
+      path: "/ask",
+      body: { query: "valid query", model: "--dangerously-skip-permissions" },
+    });
+    assert.equal(res.status, 400);
+    assert.match(res.body.error, /valid model identifier/);
+  } finally {
+    srv.close();
+  }
+});
+
 test("Server /ask - happy path gathers PiecesOS context and returns grounded answer", async () => {
   const mockPiecesFetch: typeof fetch = async (url) => {
     const urlStr = String(url);
@@ -928,3 +946,24 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
 
 
 
+
+test("loopback /mishmash/delegate answers 400 (not a crash) for non-object JSON bodies", async () => {
+  const app = createGatewayApp({
+    piecesClient: new PiecesClient({ baseUrl: "http://127.0.0.1:1", fetchFn: async () => { throw new Error("no"); } }),
+    openRouterClient: new OpenRouterClient({ apiKey: "" }),
+  });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+  try {
+    for (const body of ["null", "42", "[1]"]) {
+      const res = await makeLocalRequest(srv, {
+        method: "POST",
+        path: "/mishmash/delegate",
+        rawBody: body,
+      } as any);
+      assert.equal(res.status, 400, `body ${body}`);
+    }
+  } finally {
+    srv.close();
+  }
+});

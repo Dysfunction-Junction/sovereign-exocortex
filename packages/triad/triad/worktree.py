@@ -986,6 +986,17 @@ def remove_worktree(
         except Exception:
             main_repo = None
 
+    # Never destroy a main working tree / standalone repository (its .git is a directory),
+    # the registered main repo itself, or any ancestor of it. The rmtree fallback below would
+    # otherwise wipe the whole repository, including its object database.
+    if (wt_path / ".git").is_dir():
+        return False
+    if main_repo is not None:
+        main_resolved = Path(main_repo).resolve()
+        norm_wt = os.path.normcase(str(wt_path))
+        if any(os.path.normcase(str(p)) == norm_wt for p in (main_resolved, *main_resolved.parents)):
+            return False
+
     # Protect against locked CWD on Windows
     try:
         current_cwd = Path.cwd().resolve()

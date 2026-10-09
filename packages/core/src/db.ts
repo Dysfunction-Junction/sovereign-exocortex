@@ -614,7 +614,8 @@ export class ExocortexDatabase {
       proposal.risk_term,
       proposal.ambiguity_term,
       proposal.state,
-      proposal.shadow ? 1 : 0,
+      // Fail closed: only an explicit 0/false disables shadow mode (schema default is 1)
+      proposal.shadow === 0 || (proposal.shadow as unknown) === false ? 0 : 1,
       proposal.expires_at,
       proposal.updated_at
     );
@@ -667,6 +668,11 @@ export class ExocortexDatabase {
         actual = excluded.actual,
         latency_ms = excluded.latency_ms,
         ts = excluded.ts
+      -- A human 'tap' label is ground truth for Precision@surface: an 'inferred' label never replaces it.
+      WHERE NOT (
+        COALESCE(json_extract(shadow_labels.actual, '$.source'), '') = 'tap'
+        AND COALESCE(json_extract(excluded.actual, '$.source'), '') = 'inferred'
+      )
     `);
     stmt.run(label.proposal_id, label.label, label.actual ?? null, label.latency_ms ?? null, label.ts);
   }

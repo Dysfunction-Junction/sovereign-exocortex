@@ -150,6 +150,8 @@ function applyShadowLabel(
     source: "tap" | "inferred";
     actual?: unknown;
     latencyMs?: number | null;
+    /** false when the label already arrived as a ledger event (avoids writing it twice). */
+    emitEvent?: boolean;
   }
 ): { proposalId: string; label: ShadowLabel; source: string; recordedAt: number } {
   const proposal = db.getProposal(params.proposalId);
@@ -181,6 +183,7 @@ function applyShadowLabel(
       ts: now,
     });
 
+    if (params.emitEvent === false) return;
     const eventId = `label:${params.proposalId}:${now}:${Math.random().toString(36).slice(2, 8)}`;
     try {
       db.ingestEvent(deviceId, {
@@ -210,7 +213,14 @@ function applyShadowLabel(
 
 export const server = createServer(async (req, res) => {
 
-  const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+  // Fixed base: a malformed attacker-supplied Host header must not throw out of this async handler (unhandled rejection).
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", "http://localhost");
+  } catch {
+    sendJson(res, 400, { error: "malformed request URL" });
+    return;
+  }
   const method = req.method ?? "GET";
 
   if (method === "OPTIONS") {
@@ -231,7 +241,12 @@ export const server = createServer(async (req, res) => {
   // Device enrollment endpoint: registers device with public key and scopes into v3 SQLite database
   if (method === "POST" && url.pathname === "/v3/devices/enroll") {
     const authHeader = req.headers.authorization;
-    const enrollToken = process.env.GATEWAY_ENROLL_TOKEN || "enroll-token-sovereign-dev";
+    const enrollToken = process.env.GATEWAY_ENROLL_TOKEN;
+    if (!enrollToken) {
+      // Fail closed: never fall back to a well-known default enrollment secret.
+      sendJson(res, 401, { error: "unauthorized: enrollment disabled (GATEWAY_ENROLL_TOKEN not set)" });
+      return;
+    }
     const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
     const bearerBuf = Buffer.from(bearer, "utf8");
     const tokenBuf = Buffer.from(enrollToken, "utf8");
@@ -453,6 +468,7 @@ export const server = createServer(async (req, res) => {
                   source,
                   actual: payload.actual,
                   latencyMs: payload.latency_ms,
+                  emitEvent: false,
                 });
               }
             } catch {
@@ -924,6 +940,15 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: parsed.error });
         return;
       }
+      // Shadow mode: propose-only. Device/phone actuation is never delegated while SHADOW is on.
+      if (parsed.to === "hermes-api" && process.env.SHADOW !== "0") {
+        sendJson(res, 423, {
+          ok: false,
+          error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
+          shadow_mode: true,
+        });
+        return;
+      }
       const outcome = await forwardDelegate(parsed);
       if (outcome.isRawText) {
         res.writeHead(outcome.status, {
@@ -1016,8 +1041,18 @@ export const server = createServer(async (req, res) => {
             });
             return;
           }
+          if (process.env.SHADOW !== "0") {
+            sendJson(res, 423, {
+              ok: false,
+              error: "shadow mode: actuation disabled (set SHADOW=0 to allow approvals)",
+              shadow_mode: true,
+            });
+            return;
+          }
         } catch {
-          // If DB is uninitialized or unavailable, proceed
+          // Fail closed: if breaker state cannot be determined, do not forward an approval.
+          sendJson(res, 503, { ok: false, error: "circuit breaker state unavailable: approval refused" });
+          return;
         }
       }
 

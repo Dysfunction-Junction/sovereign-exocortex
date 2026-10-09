@@ -16,6 +16,8 @@ export function isClockExpired(
 ): boolean {
   if (!expiryTimestamp) return true;
   const expiry = typeof expiryTimestamp === 'string' ? new Date(expiryTimestamp) : expiryTimestamp;
+  // Fail closed: an unparseable timestamp is treated as expired (like null), never as "never expires"
+  if (isNaN(expiry.getTime())) return true;
   return now.getTime() >= expiry.getTime();
 }
 

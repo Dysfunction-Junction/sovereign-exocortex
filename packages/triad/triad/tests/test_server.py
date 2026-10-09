@@ -703,6 +703,19 @@ class TestTriadServer(unittest.TestCase):
         self.assertEqual(risk_mix, "medium")
         self.assertTrue(app_mix)
 
+        # 12b. Unlisted actuation verbs must not slip past the read-only allowlist
+        for phrase in (
+            "check phone then reply yes to bob",
+            "read sms and forward it to alice",
+            "get phone battery then transfer funds",
+            "list phone apps and grant camera permission",
+            "show phone status and toggle airplane mode",
+        ):
+            risk_v, app_v, reasons_v = _evaluate_action_risk(cls_device, phrase)
+            self.assertEqual(risk_v, "medium", phrase)
+            self.assertTrue(app_v, phrase)
+            self.assertIn("device_actuation", reasons_v, phrase)
+
         # 13. rm flag order variations
         risk_rm1, app_rm1, _ = _evaluate_action_risk(cls_general, "rm /tmp/x -rf")
         self.assertEqual(risk_rm1, "high")

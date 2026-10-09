@@ -712,7 +712,7 @@ export class PiecesClient {
    */
   async createAsset(input: { name: string; content: string }, options: { signal?: AbortSignal } = {}): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
     const first = await this.createAssetOnce(input, options);
-    if (first.ok || !/timeout|aborted/i.test(first.error)) return first;
+    if (first.ok || options.signal?.aborted || !/timeout|aborted/i.test(first.error)) return first;
     return this.createAssetOnce(input, options);
   }
 

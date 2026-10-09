@@ -122,7 +122,9 @@ class MorphogeneticEngine:
                     candidate.verification_output = "Darwinian Rejection: mutation is a no-op"
                     return False
 
-                target_file_path.write_text(candidate.mutated_code, encoding="utf-8")
+                # Write bytes verbatim: write_text() translates LF to CRLF on Windows, turning
+                # every line of an LF file into a spurious change in the verified diff.
+                target_file_path.write_bytes(candidate.mutated_code.encode("utf-8"))
 
                 # 2. Strict Invariant Check: Zero forbidden tokens / regressions
                 raw_forbidden = os.environ.get("FORBIDDEN_MUTATION_TOKENS", "deprecated_root_api,banned_proxy")

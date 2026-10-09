@@ -149,6 +149,28 @@ class TestGitWorktreeIsolation(unittest.TestCase):
         self.assertTrue(removed)
         self.assertFalse(wt.exists())
 
+    def test_remove_worktree_refuses_main_working_tree_and_ancestors(self):
+        """remove_worktree(force=True) must never rmtree a main repo (or its ancestor)."""
+        with tempfile.TemporaryDirectory(prefix="triad-test-mainrepo-") as outer:
+            outer_p = Path(outer).resolve()
+            repo = outer_p / "repo"
+            repo.mkdir()
+            git = ["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=t"]
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "keep.txt").write_text("precious", encoding="utf-8")
+            subprocess.run(git + ["add", "."], check=True)
+            subprocess.run(git + ["commit", "-qm", "init"], check=True)
+
+            # Main working tree, explicit repo_path
+            self.assertFalse(remove_worktree(repo, force=True, repo_path=repo))
+            # Main working tree, auto-discovered repo
+            self.assertFalse(remove_worktree(repo, force=True))
+            # Ancestor of the main repo
+            self.assertFalse(remove_worktree(outer_p, force=True, repo_path=repo))
+
+            self.assertTrue((repo / ".git").is_dir())
+            self.assertEqual((repo / "keep.txt").read_text(encoding="utf-8"), "precious")
+
     def test_cmd_auto_with_worktree_flag(self):
         """Verify cmd_auto --worktree executes inside ephemeral worktree and cleans up."""
         import argparse

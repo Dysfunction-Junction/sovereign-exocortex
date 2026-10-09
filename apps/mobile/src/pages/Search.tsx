@@ -65,6 +65,7 @@ export default function Search() {
 
   function handleSortChange(next: SearchSortMode) {
     setSortMode(next);
+    clearTimeout(timer.current);
     if (query.trim()) {
       run(query, next);
     }
