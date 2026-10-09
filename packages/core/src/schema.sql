@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS events (
   hash       BLOB NOT NULL                 -- sha256(prev_hash || canonical(row))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events(kind, ts_server);
+CREATE UNIQUE INDEX IF NOT EXISTS events_prev_hash ON events(prev_hash);
+CREATE INDEX IF NOT EXISTS events_device_seq ON events(device_id, seq);
 
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
   BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;

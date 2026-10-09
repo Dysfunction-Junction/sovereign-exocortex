@@ -9,15 +9,18 @@
     ".": "./src/index.ts",
     "./dry-run": "./src/dry-run.ts",
     "./event-bus": "./src/event-bus.ts",
-    "./rank": "./src/mishmash-rank.ts"
+    "./rank": "./src/mishmash-rank.ts",
+    "./canonical": "./src/canonical.ts",
+    "./db": "./src/db.ts"
   },
+
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.1.1",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"

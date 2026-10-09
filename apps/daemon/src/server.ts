@@ -1,9 +1,15 @@
 import { createServer } from "node:http";
+import { timingSafeEqual, createPublicKey } from "node:crypto";
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken } from "./jwt.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
+import { getDatabase } from "./db-host.js";
+import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
+import type { IngestReq, DeviceRecord } from "@exocortex/core";
+
+
 
 // Observed in practice: a pooled keep-alive socket to the home proxy over
 // Tailscale gets silently dropped (NAT/WireGuard idle timeout) without
@@ -56,18 +62,21 @@ function upstreamTimeoutFor(method: string, pathname: string): number {
   return ROUTE_TIMEOUT_MS_OVERRIDES.find((r) => r.test(method, pathname))?.timeoutMs ?? UPSTREAM_TIMEOUT_MS;
 }
 
-if (!JWT_SECRET) {
-  console.error("GATEWAY_JWT_SECRET is not set. Refusing to start.");
-  process.exit(1);
+if (process.env.NODE_ENV !== "test") {
+  if (!JWT_SECRET) {
+    console.error("GATEWAY_JWT_SECRET is not set. Refusing to start.");
+    process.exit(1);
+  }
+  if (!HOME_PROXY_BASE_URL) {
+    console.error("HOME_PROXY_BASE_URL is not set (expected the PC's Tailscale IP, e.g. http://100.x.x.x:8787).");
+    process.exit(1);
+  }
+  if (!HOME_PROXY_TOKEN) {
+    console.error("HOME_PROXY_TOKEN is not set (the Plan A proxy's bearer token).");
+    process.exit(1);
+  }
 }
-if (!HOME_PROXY_BASE_URL) {
-  console.error("HOME_PROXY_BASE_URL is not set (expected the PC's Tailscale IP, e.g. http://100.x.x.x:8787).");
-  process.exit(1);
-}
-if (!HOME_PROXY_TOKEN) {
-  console.error("HOME_PROXY_TOKEN is not set (the Plan A proxy's bearer token).");
-  process.exit(1);
-}
+
 
 // Capacitor's WebView makes requests from its own origin (typically
 // https://localhost), not the gateway's own origin - without this header,
@@ -111,7 +120,8 @@ function sendJson(res: import("node:http").ServerResponse, status: number, body:
   res.end(payload);
 }
 
-const server = createServer(async (req, res) => {
+export const server = createServer(async (req, res) => {
+
   const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
   const method = req.method ?? "GET";
 
@@ -130,7 +140,105 @@ const server = createServer(async (req, res) => {
     return;
   }
 
-  const auth = verifyToken(req.headers.authorization, JWT_SECRET);
+  // Device enrollment endpoint: registers device with public key and scopes into v3 SQLite database
+  if (method === "POST" && url.pathname === "/v3/devices/enroll") {
+    const authHeader = req.headers.authorization;
+    const enrollToken = process.env.GATEWAY_ENROLL_TOKEN || "enroll-token-sovereign-dev";
+    const bearer = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : "";
+    const bearerBuf = Buffer.from(bearer, "utf8");
+    const tokenBuf = Buffer.from(enrollToken, "utf8");
+    const isAuth = bearerBuf.length === tokenBuf.length && timingSafeEqual(bearerBuf, tokenBuf);
+    if (!isAuth) {
+      sendJson(res, 401, { error: "unauthorized: invalid enrollment token" });
+      return;
+    }
+
+    try {
+      const raw = await readBody(req, 64 * 1024);
+      let decoded: unknown;
+      try {
+        decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON" });
+        return;
+      }
+      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+        sendJson(res, 400, { error: "enrollment body must be a JSON object" });
+        return;
+      }
+      const dev = decoded as any;
+      if (typeof dev.device_id !== "string" || dev.device_id.length === 0 || dev.device_id.length > 128) {
+        sendJson(res, 400, { error: "device_id must be a string of 1-128 chars" });
+        return;
+      }
+      if (typeof dev.name !== "string" || dev.name.length === 0 || dev.name.length > 128) {
+        sendJson(res, 400, { error: "name must be a string of 1-128 chars" });
+        return;
+      }
+      if (!["android", "windows", "linux"].includes(dev.platform)) {
+        sendJson(res, 400, { error: "invalid platform ('android'|'windows'|'linux')" });
+        return;
+      }
+
+      const pubkeyB64 = typeof dev.pubkey_b64 === "string" ? dev.pubkey_b64 : "";
+      if (!pubkeyB64) {
+        sendJson(res, 400, { error: "missing or invalid pubkey_b64" });
+        return;
+      }
+
+      const spki = Buffer.from(pubkeyB64, "base64");
+      let pubkeyObj: any;
+      try {
+        pubkeyObj = createPublicKey({ key: spki, format: "der", type: "spki" });
+      } catch {
+        sendJson(res, 400, { error: "invalid pubkey_spki: not a valid SPKI public key" });
+        return;
+      }
+      if (pubkeyObj.asymmetricKeyType !== "ec" && pubkeyObj.asymmetricKeyType !== "ed25519") {
+        sendJson(res, 400, { error: "pubkey must be EC or Ed25519" });
+        return;
+      }
+
+      const db = getDatabase();
+      if (db.getDevice(dev.device_id)) {
+        sendJson(res, 409, { error: "device already enrolled" });
+        return;
+      }
+
+      const scopes = Array.isArray(dev.scopes) ? dev.scopes.filter((s: unknown) => typeof s === "string") : ["telemetry:write"];
+
+      try {
+        db.registerDevice({
+          device_id: dev.device_id,
+          name: dev.name,
+          platform: dev.platform,
+          pubkey_spki: new Uint8Array(spki),
+          key_attested: dev.key_attested ? 1 : 0,
+          scopes,
+          enrolled_at: Date.now(),
+          revoked_at: null,
+        });
+      } catch (regErr: any) {
+        if (regErr?.message?.includes("UNIQUE constraint") || regErr?.code === "SQLITE_CONSTRAINT_PRIMARYKEY") {
+          sendJson(res, 409, { error: "device already enrolled" });
+          return;
+        }
+        throw regErr;
+      }
+
+      sendJson(res, 200, { ok: true, enrolled: dev.device_id });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to enroll device",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  const secret = JWT_SECRET ?? process.env.GATEWAY_JWT_SECRET ?? "dev-test-secret";
+  const auth = verifyToken(req.headers.authorization, secret);
+
   if (!auth.ok) {
     sendJson(res, 401, { error: "unauthorized", reason: auth.reason });
     return;
@@ -177,6 +285,189 @@ const server = createServer(async (req, res) => {
     }
     return;
   }
+
+  // --- Sovereign Exocortex Architecture & Schema v3 Event Store ---
+
+  if (method === "POST" && url.pathname === "/v3/events") {
+    try {
+      const raw = await readBody(req, 1024 * 1024);
+      let decoded: unknown;
+      try {
+        decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON" });
+        return;
+      }
+      const reqObj = decoded as IngestReq;
+      if (!reqObj || typeof reqObj.device_id !== "string" || !Array.isArray(reqObj.events)) {
+        sendJson(res, 400, { error: "invalid IngestReq: missing device_id or events array" });
+        return;
+      }
+
+      // Security: bind device_id in request payload to the authenticated JWT deviceId
+      if (reqObj.device_id !== auth.deviceId) {
+        sendJson(res, 403, { error: "forbidden: device_id mismatch with authenticated token" });
+        return;
+      }
+
+      if (reqObj.events.length === 0 || reqObj.events.length > 100) {
+        sendJson(res, 400, { error: "events batch must contain between 1 and 100 events" });
+        return;
+      }
+
+      for (const ev of reqObj.events) {
+        if (!ev || typeof ev !== "object" || Array.isArray(ev)) {
+          sendJson(res, 400, { error: "invalid event in batch: event must be a JSON object" });
+          return;
+        }
+        if (typeof ev.event_id !== "string" || ev.event_id.length === 0 || ev.event_id.length > 128) {
+          sendJson(res, 400, { error: "invalid event in batch: event_id must be a string of 1-128 chars" });
+          return;
+        }
+        if (typeof ev.kind !== "string" || ev.kind.length === 0 || ev.kind.length > 128) {
+          sendJson(res, 400, { error: "invalid event in batch: kind must be a string of 1-128 chars" });
+          return;
+        }
+        if (!Number.isSafeInteger(ev.ts_device) || ev.ts_device <= 0) {
+          sendJson(res, 400, { error: "invalid event in batch: ts_device must be a positive safe integer" });
+          return;
+        }
+        if (ev.schema_ver !== undefined && (!Number.isSafeInteger(ev.schema_ver) || ev.schema_ver <= 0)) {
+          sendJson(res, 400, { error: "invalid event in batch: schema_ver must be a positive safe integer" });
+          return;
+        }
+        if (typeof ev.payload !== "object" || ev.payload === null || Array.isArray(ev.payload)) {
+          sendJson(res, 400, { error: "invalid event in batch: payload must be a plain JSON object" });
+          return;
+        }
+      }
+
+      const db = getDatabase();
+      const result = db.ingestBatch(reqObj);
+      sendJson(res, 200, {
+        ok: true,
+        result: {
+          insertedCount: result.insertedCount,
+          duplicateCount: result.duplicateCount,
+          events: result.events.map((e) => ExocortexDatabase.eventToJson(e)),
+        },
+      });
+    } catch (err) {
+      if (err instanceof DeviceNotEnrolledError || err instanceof DeviceRevokedError) {
+        sendJson(res, 403, { error: err.message });
+        return;
+      }
+      if (err instanceof EventIdConflictError) {
+        sendJson(res, 409, { error: err.message });
+        return;
+      }
+      sendJson(res, 500, {
+        error: "failed to ingest events",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/events") {
+    try {
+      const db = getDatabase();
+      const kind = url.searchParams.get("kind") || undefined;
+      const sinceSeqStr = url.searchParams.get("sinceSeq");
+      const limitStr = url.searchParams.get("limit");
+
+      const parseStrictInt = (v: string | null, def: number | undefined, min: number, max: number): number | undefined => {
+        if (v == null || v === "") return def;
+        if (!/^\d+$/.test(v)) throw new TypeError("invalid integer parameter");
+        const n = Number(v);
+        return Math.min(Math.max(n, min), max);
+      };
+
+      let sinceSeq: number | undefined;
+      let limit: number | undefined;
+      try {
+        sinceSeq = parseStrictInt(sinceSeqStr, undefined, 0, Number.MAX_SAFE_INTEGER);
+        limit = parseStrictInt(limitStr, 50, 1, 1000);
+      } catch {
+        sendJson(res, 400, { error: "invalid query parameter: sinceSeq and limit must be positive integers" });
+        return;
+      }
+
+      const callingDev = db.getDevice(auth.deviceId);
+      const isCallerAdmin = Boolean(
+        callingDev?.scopes?.includes("admin") ||
+        callingDev?.scopes?.includes("admin:read")
+      );
+      const deviceIdParam = isCallerAdmin ? (url.searchParams.get("deviceId") || undefined) : auth.deviceId;
+
+      const events = db.listEvents({ deviceId: deviceIdParam, kind, sinceSeq, limit });
+      sendJson(res, 200, {
+        ok: true,
+        events: events.map((e) => ExocortexDatabase.eventToJson(e)),
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to query events",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/events/verify") {
+    try {
+      const db = getDatabase();
+      const callingDev = db.getDevice(auth.deviceId);
+      const isCallerAdmin = Boolean(
+        callingDev?.scopes?.includes("admin") ||
+        callingDev?.scopes?.includes("admin:read")
+      );
+      if (!isCallerAdmin) {
+        sendJson(res, 403, { error: "forbidden: verify requires admin scope" });
+        return;
+      }
+      const verification = db.verifyEventChain();
+      sendJson(res, 200, { ok: true, verification });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to verify event chain",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/devices") {
+    try {
+      const db = getDatabase();
+      const callingDev = db.getDevice(auth.deviceId);
+      const isCallerAdmin = Boolean(
+        callingDev?.scopes?.includes("admin") ||
+        callingDev?.scopes?.includes("admin:read")
+      );
+      if (!isCallerAdmin) {
+        const selfDev = db.getDevice(auth.deviceId);
+        sendJson(res, 200, {
+          ok: true,
+          devices: selfDev ? [ExocortexDatabase.deviceToJson(selfDev)] : [],
+        });
+        return;
+      }
+      const devices = db.listDevices();
+      sendJson(res, 200, {
+        ok: true,
+        devices: devices.map((d) => ExocortexDatabase.deviceToJson(d)),
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to list devices",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+
 
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
@@ -348,10 +639,16 @@ const server = createServer(async (req, res) => {
 // Caddy over the compose network, not on bare metal. It is still not
 // internet-facing - only exposed (not published) in docker-compose.yml, so
 // only other containers on the same compose network can reach it directly.
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`pieces-gateway listening on 0.0.0.0:${PORT} (reached via Caddy over the compose network, not published to the internet directly)`);
-  console.log(`forwarding to home proxy at ${HOME_PROXY_BASE_URL}`);
-});
+if (process.env.NODE_ENV !== "test") {
+  server.listen(PORT, "0.0.0.0", () => {
+    console.log(`pieces-gateway listening on 0.0.0.0:${PORT} (reached via Caddy over the compose network, not published to the internet directly)`);
+    console.log(`forwarding to home proxy at ${HOME_PROXY_BASE_URL}`);
+  });
+  if (HOME_PROXY_BASE_URL) {
+    warmUpHomeProxyConnection();
+  }
+}
+
 
 function readBody(req: import("node:http").IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -391,4 +688,4 @@ async function warmUpHomeProxyConnection() {
   }
   console.warn("[warmup] gave up after 3 attempts - first real request may still pay the cold-start cost");
 }
-warmUpHomeProxyConnection();
+

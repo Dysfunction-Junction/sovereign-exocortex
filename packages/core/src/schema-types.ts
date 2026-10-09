@@ -92,3 +92,77 @@ export interface ProposalRecord {
   expires_at: number;
   updated_at: number;
 }
+
+export interface InvariantRecord {
+  invariant_id: string;
+  name: string;
+  category: string;
+  enabled: number; // 1 or 0
+}
+
+export interface ModelParamRecord {
+  factor: string;
+  kind: 'A' | 'B' | 'C' | 'D';
+  version: number;
+  counts: string; // JSON array or table of Dirichlet counts
+  as_of_seq: number;
+}
+
+export interface BeliefSnapshotRecord {
+  as_of_seq: number;
+  mode: 'DEEP_FOCUS' | 'HIGH_VELOCITY' | 'EXPLORATORY' | 'MAINTENANCE' | 'REST';
+  q: string; // JSON belief distribution
+  surprisal: number;
+}
+
+export interface GateDecisionRecord {
+  proposal_id: string;
+  mode: string;
+  decision: GateDecisionAction;
+  reason: string;
+  ts: number;
+}
+
+export interface ApprovalRecord {
+  approval_id: string;
+  proposal_id: string;
+  device_id: string;
+  nonce: string;
+  decision: 'approve' | 'reject';
+  signed_payload: Uint8Array;
+  signature: Uint8Array;
+  verified: number;
+  ts: number;
+}
+
+export interface ExecutionRecord {
+  exec_id: string;
+  proposal_id: string;
+  dry_run: number; // 1 or 0
+  started_at: number;
+  finished_at?: number | null;
+  exit_code?: number | null;
+  result?: string | null; // JSON
+  undo?: string | null; // JSON
+}
+
+export interface ShadowLabelRecord {
+  proposal_id: string;
+  label: ShadowLabel;
+  actual?: string | null; // JSON
+  latency_ms?: number | null;
+  ts: number;
+}
+
+export interface MutationRecord {
+  mutation_id: string;
+  friction_seq: number;
+  base_commit: string;
+  branch: string;
+  strategy: string;
+  diff_hash: Uint8Array;
+  gates: string; // JSON
+  state: 'REJECTED' | 'PASSED' | 'MERGED' | 'DISCARDED';
+  created_at: number;
+}
+

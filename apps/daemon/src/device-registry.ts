@@ -1,4 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { getDatabase, hasDatabase } from "./db-host.js";
+import type { DeviceRecord as V3DeviceRecord } from "@exocortex/core";
 
 // A stateless JWT alone cannot be revoked - the whole point of a device
 // registry is to give a per-device revoked flag that every request checks,
@@ -41,21 +43,54 @@ export function addDevice(deviceId: string, label: string): DeviceRecord {
 }
 
 export function revokeDevice(deviceId: string): void {
+  let foundAny = false;
+  if (hasDatabase()) {
+    try {
+      const db = getDatabase();
+      if (db.getDevice(deviceId)) {
+        db.revokeDevice(deviceId);
+        foundAny = true;
+      }
+    } catch {
+      // DB query error
+    }
+  }
   const registry = load();
   const record = registry.devices.find((d) => d.deviceId === deviceId);
-  if (!record) throw new Error(`Device ${deviceId} not found.`);
-  record.revoked = true;
-  save(registry);
+  if (record) {
+    record.revoked = true;
+    save(registry);
+    foundAny = true;
+  }
+  if (!foundAny) throw new Error(`Device ${deviceId} not found.`);
 }
 
 export function isRevoked(deviceId: string): boolean {
+  let v3Dev: V3DeviceRecord | null | undefined;
+  if (hasDatabase()) {
+    try {
+      v3Dev = getDatabase().getDevice(deviceId);
+    } catch {
+      // Unexpected DB error: fail closed
+      return true;
+    }
+  }
+
+  if (v3Dev && v3Dev.revoked_at != null) {
+    return true;
+  }
+
   const registry = load();
   const record = registry.devices.find((d) => d.deviceId === deviceId);
-  // A device with no registry record at all is treated as revoked (fail
-  // closed) - it should never have gotten a valid JWT in the first place,
-  // but if the registry file was ever reset, this is the safe default.
-  return !record || record.revoked;
+  if (record && record.revoked) {
+    return true;
+  }
+
+  // If neither store has any record of the device, fail closed
+  return !v3Dev && !record;
 }
+
+
 
 export function listDevices(): DeviceRecord[] {
   return load().devices;

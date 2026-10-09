@@ -8,7 +8,8 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts",
+    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts src/v3-events.test.ts",
+
     "typecheck": "tsc --noEmit",
     "sentinel": "tsx src/mishmash-sentinel.ts"
   },
@@ -23,8 +24,9 @@
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.7",
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.1.1",
     "tsx": "^4.23.0",
+
     "typescript": "^5.9.3"
   }
 }
