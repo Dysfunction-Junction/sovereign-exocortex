@@ -37,6 +37,66 @@ export const defaultPendingFetcher: PendingFetcher = async () => {
   return body.result!.proposals as RegistryPending[];
 };
 
+/**
+ * Ask registry-app to mint (or return) the approval nonce for one of OUR proposals, keyed by our id.
+ * Idempotent on the registry side: a live entry keeps its nonce, so polling never rotates it.
+ */
+export interface SpeculateRequest {
+  proposalId: string;
+  candidateId: string;
+  summary: string;
+  riskLevel: "low" | "medium" | "high";
+  actionPayload: Record<string, unknown>;
+  ttlMs: number;
+}
+export type Speculator = (req: SpeculateRequest) => Promise<void>;
+
+export const defaultSpeculator: Speculator = async (req) => {
+  const envelope: DelegateEnvelope = {
+    v: 1,
+    id: `spec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    from: GATEWAY_NODE,
+    to: "registry-app",
+    capability: "staging",
+    action: "speculate",
+    payload: { ...req },
+  };
+  await forwardDelegate(envelope);
+};
+
+const MAX_SPECULATIONS_PER_POLL = 20;
+const MIN_TTL_MS = 1_000;
+const MAX_TTL_MS = 10 * 60 * 1000;
+
+function parseActionPayload(action: string): Record<string, unknown> {
+  try {
+    const v = JSON.parse(action);
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Speculate every live SURFACED/STAGED proposal so each has a nonce to list. Failures are non-fatal. */
+export async function ensureSpeculated(db: ExocortexDatabase, speculator: Speculator, now: number): Promise<void> {
+  const rows = db.listProposalsByState(["SURFACED", "STAGED"], now).slice(0, MAX_SPECULATIONS_PER_POLL);
+  for (const row of rows) {
+    const ttlMs = Math.min(MAX_TTL_MS, Math.max(MIN_TTL_MS, row.expires_at - now));
+    try {
+      await speculator({
+        proposalId: row.proposal_id,
+        candidateId: row.invariant_id ?? row.policy_type,
+        summary: row.summary,
+        riskLevel: riskFrom(undefined, row.risk_term),
+        actionPayload: parseActionPayload(row.action),
+        ttlMs,
+      });
+    } catch {
+      // registry-app down: nothing to list for this proposal (fail closed)
+    }
+  }
+}
+
 function toMs(v: unknown): number {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
@@ -66,7 +126,9 @@ export async function buildPendingProposals(
   db: ExocortexDatabase,
   fetcher: PendingFetcher = defaultPendingFetcher,
   now = Date.now(),
+  speculator: Speculator | null = null,
 ): Promise<PendingProposal[]> {
+  if (speculator) await ensureSpeculated(db, speculator, now);
   let reg: RegistryPending[] = [];
   try {
     reg = await fetcher();

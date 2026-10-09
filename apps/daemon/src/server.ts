@@ -9,7 +9,13 @@ import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
-import { buildPendingProposals, defaultPendingFetcher, type PendingFetcher } from "./pending-proposals.js";
+import {
+  buildPendingProposals,
+  defaultPendingFetcher,
+  defaultSpeculator,
+  type PendingFetcher,
+  type Speculator,
+} from "./pending-proposals.js";
 import { defaultPushNotifier } from "./push-notifier.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
@@ -158,6 +164,14 @@ let pendingFetcher: PendingFetcher = defaultPendingFetcher;
 /** Test hook: replace how registry nonces are fetched. */
 export function setPendingFetcherForTest(f: PendingFetcher | null): void {
   pendingFetcher = f ?? defaultPendingFetcher;
+  // A faked fetcher means no registry-app: do not speculate against the network unless a test asks to.
+  pendingSpeculator = f ? null : defaultSpeculator;
+}
+
+let pendingSpeculator: Speculator | null = defaultSpeculator;
+/** Test hook: replace how our proposals are speculated into registry-app (null disables). */
+export function setPendingSpeculatorForTest(sp: Speculator | null): void {
+  pendingSpeculator = sp;
 }
 
 /** A tap label needs a valid device-signed attestation; everything else is "inferred". */
@@ -1100,7 +1114,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 403, { error: "forbidden: requires approval:write or admin scope" });
         return;
       }
-      sendJson(res, 200, { ok: true, proposals: await buildPendingProposals(db, pendingFetcher) });
+      sendJson(res, 200, { ok: true, proposals: await buildPendingProposals(db, pendingFetcher, Date.now(), pendingSpeculator) });
     } catch (err) {
       sendJson(res, 500, { error: "failed to list pending proposals", reason: err instanceof Error ? err.message : String(err) });
     }
@@ -1267,6 +1281,18 @@ export const server = createServer(async (req, res) => {
           }
         } catch (labelErr) {
           console.error("[approve] failed to record tap label:", labelErr);
+        }
+      }
+      // Advance the DB state once the triad confirmed the decision, so the proposal leaves the pending list
+      // and cannot be re-speculated with a fresh nonce (which would allow a second approval).
+      if (outcome.status >= 200 && outcome.status < 300 && (outcome.body as { ok?: unknown } | null)?.ok === true) {
+        try {
+          const db = getDatabase();
+          if (db.getProposal(proposalId)) {
+            db.updateProposalState(proposalId, action === "approve" ? "APPROVED" : "REJECTED");
+          }
+        } catch (stateErr) {
+          console.error("[approve] could not advance proposal state:", stateErr);
         }
       }
       sendJson(res, outcome.status, outcome.body);
