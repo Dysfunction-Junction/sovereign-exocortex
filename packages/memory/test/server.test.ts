@@ -967,3 +967,75 @@ test("loopback /mishmash/delegate answers 400 (not a crash) for non-object JSON 
     srv.close();
   }
 });
+
+test("/mishmash/delegate refuses browser-origin and rebound-host requests even from loopback, and never skips the token for them", async () => {
+  const pieces = new PiecesClient({
+    baseUrl: "http://127.0.0.1:1",
+    fetchFn: async () => {
+      throw new Error("pieces should not be called");
+    },
+  });
+  const app = createGatewayApp({
+    piecesClient: pieces,
+    openRouterClient: new OpenRouterClient({ apiKey: "" }),
+    gatewayToken: "ask-token",
+  });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+  const envelope = {
+    v: 1,
+    id: "0123456789abcdef",
+    from: "pieces-android-companion-seamless",
+    to: "pieces-for-all",
+    capability: "memory",
+    action: "ping",
+    payload: {},
+  };
+  try {
+    // a plain local call still works without the token
+    const ok = await makeLocalRequest(srv, { method: "POST", path: "/mishmash/delegate", body: envelope });
+    assert.equal(ok.status, 200);
+
+    // a page served from ANY localhost port passes the generic Origin allowlist, so only the delegate guard stops it
+    const browser = await makeLocalRequest(srv, {
+      method: "POST",
+      path: "/mishmash/delegate",
+      body: envelope,
+      headers: { Origin: "http://localhost:5173" },
+    });
+    assert.notEqual(browser.status, 200);
+    assert.ok(browser.status === 401 || browser.status === 403);
+
+    // right name, wrong port: not this server's own host:port
+    const wrongPort = await makeLocalRequest(srv, {
+      method: "POST",
+      path: "/mishmash/delegate",
+      body: envelope,
+      headers: { Host: "127.0.0.1:9" },
+    });
+    assert.notEqual(wrongPort.status, 200);
+    assert.ok(wrongPort.status === 401 || wrongPort.status === 403);
+  } finally {
+    srv.close();
+  }
+});
+
+test("/mishmash/delegate rejects browser-origin requests when no gateway token is configured too", async () => {
+  const app = createGatewayApp({
+    piecesClient: new PiecesClient({ baseUrl: "http://127.0.0.1:1", fetchFn: async () => { throw new Error("no"); } }),
+    openRouterClient: new OpenRouterClient({ apiKey: "" }),
+  });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+  try {
+    const res = await makeLocalRequest(srv, {
+      method: "POST",
+      path: "/mishmash/delegate",
+      body: { v: 1, id: "0123456789abcdef", from: "x", to: "pieces-for-all", capability: "memory", action: "ping", payload: {} },
+      headers: { Origin: "http://localhost:5173" },
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    srv.close();
+  }
+});

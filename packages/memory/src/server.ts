@@ -272,7 +272,8 @@ export function createGatewayApp(config: ServerConfig = {}) {
     const remoteAddr = req.socket.remoteAddress ?? "";
     const loopbackDelegate = req.method === "POST"
       && (req.url ?? "").split("?")[0] === "/mishmash/delegate"
-      && (remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1");
+      && (remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1")
+      && isTrustedDelegateRequest(req.headers, req.socket.localPort);
     if (gatewayToken && gatewayToken.trim().length > 0 && !loopbackDelegate) {
       const authHeader = req.headers.authorization;
       const customToken = req.headers["x-gateway-token"];
@@ -304,6 +305,10 @@ export function createGatewayApp(config: ServerConfig = {}) {
     if (method === "POST" && pathname === "/mishmash/delegate") {
       if (!fromLoopback) {
         sendJson(res, 403, { error: "delegate is only accepted from this PC" }, origin);
+        return;
+      }
+      if (!isTrustedDelegateRequest(req.headers, req.socket.localPort)) {
+        sendJson(res, 403, { error: "delegate rejects browser-origin or rebound-host requests" }, origin);
         return;
       }
       let raw = "";
@@ -725,6 +730,21 @@ export function createGatewayApp(config: ServerConfig = {}) {
   };
 
   return { handleRequest, pieces, openRouter, reasoning };
+}
+
+/**
+ * /mishmash/delegate skips the gateway token for loopback callers, so a loopback peer alone must not be
+ * enough: a web page in the user's browser can POST here (Origin set) and a DNS-rebound hostname also
+ * arrives from a loopback peer (Host is the attacker's name).
+ */
+export function isTrustedDelegateRequest(headers: IncomingMessage["headers"], port: number | undefined): boolean {
+  if (headers.origin !== undefined) return false;
+  if (port === undefined) return false;
+  const host = headers.host;
+  return (
+    typeof host === "string" &&
+    [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host.toLowerCase())
+  );
 }
 
 export function startGatewayServer(config: ServerConfig = {}): Promise<{ server: Server; port: number; host: string }> {

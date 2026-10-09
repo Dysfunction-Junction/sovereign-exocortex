@@ -76,8 +76,27 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(payload);
 }
 
+/**
+ * Loopback peer is not enough: a web page can POST here from the user's own browser, and a DNS-rebound
+ * hostname also arrives from a loopback peer. Browsers always attach Origin to cross-site POSTs, and a
+ * rebound request carries the attacker's name in Host, so both are checked.
+ */
+export function isTrustedDelegateRequest(headers: IncomingMessage['headers'], port: number | undefined): boolean {
+  if (headers.origin !== undefined) return false;
+  if (port === undefined) return false;
+  const host = headers.host;
+  return (
+    typeof host === 'string' &&
+    [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host.toLowerCase())
+  );
+}
+
 export function startPatternDelegate(port: number) {
   const server = createServer(async (req, res) => {
+    if (!isTrustedDelegateRequest(req.headers, req.socket.localPort)) {
+      send(res, 403, { error: 'delegate rejects browser-origin or rebound-host requests' });
+      return;
+    }
     const path = (req.url ?? '/').split('?')[0];
     if (req.method === 'GET' && path === '/health') {
       send(res, 200, { ok: true, node: NODE });
