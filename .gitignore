@@ -32,3 +32,9 @@ apps/mobile/android/app/build/
 apps/mobile/android/.gradle/
 apps/mobile/android/capacitor-cordova-android-plugins/build/
 apps/mobile/dist/
+
+# Firebase / FCM credentials (never commit)
+apps/daemon/secrets/
+google-services.json
+*service-account*.json
+*firebase-adminsdk*.json
