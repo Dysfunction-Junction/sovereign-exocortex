@@ -7,6 +7,7 @@ build/
 !.env.example
 *.keystore
 *.jks
+keystore.properties
 *.log
 coverage/
 .DS_Store
@@ -25,3 +26,9 @@ __pycache__/
 packages/triad/triad/logs/
 triad/logs/
 .triad_proposed_fix.patch
+
+# Mobile & Android artifacts
+apps/mobile/android/app/build/
+apps/mobile/android/.gradle/
+apps/mobile/android/capacitor-cordova-android-plugins/build/
+apps/mobile/dist/

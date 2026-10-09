@@ -1,0 +1,27 @@
+{
+  "name": "@exocortex/world-model",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Living Life Graph, Cognitive Mode Gate, and Active Inference Engine for Sovereign Exocortex",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./life-graph": "./src/life-graph.ts",
+    "./cognitive-gate": "./src/cognitive-gate.ts",
+    "./active-inference": "./src/active-inference.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@exocortex/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

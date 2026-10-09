@@ -13,7 +13,8 @@
   "dependencies": {
     "@exocortex/core": "workspace:*",
     "@exocortex/memory": "workspace:*",
-    "@exocortex/mesh": "workspace:*"
+    "@exocortex/mesh": "workspace:*",
+    "@exocortex/world-model": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

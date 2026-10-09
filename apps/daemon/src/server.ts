@@ -3,6 +3,7 @@ import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken } from "./jwt.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
+import { defaultWorldModelHost } from "./world-model-host.js";
 
 // Observed in practice: a pooled keep-alive socket to the home proxy over
 // Tailscale gets silently dropped (NAT/WireGuard idle timeout) without
@@ -140,6 +141,40 @@ const server = createServer(async (req, res) => {
       transport: "tailscale",
       nodes: localNodes(),
     });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/world-model/state") {
+    sendJson(res, 200, {
+      ok: true,
+      state: defaultWorldModelHost.getStatus(),
+    });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/world-model/telemetry") {
+    try {
+      const raw = await readBody(req, 64 * 1024);
+      const decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      const signals = (decoded.signals ?? decoded) as import("@exocortex/world-model").ContextualSignals;
+      const result = defaultWorldModelHost.ingestTelemetry(signals);
+      sendJson(res, 200, { ok: true, result });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to ingest telemetry", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/world-model/observation") {
+    try {
+      const raw = await readBody(req, 64 * 1024);
+      const decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      const obs = (decoded.observation ?? decoded) as import("@exocortex/world-model").SystemObservation;
+      const result = defaultWorldModelHost.ingestObservation(obs);
+      sendJson(res, 200, { ok: true, result });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to ingest observation", reason: err instanceof Error ? err.message : String(err) });
+    }
     return;
   }
 

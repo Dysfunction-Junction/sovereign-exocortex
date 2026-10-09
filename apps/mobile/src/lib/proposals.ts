@@ -1,0 +1,177 @@
+import { submitProposalApproval, type ProposalApprovalResult } from "./api";
+
+export interface IncomingProposal {
+  proposalId: string;
+  candidateId: string;
+  summary: string;
+  riskLevel: "low" | "medium" | "high";
+  requiresBiometric: boolean;
+  approvalNonce: string;
+  expiresAt: number;
+  actionPayload?: Record<string, unknown>;
+}
+
+export type ProposalState = "pending" | "in_flight" | "approved" | "rejected" | "expired" | "consumed";
+
+export interface TrackedProposal extends IncomingProposal {
+  state: ProposalState;
+  receivedAt: number;
+  consumedAt?: number;
+}
+
+class ProposalManager {
+  private proposals = new Map<string, TrackedProposal>();
+  private listeners = new Set<(proposals: TrackedProposal[]) => void>();
+
+  public getProposals(): TrackedProposal[] {
+    this.cleanExpired();
+    return Array.from(this.proposals.values());
+  }
+
+  public getPending(): TrackedProposal[] {
+    this.cleanExpired();
+    return Array.from(this.proposals.values()).filter((p) => p.state === "pending");
+  }
+
+  public get(proposalId: string): TrackedProposal | null {
+    this.cleanExpired();
+    return this.proposals.get(proposalId) ?? null;
+  }
+
+  public ingestProposal(proposal: IncomingProposal): TrackedProposal {
+    this.cleanExpired();
+    const existing = this.proposals.get(proposal.proposalId);
+    if (existing && existing.state !== "pending") {
+      return existing;
+    }
+    const tracked: TrackedProposal = {
+      ...proposal,
+      state: "pending",
+      receivedAt: Date.now(),
+    };
+    this.proposals.set(tracked.proposalId, tracked);
+    this.notify();
+    return tracked;
+  }
+
+  public async approve(
+    proposalId: string,
+    options?: { reason?: string; biometricMethod?: "strongbox_biometric" | "fingerprint" | "face" | "passcode" }
+  ): Promise<ProposalApprovalResult> {
+    this.cleanExpired();
+    const item = this.proposals.get(proposalId);
+    if (!item) {
+      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+    }
+    if (item.state === "consumed" || item.state === "approved" || item.state === "in_flight") {
+      return { ok: false, status: "already_consumed", error: "Replay prevented: proposal already in flight or consumed" };
+    }
+    if (item.state === "rejected") {
+      return { ok: false, status: "already_rejected", error: "Proposal was previously rejected" };
+    }
+    if (Date.now() >= item.expiresAt) {
+      item.state = "expired";
+      this.notify();
+      return { ok: false, status: "expired", error: "Proposal TTL expired" };
+    }
+
+    // Synchronously consume/lock in-flight state BEFORE any await to prevent race condition
+    item.state = "in_flight";
+    this.notify();
+
+    const timestamp = new Date().toISOString();
+    const attestation = item.requiresBiometric
+      ? {
+          method: options?.biometricMethod ?? ("fingerprint" as const),
+          timestamp,
+          signature: `attest_sig_${item.proposalId}_${Date.now()}`,
+        }
+      : undefined;
+
+    let result: ProposalApprovalResult;
+    try {
+      result = await submitProposalApproval({
+        proposalId: item.proposalId,
+        nonce: item.approvalNonce,
+        action: "approve",
+        reason: options?.reason ?? "Approved on mobile glass with biometric confirmation",
+        biometricAttestation: attestation,
+      });
+    } catch (err) {
+      item.state = "pending"; // network exception allows retry
+      this.notify();
+      throw err;
+    }
+
+    if (result.ok) {
+      item.state = "consumed";
+      item.consumedAt = Date.now();
+    } else {
+      // If rejected upstream as expired or nonce mismatch, lock terminal state
+      if (result.upstream_status === 404) item.state = "expired";
+      else if (result.upstream_status === 403 || result.upstream_status === 409) item.state = "consumed";
+      else item.state = "pending"; // transient failure, restore to pending
+    }
+    this.notify();
+    return result;
+  }
+
+
+  public async reject(proposalId: string, reason?: string): Promise<ProposalApprovalResult> {
+    this.cleanExpired();
+    const item = this.proposals.get(proposalId);
+    if (!item) {
+      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+    }
+    if (item.state !== "pending") {
+      return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
+    }
+
+    const result = await submitProposalApproval({
+      proposalId: item.proposalId,
+      nonce: item.approvalNonce,
+      action: "reject",
+      reason: reason ?? "User rejected on mobile UI",
+    });
+
+    item.state = "rejected";
+    item.consumedAt = Date.now();
+    this.notify();
+    return result;
+  }
+
+  public subscribe(cb: (proposals: TrackedProposal[]) => void): () => void {
+    this.listeners.add(cb);
+    return () => this.listeners.delete(cb);
+  }
+
+  private cleanExpired() {
+    const now = Date.now();
+    let changed = false;
+    for (const item of this.proposals.values()) {
+      if (item.state === "pending" && now >= item.expiresAt) {
+        item.state = "expired";
+        changed = true;
+      }
+    }
+    if (changed) this.notify();
+  }
+
+  private notify() {
+    const list = Array.from(this.proposals.values());
+    for (const listener of this.listeners) {
+      try {
+        listener(list);
+      } catch {
+        // Safe listener execution
+      }
+    }
+  }
+
+  public clear(): void {
+    this.proposals.clear();
+    this.notify();
+  }
+}
+
+export const proposalManager = new ProposalManager();

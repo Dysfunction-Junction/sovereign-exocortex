@@ -96,6 +96,10 @@ export class DryRunCache {
     };
   }
 
+  isExpired(proposal: SpeculativeProposal): boolean {
+    return proposal.expiresAt <= Date.now();
+  }
+
   clearProposal(proposalId: string): boolean {
     return this.cache.delete(proposalId);
   }

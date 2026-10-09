@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts",
+    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts",
     "typecheck": "tsc --noEmit",
     "sentinel": "tsx src/mishmash-sentinel.ts"
   },
@@ -16,6 +16,7 @@
     "@exocortex/core": "workspace:*",
     "@exocortex/memory": "workspace:*",
     "@exocortex/mesh": "workspace:*",
+    "@exocortex/world-model": "workspace:*",
     "@pieces-android/allowlist": "workspace:*",
     "jsonwebtoken": "^9.0.3",
     "undici": "^8.10.0"
