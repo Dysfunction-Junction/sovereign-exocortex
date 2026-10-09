@@ -71,6 +71,19 @@ class MorphogeneticEngine:
             context=context or {},
         )
 
+    def _resolve_within(self, root: Path, rel: str) -> tuple[Optional[Path], Optional[str]]:
+        """
+        Resolves a relative file path within a root directory.
+        Guarantees path containment within root and checks that target is a regular file.
+        """
+        resolved_root = root.resolve()
+        target = (resolved_root / rel).resolve()
+        if not target.is_relative_to(resolved_root):
+            return None, f"escapes sandbox: {rel}"
+        if not target.is_file():
+            return None, f"is not a regular file or does not exist: {rel}"
+        return target, None
+
     def evaluate_mutation_in_sandbox(
         self,
         candidate: MutationCandidate,
@@ -90,16 +103,25 @@ class MorphogeneticEngine:
                 branch_or_commit=base_commit,
                 prefix=f"morpho_{candidate.candidate_id}",
             ) as sandbox_path:
-                sandbox = Path(sandbox_path)
-                target_file_path = sandbox / candidate.target_file
+                sandbox = Path(sandbox_path).resolve()
+                target_file_path, err = self._resolve_within(sandbox, candidate.target_file)
 
-                if not target_file_path.exists():
-                    candidate.verification_output = f"Target file does not exist in sandbox: {candidate.target_file}"
+                # Path containment & file existence guard
+                if err or not target_file_path:
+                    candidate.verification_output = f"Darwinian Rejection: target {err}"
                     return False
 
                 # 1. Apply mutation in the ephemeral sandbox
                 original_content = target_file_path.read_text(encoding="utf-8")
                 candidate.original_code = original_content
+
+                # No-op guard: normalize newlines to avoid platform LF/CRLF mismatches
+                orig_norm = original_content.replace("\r\n", "\n")
+                mut_norm = candidate.mutated_code.replace("\r\n", "\n")
+                if mut_norm == orig_norm:
+                    candidate.verification_output = "Darwinian Rejection: mutation is a no-op"
+                    return False
+
                 target_file_path.write_text(candidate.mutated_code, encoding="utf-8")
 
                 # 2. Strict Invariant Check: Zero forbidden tokens / regressions
@@ -154,11 +176,11 @@ class MorphogeneticEngine:
         if not event.failing_file:
             return None
 
-        file_path = self.repo_root / event.failing_file
-        if not file_path.exists():
+        target_file_path, err = self._resolve_within(self.repo_root, event.failing_file)
+        if err or not target_file_path:
             return None
 
-        content = file_path.read_text(encoding="utf-8")
+        content = target_file_path.read_text(encoding="utf-8")
 
         if patch_strategy_fn:
             mutated = patch_strategy_fn(content, event)

@@ -117,7 +117,37 @@ export class WorldModelHost {
     generatedPoliciesCount: number;
     proposals: ProposalEnvelope[];
   } {
+    if (!obs || typeof obs !== "object") {
+      throw new TypeError("invalid observation: malformed or missing payload");
+    }
+    if (typeof obs.invariantId !== "string" || obs.invariantId.trim().length === 0) {
+      throw new TypeError("invalid observation: missing or invalid invariantId");
+    }
+    const truncatedId = obs.invariantId.slice(0, 64);
+    const known = this.activeInference.registeredInvariants.some((i) => i.id === obs.invariantId);
+    if (!known) {
+      throw new Error(`unknown invariantId: ${truncatedId}`);
+    }
+    const s = obs.observedState;
+    const isScalar =
+      typeof s === "string" ||
+      typeof s === "boolean" ||
+      (typeof s === "number" && Number.isFinite(s));
+    if (!isScalar) {
+      throw new TypeError("invalid observation: non-primitive or non-finite observedState");
+    }
+    if (obs.confidence !== undefined) {
+      if (typeof obs.confidence !== "number" || !Number.isFinite(obs.confidence) || obs.confidence < 0 || obs.confidence > 1) {
+        throw new TypeError("invalid observation: confidence must be a finite number between 0 and 1");
+      }
+    }
+    if (obs.observedAt !== undefined) {
+      if (typeof obs.observedAt !== "number" || !Number.isFinite(obs.observedAt)) {
+        throw new TypeError("invalid observation: observedAt must be a finite timestamp");
+      }
+    }
     const metric = this.activeInference.evaluateObservation(obs);
+
     const policies = this.activeInference.generatePolicies([metric]);
     const proposals: ProposalEnvelope[] = [];
 
