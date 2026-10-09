@@ -362,6 +362,13 @@ export const server = createServer(async (req, res) => {
 
       const db = getDatabase();
       const result = db.ingestBatch(reqObj);
+      if (result.events.length > 0) {
+        try {
+          defaultWorldModelHost.onEventsAppended(result.events, db);
+        } catch (wmErr) {
+          console.error("[world-model-host] event batch ingest hook error:", wmErr);
+        }
+      }
       sendJson(res, 200, {
         ok: true,
         result: {
@@ -479,6 +486,157 @@ export const server = createServer(async (req, res) => {
     } catch (err) {
       sendJson(res, 500, {
         error: "failed to list devices",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/beliefs") {
+    try {
+      const db = getDatabase();
+      const seqParam = url.searchParams.get("seq");
+      if (seqParam !== null) {
+        if (!/^\d+$/.test(seqParam)) {
+          sendJson(res, 400, { error: "invalid query parameter: seq must be a non-negative integer string" });
+          return;
+        }
+        const seq = Number.parseInt(seqParam, 10);
+        if (!Number.isSafeInteger(seq) || seq < 0) {
+          sendJson(res, 400, { error: "invalid query parameter: seq must be a non-negative integer" });
+          return;
+        }
+        const snapshot = db.getBeliefSnapshot(seq);
+        if (!snapshot) {
+          sendJson(res, 404, { error: `no belief snapshot found for seq ${seq}` });
+          return;
+        }
+        sendJson(res, 200, { ok: true, snapshot });
+        return;
+      }
+
+      const limitParam = url.searchParams.get("limit");
+      const limit = limitParam !== null && /^\d+$/.test(limitParam) ? Math.min(Math.max(1, Number.parseInt(limitParam, 10)), 500) : 50;
+      const latest = db.getLatestBeliefSnapshot();
+      const snapshots = db.listBeliefSnapshots(limit);
+
+      sendJson(res, 200, {
+        ok: true,
+        latest: latest ?? null,
+        snapshots,
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to retrieve belief snapshots",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/params") {
+    try {
+      const db = getDatabase();
+      const factor = url.searchParams.get("factor") ?? undefined;
+      const rawKind = url.searchParams.get("kind");
+      let kind: 'A' | 'B' | 'C' | 'D' | undefined = undefined;
+      if (rawKind !== null) {
+        if (!["A", "B", "C", "D"].includes(rawKind)) {
+          sendJson(res, 400, { error: "invalid query parameter: kind must be one of A, B, C, D" });
+          return;
+        }
+        kind = rawKind as 'A' | 'B' | 'C' | 'D';
+      }
+
+      let params = db.listModelParams(factor, kind);
+      if (params.length === 0) {
+        const latestSnapshot = db.getLatestBeliefSnapshot();
+        const asOfSeq = latestSnapshot?.as_of_seq ?? 0;
+        const liveParams = defaultWorldModelHost.learnedEngine.exportModelParams(asOfSeq);
+        params = liveParams.filter((p) => {
+          if (factor && p.factor !== factor) return false;
+          if (kind && p.kind !== kind) return false;
+          return true;
+        });
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        params,
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to retrieve model parameters",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/world-model/replay") {
+    try {
+      const db = getDatabase();
+      const callingDev = db.getDevice(auth.deviceId);
+      const isCallerAdmin = Boolean(
+        callingDev?.scopes?.includes("admin") ||
+        callingDev?.scopes?.includes("admin:write")
+      );
+      if (!isCallerAdmin) {
+        sendJson(res, 403, { error: "forbidden: replay requires admin write scope" });
+        return;
+      }
+
+      const raw = await readBody(req, 64 * 1024);
+      let payloadObj: { from_seq?: number; to_seq?: number } = {};
+      if (raw.length > 0) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            sendJson(res, 400, { error: "invalid JSON body: payload must be a plain JSON object" });
+            return;
+          }
+          payloadObj = parsed;
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+      }
+
+      if (payloadObj.from_seq !== undefined) {
+        if (!Number.isSafeInteger(payloadObj.from_seq) || payloadObj.from_seq < 0) {
+          sendJson(res, 400, { error: "from_seq must be a non-negative integer" });
+          return;
+        }
+      }
+      if (payloadObj.to_seq !== undefined) {
+        if (!Number.isSafeInteger(payloadObj.to_seq) || payloadObj.to_seq < 0) {
+          sendJson(res, 400, { error: "to_seq must be a non-negative integer" });
+          return;
+        }
+      }
+      if (payloadObj.from_seq !== undefined && payloadObj.to_seq !== undefined) {
+        if (payloadObj.from_seq > payloadObj.to_seq) {
+          sendJson(res, 400, { error: "from_seq must be less than or equal to to_seq" });
+          return;
+        }
+      }
+
+      const events = db.listEvents({
+        from_seq: payloadObj.from_seq,
+        to_seq: payloadObj.to_seq,
+      });
+
+      const replayResult = defaultWorldModelHost.replayEvents(events, db);
+      sendJson(res, 200, {
+        ok: true,
+        replayedCount: replayResult.replayedCount,
+        snapshotsCount: replayResult.snapshots.length,
+        latestParamsCount: replayResult.latestParams.length,
+        latestSnapshot: replayResult.snapshots.length > 0 ? replayResult.snapshots[replayResult.snapshots.length - 1] : null,
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to replay world model events",
         reason: err instanceof Error ? err.message : String(err),
       });
     }

@@ -14,13 +14,19 @@ import {
   LivingLifeGraph,
   CognitiveModeGate,
   ActiveInferenceEngine,
+  LearnedActiveInferenceEngine,
+  eventToObservation,
   type CognitiveMode,
   type ProposalEnvelope,
   type ContextualSignals,
   type SystemObservation,
+  type BeliefSnapshotRecord,
+  type ModelParamRecord,
 } from "@exocortex/world-model";
-import { defaultDryRunCache, type SpeculativeProposal } from "@exocortex/core";
+import { defaultDryRunCache, type SpeculativeProposal, type EventRecord } from "@exocortex/core";
 import type { ShadowRecorder } from "./shadow-recorder.js";
+import { getDatabase, hasDatabase } from "./db-host.js";
+import type { ExocortexDatabase } from "@exocortex/core/db";
 
 const MAX_RECORDER_FAILURES = 5;
 
@@ -30,6 +36,7 @@ export class WorldModelHost {
   public readonly lifeGraph: LivingLifeGraph;
   public readonly cognitiveGate: CognitiveModeGate;
   public readonly activeInference: ActiveInferenceEngine;
+  public learnedEngine: LearnedActiveInferenceEngine;
   private shadowRecorder: ShadowRecorder | null = null;
   private recorderFailures = 0;
   private recorderDisabled = false;
@@ -40,6 +47,23 @@ export class WorldModelHost {
 
     this.cognitiveGate = new CognitiveModeGate();
     this.activeInference = new ActiveInferenceEngine(this.lifeGraph);
+    this.learnedEngine = new LearnedActiveInferenceEngine();
+
+    if (hasDatabase()) {
+      try {
+        const db = getDatabase();
+        const params = db.listModelParams();
+        if (params.length > 0) {
+          this.learnedEngine.importModelParams(params);
+        }
+        const latestSnapshot = db.getLatestBeliefSnapshot();
+        if (latestSnapshot) {
+          this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
+        }
+      } catch {
+        // Database not ready or in-memory
+      }
+    }
   }
 
   public static getInstance(): WorldModelHost {
@@ -110,11 +134,22 @@ export class WorldModelHost {
     const prevMode = this.cognitiveGate.mode;
     const mode = this.cognitiveGate.classifyMode(signals);
 
-    // Stimulate relevant nodes in the Life Graph
+    // Stimulate relevant nodes in the Life Graph & update discrete generative model
     if (signals.foregroundApp) {
       const app = signals.foregroundApp.toLowerCase();
       if (app.includes("code") || app.includes("antigravity")) {
         this.lifeGraph.stimulate("project_sovereign_exocortex", 0.3);
+        try {
+          this.learnedEngine.processObservation("user_mode", "typing_burst");
+        } catch {
+          // non-fatal
+        }
+      } else {
+        try {
+          this.learnedEngine.processObservation("user_mode", "window_switch");
+        } catch {
+          // non-fatal
+        }
       }
     }
 
@@ -172,6 +207,21 @@ export class WorldModelHost {
     }
     const metric = this.activeInference.evaluateObservation(obs);
 
+    // In parallel, update discrete generative learned factor
+    try {
+      if (obs.metadata?.factor && obs.metadata?.observation) {
+        this.learnedEngine.processObservation(String(obs.metadata.factor), String(obs.metadata.observation));
+      } else if (obs.invariantId === "inv_clean_test_suite") {
+        this.learnedEngine.processObservation("repo_health", obs.observedState === true ? "tests_pass" : "tests_fail");
+      } else if (obs.invariantId === "inv_bridge_connected") {
+        this.learnedEngine.processObservation("link_health", obs.observedState === true ? "ping_fast" : "ws_dropped");
+      } else if (obs.invariantId === "inv_zero_broken_commits") {
+        this.learnedEngine.processObservation("repo_health", obs.observedState === true ? "clean_checkout" : "uncommitted_edits");
+      }
+    } catch {
+      // Non-fatal learning step
+    }
+
     const policies = this.activeInference.generatePolicies([metric]);
     const proposals: ProposalEnvelope[] = [];
 
@@ -221,14 +271,120 @@ export class WorldModelHost {
     cognitiveMode: CognitiveMode;
     queuedProposalsCount: number;
     registeredInvariantsCount: number;
+    learnedFactorsCount: number;
+    learnedModelVersion: number;
   } {
+    const factors = this.learnedEngine.listFactors();
+    const maxVersion = factors.reduce((max, f) => Math.max(max, f.version), 1);
     return {
       entityCount: this.lifeGraph.entityCount,
       edgeCount: this.lifeGraph.edgeCount,
       cognitiveMode: this.cognitiveGate.mode,
       queuedProposalsCount: this.cognitiveGate.queueSize,
       registeredInvariantsCount: this.activeInference.registeredInvariants.length,
+      learnedFactorsCount: factors.length,
+      learnedModelVersion: maxVersion,
     };
+  }
+
+  /**
+   * Persist current belief snapshot and Dirichlet model params to SQLite.
+   */
+  public persistBeliefState(asOfSeq: number, db?: ExocortexDatabase): BeliefSnapshotRecord | null {
+    const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
+    if (!targetDb) return null;
+
+    const snapshot = this.learnedEngine.createBeliefSnapshot(asOfSeq);
+    targetDb.saveBeliefSnapshot(snapshot);
+
+    const params = this.learnedEngine.exportModelParams(asOfSeq);
+    for (const p of params) {
+      targetDb.saveModelParams(p);
+    }
+    return snapshot;
+  }
+
+  /**
+   * Batch ingest newly appended events, updating generative models and persisting
+   * belief snapshots and parameters in a single transaction.
+   */
+  public onEventsAppended(events: EventRecord[], db?: ExocortexDatabase): BeliefSnapshotRecord | null {
+    const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
+    const touchedFactors = new Set<string>();
+    const batchSnapshots: BeliefSnapshotRecord[] = [];
+    let lastObsSeq: number | null = null;
+
+    for (const ev of events) {
+      try {
+        const extracted = eventToObservation(ev);
+        if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
+          this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+          touchedFactors.add(extracted.factor);
+          lastObsSeq = ev.seq;
+          batchSnapshots.push(this.learnedEngine.createBeliefSnapshot(ev.seq));
+        }
+      } catch (err) {
+        console.warn(`[world-model-host] observation extraction error for seq ${ev.seq}:`, err);
+      }
+    }
+
+    if (lastObsSeq !== null && targetDb && batchSnapshots.length > 0) {
+      try {
+        const params = this.learnedEngine.exportModelParams(lastObsSeq);
+        targetDb.withTransaction(() => {
+          for (const snap of batchSnapshots) {
+            targetDb.saveBeliefSnapshot(snap);
+          }
+          for (const p of params) {
+            if (touchedFactors.has(p.factor)) {
+              targetDb.saveModelParams(p);
+            }
+          }
+        });
+        return batchSnapshots[batchSnapshots.length - 1];
+      } catch (err) {
+        console.error(`[world-model-host] transaction save error:`, err);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Single-event convenience wrapper.
+   */
+  public onEventAppended(event: EventRecord, db?: ExocortexDatabase): BeliefSnapshotRecord | null {
+    return this.onEventsAppended([event], db);
+  }
+
+  /**
+   * Replays immutable event stream and rebuilds generative models & belief snapshots in SQLite.
+   * Rebuilds into a fresh engine and atomically swaps it in only after transaction commit.
+   */
+  public replayEvents(events?: EventRecord[], db?: ExocortexDatabase): {
+    replayedCount: number;
+    snapshots: BeliefSnapshotRecord[];
+    latestParams: ModelParamRecord[];
+  } {
+    const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
+    const eventList = events ?? (targetDb ? targetDb.listEvents() : []);
+
+    const freshEngine = new LearnedActiveInferenceEngine();
+    const result = freshEngine.replayEventStream(eventList);
+
+    if (targetDb) {
+      targetDb.withTransaction(() => {
+        for (const snap of result.snapshots) {
+          targetDb.saveBeliefSnapshot(snap);
+        }
+        for (const param of result.latestParams) {
+          targetDb.saveModelParams(param);
+        }
+      });
+    }
+
+    this.learnedEngine = freshEngine;
+    return result;
   }
 }
 

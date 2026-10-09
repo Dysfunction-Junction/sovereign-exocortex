@@ -7,3 +7,4 @@
 export * from './life-graph.js';
 export * from './cognitive-gate.js';
 export * from './active-inference.js';
+export * from './generative-model.js';

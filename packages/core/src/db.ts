@@ -457,7 +457,14 @@ export class ExocortexDatabase {
     });
   }
 
-  public listEvents(filter: { deviceId?: string; kind?: string; sinceSeq?: number; limit?: number } = {}): EventRecord[] {
+  public listEvents(filter: {
+    deviceId?: string;
+    kind?: string;
+    sinceSeq?: number;
+    from_seq?: number;
+    to_seq?: number;
+    limit?: number;
+  } = {}): EventRecord[] {
     let sql = "SELECT * FROM events WHERE 1=1";
     const params: any[] = [];
     if (filter.deviceId) {
@@ -471,6 +478,14 @@ export class ExocortexDatabase {
     if (filter.sinceSeq != null) {
       sql += " AND seq > ?";
       params.push(filter.sinceSeq);
+    }
+    if (filter.from_seq != null) {
+      sql += " AND seq >= ?";
+      params.push(filter.from_seq);
+    }
+    if (filter.to_seq != null) {
+      sql += " AND seq <= ?";
+      params.push(filter.to_seq);
     }
     sql += " ORDER BY seq ASC";
     if (filter.limit != null) {
@@ -665,6 +680,112 @@ export class ExocortexDatabase {
       actual: r.actual != null ? String(r.actual) : null,
       latency_ms: r.latency_ms != null ? Number(r.latency_ms) : null,
       ts: Number(r.ts),
+    }));
+  }
+
+  // --- Model Params (Dirichlet Counts for A, B, C, D) ---
+
+  public saveModelParams(record: ModelParamRecord): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO model_params (factor, kind, version, counts, as_of_seq)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(factor, kind, version) DO UPDATE SET
+        counts = excluded.counts,
+        as_of_seq = excluded.as_of_seq
+    `);
+    stmt.run(record.factor, record.kind, record.version, record.counts, record.as_of_seq);
+  }
+
+  public getModelParams(factor: string, kind: 'A' | 'B' | 'C' | 'D', version?: number): ModelParamRecord | null {
+    let sql = "SELECT * FROM model_params WHERE factor = ? AND kind = ?";
+    const params: any[] = [factor, kind];
+    if (version !== undefined) {
+      sql += " AND version = ?";
+      params.push(version);
+    } else {
+      sql += " ORDER BY version DESC LIMIT 1";
+    }
+    const stmt = this.db.prepare(sql);
+    const row = stmt.get(...params) as any;
+    if (!row) return null;
+    return {
+      factor: String(row.factor),
+      kind: row.kind as 'A' | 'B' | 'C' | 'D',
+      version: Number(row.version),
+      counts: String(row.counts),
+      as_of_seq: Number(row.as_of_seq),
+    };
+  }
+
+  public listModelParams(factor?: string, kind?: 'A' | 'B' | 'C' | 'D'): ModelParamRecord[] {
+    let sql = "SELECT * FROM model_params WHERE 1=1";
+    const params: any[] = [];
+    if (factor) {
+      sql += " AND factor = ?";
+      params.push(factor);
+    }
+    if (kind) {
+      sql += " AND kind = ?";
+      params.push(kind);
+    }
+    sql += " ORDER BY factor ASC, kind ASC, version DESC";
+    const stmt = this.db.prepare(sql);
+    const rows = (params.length > 0 ? stmt.all(...params) : stmt.all()) as any[];
+    return rows.map((r) => ({
+      factor: String(r.factor),
+      kind: r.kind as 'A' | 'B' | 'C' | 'D',
+      version: Number(r.version),
+      counts: String(r.counts),
+      as_of_seq: Number(r.as_of_seq),
+    }));
+  }
+
+  // --- Belief Snapshots ---
+
+  public saveBeliefSnapshot(record: BeliefSnapshotRecord): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO belief_snapshots (as_of_seq, mode, q, surprisal)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(as_of_seq) DO UPDATE SET
+        mode = excluded.mode,
+        q = excluded.q,
+        surprisal = excluded.surprisal
+    `);
+    stmt.run(record.as_of_seq, record.mode, record.q, record.surprisal);
+  }
+
+  public getLatestBeliefSnapshot(): BeliefSnapshotRecord | null {
+    const stmt = this.db.prepare("SELECT * FROM belief_snapshots ORDER BY as_of_seq DESC LIMIT 1");
+    const row = stmt.get() as any;
+    if (!row) return null;
+    return {
+      as_of_seq: Number(row.as_of_seq),
+      mode: row.mode,
+      q: String(row.q),
+      surprisal: Number(row.surprisal),
+    };
+  }
+
+  public getBeliefSnapshot(asOfSeq: number): BeliefSnapshotRecord | null {
+    const stmt = this.db.prepare("SELECT * FROM belief_snapshots WHERE as_of_seq = ?");
+    const row = stmt.get(asOfSeq) as any;
+    if (!row) return null;
+    return {
+      as_of_seq: Number(row.as_of_seq),
+      mode: row.mode,
+      q: String(row.q),
+      surprisal: Number(row.surprisal),
+    };
+  }
+
+  public listBeliefSnapshots(limit = 50): BeliefSnapshotRecord[] {
+    const stmt = this.db.prepare("SELECT * FROM belief_snapshots ORDER BY as_of_seq DESC LIMIT ?");
+    const rows = stmt.all(limit) as any[];
+    return rows.map((r) => ({
+      as_of_seq: Number(r.as_of_seq),
+      mode: r.mode,
+      q: String(r.q),
+      surprisal: Number(r.surprisal),
     }));
   }
 
