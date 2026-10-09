@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { usageEventToV3, flushUsageEvents } from "./flush";
 import type { UsageEvent } from "./usage";
 import * as config from "./config";
@@ -16,6 +16,10 @@ vi.mock("./usage", () => ({
 describe("flushUsageEvents & usageEventToV3", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("converts UsageEvent to Schema v3 EventIn", () => {
@@ -71,7 +75,7 @@ describe("flushUsageEvents & usageEventToV3", () => {
       status: 200,
       json: async () => ({ ok: true }),
     });
-    globalThis.fetch = mockFetch;
+    vi.stubGlobal("fetch", mockFetch);
 
     await flushUsageEvents();
 
@@ -117,7 +121,7 @@ describe("flushUsageEvents & usageEventToV3", () => {
         ok: true,
         status: 200,
       });
-    globalThis.fetch = mockFetch;
+    vi.stubGlobal("fetch", mockFetch);
 
     await flushUsageEvents();
 
@@ -135,17 +139,59 @@ describe("flushUsageEvents & usageEventToV3", () => {
     expect(usage.clearSentEvents).toHaveBeenCalledWith(sampleEvents);
   });
 
-  it("clears poison pill events on 400 or 409 to prevent queue deadlock", async () => {
-    const malformedEvents: UsageEvent[] = [
+  it("fails over to secondary target if first target returns 403 on both v3 and legacy", async () => {
+    const sampleEvents: UsageEvent[] = [
       {
         type: "screen_view",
         screen: "status",
         timestamp: "2026-10-09T10:05:00.000Z",
-        id: "evt_malformed",
+        id: "evt_screen_failover",
       },
     ];
 
-    vi.mocked(usage.peekQueue).mockResolvedValueOnce(malformedEvents);
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce(sampleEvents);
+    vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+      {
+        baseUrl: "http://127.0.0.1:8788",
+        token: "target1_token",
+        mode: "lan",
+      },
+      {
+        baseUrl: "https://pieces.dysfunctionjunction.xyz",
+        token: "target2_token",
+        mode: "remote",
+      },
+    ]);
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 }) // target 1 v3 -> 403
+      .mockResolvedValueOnce({ ok: false, status: 403 }) // target 1 legacy -> 403
+      .mockResolvedValueOnce({ ok: true, status: 200 }); // target 2 v3 -> 200 OK!
+    vi.stubGlobal("fetch", mockFetch);
+
+    await flushUsageEvents();
+
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      3,
+      "https://pieces.dysfunctionjunction.xyz/v3/events",
+      expect.anything()
+    );
+    expect(usage.clearSentEvents).toHaveBeenCalledWith(sampleEvents);
+  });
+
+  it("clears isolated single poison pill on 400 or 409, but preserves multi-event batches", async () => {
+    const singleMalformed: UsageEvent[] = [
+      {
+        type: "screen_view",
+        screen: "status",
+        timestamp: "2026-10-09T10:05:00.000Z",
+        id: "evt_single_malformed",
+      },
+    ];
+
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce(singleMalformed);
     vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
       {
         baseUrl: "http://127.0.0.1:8788",
@@ -158,10 +204,36 @@ describe("flushUsageEvents & usageEventToV3", () => {
       ok: false,
       status: 400,
     });
-    globalThis.fetch = mockFetch;
+    vi.stubGlobal("fetch", mockFetch);
 
     await flushUsageEvents();
 
-    expect(usage.clearSentEvents).toHaveBeenCalledWith(malformedEvents);
+    // Single item is cleared to prevent infinite loop
+    expect(usage.clearSentEvents).toHaveBeenCalledWith(singleMalformed);
+
+    // Now test multi-item batch: should NOT wipe the entire batch on 400
+    vi.clearAllMocks();
+    const multiEvents: UsageEvent[] = [
+      { type: "screen_view", screen: "status", timestamp: "2026-10-09T10:05:00.000Z", id: "evt_1" },
+      { type: "screen_view", screen: "status", timestamp: "2026-10-09T10:06:00.000Z", id: "evt_2" },
+    ];
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce(multiEvents);
+    vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+      {
+        baseUrl: "http://127.0.0.1:8788",
+        token: "bearer_dummy_token",
+        mode: "lan",
+      },
+    ]);
+    const mockFetchMulti = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+    });
+    vi.stubGlobal("fetch", mockFetchMulti);
+
+    await flushUsageEvents();
+
+    // Multi-item batch is NOT wiped
+    expect(usage.clearSentEvents).not.toHaveBeenCalled();
   });
 });

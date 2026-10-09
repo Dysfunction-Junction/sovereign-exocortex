@@ -35,7 +35,7 @@ export function usageEventToV3(e: UsageEvent): V3EventIn {
   }
   const ts = new Date(e.timestamp).getTime();
   const ts_device = Number.isSafeInteger(ts) && ts > 0 ? ts : Date.now();
-  const event_id = e.id || `evt_${ts_device}_${Math.random().toString(36).slice(2, 9)}`;
+  const event_id = e.id || `evt_${ts_device}_${e.type}_${e.screen}`;
 
   return {
     event_id,
@@ -89,6 +89,8 @@ export async function flushUsageEvents(): Promise<void> {
       const target = targets[i];
       const probe = targets.length > 1 && i === 0 && target.mode === "lan";
       const timeoutMs = probe ? 2500 : 8000;
+      const deadline = Date.now() + timeoutMs;
+      const getSignal = () => AbortSignal.timeout(Math.max(500, deadline - Date.now()));
       const deviceId = extractDeviceIdFromToken(target.token) || "device_phone_galaxy";
 
       try {
@@ -99,7 +101,7 @@ export async function flushUsageEvents(): Promise<void> {
             Authorization: `Bearer ${target.token}`,
           },
           body: JSON.stringify({ device_id: deviceId, events: v3Events }),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: getSignal(),
         });
 
         // Graceful fallback to legacy /mobile/usage-report if /v3/events is not supported (404) or scope forbidden (403)
@@ -111,7 +113,7 @@ export async function flushUsageEvents(): Promise<void> {
               Authorization: `Bearer ${target.token}`,
             },
             body: JSON.stringify({ events: toSend }),
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: getSignal(),
           });
         }
 
@@ -119,12 +121,16 @@ export async function flushUsageEvents(): Promise<void> {
           await clearSentEvents(toSend);
           return;
         }
-        // Stale token or transient server error — failover to other profile
-        if (res.status === 401 || res.status >= 500) continue;
 
-        // On 400 or 409 (malformed or duplicate event), clear to prevent poison pill deadlock
+        // Stale token, forbidden scope, or server error — failover to other profile (Plan B gateway)
+        if (res.status === 401 || res.status === 403 || res.status >= 500) continue;
+
+        // On 400 or 409 (malformed or duplicate event), safely clear only if isolated single item
+        // to prevent infinite retry deadlock without wiping up to 100 valid events
         if (res.status === 400 || res.status === 409) {
-          await clearSentEvents(toSend);
+          if (toSend.length === 1) {
+            await clearSentEvents(toSend);
+          }
           return;
         }
         return;

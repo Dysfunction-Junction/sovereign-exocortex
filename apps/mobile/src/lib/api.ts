@@ -357,7 +357,8 @@ export async function submitShadowLabel(
     });
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      return { ok: false, error: body?.error ?? `HTTP ${res.status}` };
+      const errorMsg = typeof body?.error === "string" ? body.error : `HTTP ${res.status}`;
+      return { ok: false, error: errorMsg };
     }
     return { ok: true };
   } catch (err) {
@@ -372,12 +373,30 @@ export interface ShadowMetricsQuery {
   baselinePrecision?: number;
 }
 
-export async function getShadowMetrics(query?: ShadowMetricsQuery): Promise<any> {
+export interface ShadowMetricsResult {
+  metrics: {
+    precision: number | null;
+    wilsonLower: number | null;
+    focusRegret: number;
+    totalEvaluated: number;
+    wanted: number;
+    notWanted: number;
+    tapped: number;
+    inferred: number;
+    heuristicScorer: boolean;
+  };
+  automated_verdict: string;
+  breaker_tripped: boolean;
+  canonical_breaker_tripped: boolean;
+  effective_shadow: boolean;
+}
+
+export async function getShadowMetrics(query?: ShadowMetricsQuery): Promise<ShadowMetricsResult> {
   const params = new URLSearchParams();
-  if (query?.days) params.set("days", String(query.days));
-  if (query?.threshold !== undefined) params.set("threshold", String(query.threshold));
-  if (query?.minLabels !== undefined) params.set("min_labels", String(query.minLabels));
-  if (query?.baselinePrecision !== undefined) params.set("baseline_precision", String(query.baselinePrecision));
+  if (query?.days !== undefined && Number.isFinite(query.days)) params.set("days", String(query.days));
+  if (query?.threshold !== undefined && Number.isFinite(query.threshold)) params.set("threshold", String(query.threshold));
+  if (query?.minLabels !== undefined && Number.isFinite(query.minLabels)) params.set("min_labels", String(query.minLabels));
+  if (query?.baselinePrecision !== undefined && Number.isFinite(query.baselinePrecision)) params.set("baseline_precision", String(query.baselinePrecision));
 
   const qs = params.toString();
   const url = `/v3/shadow/metrics${qs ? `?${qs}` : ""}`;
@@ -385,7 +404,7 @@ export async function getShadowMetrics(query?: ShadowMetricsQuery): Promise<any>
   if (!res.ok) {
     throw new Error(`Shadow metrics fetch failed: HTTP ${res.status}`);
   }
-  return res.json();
+  return res.json() as Promise<ShadowMetricsResult>;
 }
 
 
