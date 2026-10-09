@@ -125,11 +125,29 @@ export async function flushUsageEvents(): Promise<void> {
         // Stale token, forbidden scope, or server error — failover to other profile (Plan B gateway)
         if (res.status === 401 || res.status === 403 || res.status >= 500) continue;
 
-        // On 400 or 409 (malformed or duplicate event), safely clear only if isolated single item
-        // to prevent infinite retry deadlock without wiping up to 100 valid events
+        // 400/409: a malformed or duplicate event. A single event is cleared so it cannot block the queue.
+        // A larger batch is re-sent one event at a time: accepted and rejected events are cleared,
+        // anything else stops the pass so valid events are never dropped and the queue cannot wedge.
         if (res.status === 400 || res.status === 409) {
           if (toSend.length === 1) {
             await clearSentEvents(toSend);
+            return;
+          }
+          for (const ev of toSend) {
+            const single = await fetch(`${target.baseUrl}/v3/events`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${target.token}`,
+              },
+              body: JSON.stringify({ device_id: deviceId, events: [usageEventToV3(ev)] }),
+              signal: AbortSignal.timeout(8000),
+            });
+            if (single.ok || single.status === 400 || single.status === 409) {
+              await clearSentEvents([ev]);
+            } else {
+              return;
+            }
           }
           return;
         }

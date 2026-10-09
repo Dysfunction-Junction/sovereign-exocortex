@@ -181,7 +181,7 @@ describe("flushUsageEvents & usageEventToV3", () => {
     expect(usage.clearSentEvents).toHaveBeenCalledWith(sampleEvents);
   });
 
-  it("clears isolated single poison pill on 400 or 409, but preserves multi-event batches", async () => {
+  it("clears isolated single poison pill on 400 or 409, and isolates poison pills inside multi-event batches", async () => {
     const singleMalformed: UsageEvent[] = [
       {
         type: "screen_view",
@@ -211,7 +211,7 @@ describe("flushUsageEvents & usageEventToV3", () => {
     // Single item is cleared to prevent infinite loop
     expect(usage.clearSentEvents).toHaveBeenCalledWith(singleMalformed);
 
-    // Now test multi-item batch: should NOT wipe the entire batch on 400
+    // Now test multi-item batch: isolate the bad event instead of wiping or wedging
     vi.clearAllMocks();
     const multiEvents: UsageEvent[] = [
       { type: "screen_view", screen: "status", timestamp: "2026-10-09T10:05:00.000Z", id: "evt_1" },
@@ -225,15 +225,18 @@ describe("flushUsageEvents & usageEventToV3", () => {
         mode: "lan",
       },
     ]);
-    const mockFetchMulti = vi.fn().mockResolvedValueOnce({
-      ok: false,
-      status: 400,
-    });
+    const mockFetchMulti = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 400 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+      .mockResolvedValueOnce({ ok: false, status: 400 });
     vi.stubGlobal("fetch", mockFetchMulti);
 
     await flushUsageEvents();
 
-    // Multi-item batch is NOT wiped
-    expect(usage.clearSentEvents).not.toHaveBeenCalled();
+    // Batch rejected -> re-sent per event: the valid one is accepted, the poison pill is dropped, nothing wedges
+    expect(mockFetchMulti).toHaveBeenCalledTimes(3);
+    expect(usage.clearSentEvents).toHaveBeenCalledWith([multiEvents[0]]);
+    expect(usage.clearSentEvents).toHaveBeenCalledWith([multiEvents[1]]);
   });
 });
