@@ -307,6 +307,18 @@ export class ExocortexDatabase {
     );
   }
 
+  /**
+   * Bind the device's approval-signing key (EC P-256 SPKI). key_attested=1 is set by the caller's
+   * assertion that the key is hardware-backed and user-auth-gated; the Android key-attestation chain
+   * is NOT verified here. Returns false for unknown or revoked devices.
+   */
+  public setDeviceApprovalKey(deviceId: string, pubkeySpki: Uint8Array): boolean {
+    const res = this.db
+      .prepare("UPDATE devices SET pubkey_spki = ?, key_attested = 1 WHERE device_id = ? AND revoked_at IS NULL")
+      .run(Buffer.from(pubkeySpki), deviceId);
+    return Number(res.changes) > 0;
+  }
+
   public revokeDevice(deviceId: string): void {
     const stmt = this.db.prepare("UPDATE devices SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL");
     stmt.run(Date.now(), deviceId);

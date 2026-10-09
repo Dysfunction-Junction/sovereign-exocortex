@@ -1,11 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { proposalManager, type IncomingProposal } from "./proposals";
 import * as api from "./api";
+import * as approvalKey from "./approvalKey";
 
 vi.mock("./api", () => ({
   submitProposalApproval: vi.fn(),
   submitShadowLabel: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+vi.mock("./approvalKey", async () => {
+  const actual = await vi.importActual<typeof import("./approvalKey")>("./approvalKey");
+  return { ...actual, signApproval: vi.fn() };
+});
+
+const ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_000, sig: "c2ln" };
 
 describe("proposalManager", () => {
   const baseProposal: IncomingProposal = {
@@ -20,6 +28,7 @@ describe("proposalManager", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(approvalKey.signApproval).mockResolvedValue(ATTESTATION);
     proposalManager.clear();
   });
 
@@ -54,7 +63,7 @@ describe("proposalManager", () => {
         proposalId: baseProposal.proposalId,
         nonce: baseProposal.approvalNonce,
         action: "approve",
-        biometricAttestation: undefined,
+        biometricAttestation: ATTESTATION,
       })
     );
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("consumed");
@@ -77,22 +86,45 @@ describe("proposalManager", () => {
     });
 
     proposalManager.ingestProposal(biometricProp);
-    const result = await proposalManager.approve(biometricProp.proposalId, {
-      biometricMethod: "fingerprint",
-    });
+    const result = await proposalManager.approve(biometricProp.proposalId);
 
     expect(result.ok).toBe(true);
     expect(api.submitProposalApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         proposalId: biometricProp.proposalId,
         action: "approve",
-        biometricAttestation: expect.objectContaining({
-          method: "fingerprint",
-          signature: expect.stringContaining("attest_sig_prop_bio_999"),
-        }),
+        biometricAttestation: ATTESTATION,
       })
     );
+    expect(approvalKey.signApproval).toHaveBeenCalledWith({
+      proposalId: biometricProp.proposalId,
+      nonce: biometricProp.approvalNonce,
+      action: "approve",
+    });
     expect(proposalManager.get(biometricProp.proposalId)?.state).toBe("consumed");
+  });
+
+  it("sends nothing and restores pending when the biometric key is unavailable", async () => {
+    vi.mocked(approvalKey.signApproval).mockRejectedValueOnce(
+      new approvalKey.ApprovalUnavailableError("No approval key registered", "NO_KEY")
+    );
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.approve(baseProposal.proposalId);
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("biometric_unavailable");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
+  });
+
+  it("reports a cancelled biometric prompt without sending", async () => {
+    vi.mocked(approvalKey.signApproval).mockRejectedValueOnce(
+      new approvalKey.ApprovalUnavailableError("cancelled", "CANCELLED")
+    );
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.approve(baseProposal.proposalId);
+    expect(result.status).toBe("cancelled");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
   });
 
   it("prevents replay attacks on already consumed proposals", async () => {

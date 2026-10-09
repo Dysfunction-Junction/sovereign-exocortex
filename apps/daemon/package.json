@@ -8,7 +8,7 @@
   "scripts": {
     "start": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
-    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts src/v3-events.test.ts src/v3-world-model.test.ts src/shadow-recorder.test.ts src/v3-shadow.test.ts src/audit-fixes.test.ts",
+    "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts src/v3-events.test.ts src/v3-world-model.test.ts src/shadow-recorder.test.ts src/v3-shadow.test.ts src/audit-fixes.test.ts src/approval-attestation.test.ts",
 
     "typecheck": "tsc --noEmit",
     "sentinel": "tsx src/mishmash-sentinel.ts"

@@ -7,6 +7,7 @@ import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnve
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
+import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature } from "./approval-attestation.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -141,6 +142,8 @@ function ensureShadowRecorder(): void {
  * Validates and atomically records a ground-truth shadow label to both the shadow_labels
  * table and the immutable hash-chained event log. Authoritatively enforces source placement.
  */
+const approvalKeyChallenges = new ChallengeStore();
+
 function applyShadowLabel(
   db: ExocortexDatabase,
   deviceId: string,
@@ -925,6 +928,67 @@ export const server = createServer(async (req, res) => {
 
 
 
+  // Approval-key registration. The security boundary for biometric approvals: the key that later verifies
+  // them must be bound by someone holding the PC-side enrollment secret AND the phone proving possession.
+  if (method === "POST" && url.pathname === "/v3/devices/approval-key/challenge") {
+    sendJson(res, 200, { ok: true, challenge: approvalKeyChallenges.issue(auth.deviceId) });
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/devices/approval-key") {
+    try {
+      const enrollToken = process.env.GATEWAY_ENROLL_TOKEN;
+      if (!enrollToken) {
+        sendJson(res, 401, { error: "unauthorized: key registration disabled (GATEWAY_ENROLL_TOKEN not set)" });
+        return;
+      }
+      const presentedRaw = req.headers["x-enroll-token"];
+      const presented = Buffer.from(typeof presentedRaw === "string" ? presentedRaw : "", "utf8");
+      const expected = Buffer.from(enrollToken, "utf8");
+      if (presented.length !== expected.length || !timingSafeEqual(presented, expected)) {
+        sendJson(res, 401, { error: "unauthorized: invalid enrollment token" });
+        return;
+      }
+      const raw = await readBody(req, 16 * 1024);
+      let body: any;
+      try {
+        body = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON" });
+        return;
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        sendJson(res, 400, { error: "body must be a JSON object" });
+        return;
+      }
+      const pubkeyB64 = typeof body.pubkey_b64 === "string" ? body.pubkey_b64 : "";
+      const challenge = typeof body.challenge === "string" ? body.challenge : "";
+      const signature = typeof body.signature_b64 === "string" ? body.signature_b64 : "";
+      const spki = new Uint8Array(Buffer.from(pubkeyB64, "base64"));
+      if (!pubkeyB64 || !parseP256Spki(spki)) {
+        sendJson(res, 400, { error: "pubkey_b64 must be an EC P-256 SPKI public key" });
+        return;
+      }
+      // Consumed even on failure so a challenge can never be retried.
+      if (!challenge || !approvalKeyChallenges.consume(auth.deviceId, challenge)) {
+        sendJson(res, 400, { error: "challenge missing, expired or already used" });
+        return;
+      }
+      if (!verifyEcSignature(spki, approvalKeyMessage(auth.deviceId, challenge), signature)) {
+        sendJson(res, 400, { error: "proof of possession failed" });
+        return;
+      }
+      if (!getDatabase().setDeviceApprovalKey(auth.deviceId, spki)) {
+        sendJson(res, 404, { error: "device not enrolled or revoked" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, device_id: auth.deviceId });
+    } catch (err) {
+      sendJson(res, 500, { error: "failed to register approval key", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
       const raw = await readBody(req, 64 * 1024);
@@ -1047,6 +1111,20 @@ export const server = createServer(async (req, res) => {
               error: "shadow mode: actuation disabled (set SHADOW=0 to allow approvals)",
               shadow_mode: true,
             });
+            return;
+          }
+          // Every approval must carry a fresh biometric signature from the key bound to THIS authenticated device.
+          const device = db.getDevice(auth.deviceId);
+          const verdict = verifyApprovalAttestation(
+            biometricAttestation,
+            { deviceId: auth.deviceId, proposalId, nonce, action },
+            device && !device.revoked_at ? device.pubkey_spki : null,
+            Boolean(device?.key_attested),
+          );
+          if (!verdict.ok) {
+            // 428/422 (not 403): the phone treats 403 as a consumed proposal, but this is retryable once a key is registered.
+            const noKey = verdict.reason === "device has no registered approval key";
+            sendJson(res, noKey ? 428 : 422, { ok: false, error: `biometric attestation rejected: ${verdict.reason}` });
             return;
           }
         } catch {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canonicalJsonStringify, delegateUpstream, forwardApprove, isDelegateEnvelope, localNodes, loopbackBase, parseDelegateEnvelope } from "./network.js";
+import { canonicalJsonStringify, delegateUpstream, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, loopbackBase, parseDelegateEnvelope } from "./network.js";
 import { MISHMASH_LAUNCH } from "./mishmash-nodes.js";
 
 test("delegation targets stay on this PC", () => {
@@ -136,4 +136,18 @@ test("canonicalJsonStringify recursively sorts keys at all depths", () => {
     canonicalJsonStringify(nested),
     '{"a":[3,{"x":10,"y":20}],"z":{"a":1,"b":2}}',
   );
+});
+
+test("forwardDelegate sends TRIAD_SERVER_TOKEN only to the triad", async () => {
+  const seen: Array<{ url: string; auth: string | null }> = [];
+  const fakeFetch = (async (url: URL | string, init?: RequestInit) => {
+    seen.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const env = { TRIAD_SERVER_TOKEN: "triad-secret" } as NodeJS.ProcessEnv;
+  const base = { v: 1 as const, id: "env-12345678", from: "x-client", capability: "intent", action: "review", payload: {} };
+  await forwardDelegate({ ...base, to: "autonomous-triad" }, env, fakeFetch);
+  await forwardDelegate({ ...base, to: "pieces-for-all" }, env, fakeFetch);
+  assert.equal(seen[0].auth, "Bearer triad-secret");
+  assert.equal(seen[1].auth, null);
 });

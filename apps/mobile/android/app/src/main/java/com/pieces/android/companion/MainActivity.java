@@ -11,6 +11,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(TextEmbedderPlugin.class);
         registerPlugin(NotificationPlugin.class);
         registerPlugin(SmsPlugin.class);
+        registerPlugin(ApprovalKeyPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

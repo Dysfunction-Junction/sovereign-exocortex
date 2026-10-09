@@ -479,8 +479,30 @@ class TestTriadServer(unittest.TestCase):
         self.assertEqual(body["from"], "autonomous-triad")
         self.assertIn("intent", body["result"])
 
+    def _post_authed(self, path: str, payload: dict):
+        return self._post(path, payload, {"Authorization": "Bearer token-xyz"})
+
+    def test_mishmash_delegate_approve_reject_fail_closed_without_server_token(self):
+        for action, extra in (("approve", {"nonce": "nonce_123"}), ("reject", {})):
+            with patch("triad.server.SERVER_TOKEN", ""):
+                status, _, body = self._post("/mishmash/delegate", {
+                    "v": 1,
+                    "id": "test-env-notoken",
+                    "from": "test-client",
+                    "to": "autonomous-triad",
+                    "capability": "intent",
+                    "action": action,
+                    "payload": {"proposal_id": "prop_123", **extra},
+                })
+                self.assertEqual(status, 401, action)
+                self.assertFalse(body.get("ok"))
+
     def test_mishmash_delegate_classify_and_risk_gating(self):
-        status, _, body = self._post("/mishmash/delegate", {
+        # Delegated approve/reject require TRIAD_SERVER_TOKEN; the helper sends it.
+        patcher = patch("triad.server.SERVER_TOKEN", "token-xyz")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0001",
             "from": "test-client",
@@ -493,7 +515,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertTrue(body.get("ok"))
         self.assertEqual(body.get("result", {}).get("status"), "ok")
 
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0002",
             "from": "test-client",
@@ -509,7 +531,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertFalse(res.get("approval_required"))
         self.assertFalse(res.get("requires_biometric"))
 
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0003",
             "from": "test-client",
@@ -526,7 +548,7 @@ class TestTriadServer(unittest.TestCase):
         self.assertTrue(res.get("requires_biometric"))
 
         # Test delegate action approve missing args -> 400
-        status, _, body = self._post("/mishmash/delegate", {
+        status, _, body = self._post_authed("/mishmash/delegate", {
             "v": 1,
             "id": "test-env-0004",
             "from": "test-client",
@@ -557,7 +579,7 @@ class TestTriadServer(unittest.TestCase):
         mock_del_resp.read.return_value = json.dumps({"ok": True, "result": {"status": "released"}}).encode("utf-8")
         mock_del_resp.__enter__.return_value = mock_del_resp
         with patch("triad.server._OPENER.open", return_value=mock_del_resp):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0005",
                 "from": "test-client",
@@ -589,7 +611,7 @@ class TestTriadServer(unittest.TestCase):
         mock_del_purge.read.return_value = json.dumps({"ok": True, "result": {"status": "purged"}}).encode("utf-8")
         mock_del_purge.__enter__.return_value = mock_del_purge
         with patch("triad.server._OPENER.open", return_value=mock_del_purge):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0006",
                 "from": "test-client",
@@ -605,7 +627,7 @@ class TestTriadServer(unittest.TestCase):
 
         # Test delegate action reject with upstream failure -> 502
         with patch("triad.server._OPENER.open", side_effect=ConnectionRefusedError("connection refused")):
-            status, _, body = self._post("/mishmash/delegate", {
+            status, _, body = self._post_authed("/mishmash/delegate", {
                 "v": 1,
                 "id": "test-env-0007",
                 "from": "test-client",

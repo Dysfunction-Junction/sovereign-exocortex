@@ -268,11 +268,8 @@ export interface ProposalApprovalPayload {
   nonce: string;
   action?: "approve" | "reject";
   reason?: string;
-  biometricAttestation?: {
-    method: "strongbox_biometric" | "fingerprint" | "face" | "passcode";
-    timestamp: string;
-    signature?: string;
-  };
+  /** Device-bound signature from the Keystore approval key (see approvalKey.ts). */
+  biometricAttestation?: { v: 1; method: "biometric"; ts: number; sig: string };
 }
 
 export interface ProposalApprovalResult {
@@ -310,6 +307,28 @@ export async function submitProposalApproval(
     };
   }
   return body as ProposalApprovalResult;
+}
+
+export async function postApprovalKeyChallenge(): Promise<string> {
+  const res = await authedFetch("/v3/devices/approval-key/challenge", { method: "POST" });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || typeof body?.challenge !== "string") throw new Error(body?.error || `HTTP ${res.status}`);
+  return body.challenge;
+}
+
+export async function postApprovalKey(
+  payload: { pubkey_b64: string; challenge: string; signature_b64: string },
+  enrollToken: string
+): Promise<void> {
+  const res = await authedFetch("/v3/devices/approval-key", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Enroll-Token": enrollToken },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error || `HTTP ${res.status}`);
+  }
 }
 
 export interface NetworkMapNode {

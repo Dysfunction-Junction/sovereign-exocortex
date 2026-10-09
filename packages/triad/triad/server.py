@@ -873,7 +873,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             return
 
         if action == "approve":
-            if SERVER_TOKEN and not self._is_authorized():
+            if not SERVER_TOKEN or not self._is_authorized():
                 self._send_json(401, {
                     "v": 1,
                     "inReplyTo": envelope_id,
@@ -909,7 +909,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             return
 
         if action == "reject":
-            if SERVER_TOKEN and not self._is_authorized():
+            if not SERVER_TOKEN or not self._is_authorized():
                 self._send_json(401, {
                     "v": 1,
                     "inReplyTo": envelope_id,

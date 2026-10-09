@@ -34,10 +34,8 @@ export default function BiometricApprovalModal() {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await proposalManager.approve(active.proposalId, {
-        biometricMethod: active.requiresBiometric ? "fingerprint" : undefined,
-      });
-      if (!res.ok) {
+      const res = await proposalManager.approve(active.proposalId);
+      if (!res.ok && res.status !== "cancelled") {
         setError(res.error || res.status || "Approval failed");
       }
     } catch (err) {

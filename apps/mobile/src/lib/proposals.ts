@@ -1,3 +1,4 @@
+import { ApprovalUnavailableError, signApproval, type ApprovalAttestation } from "./approvalKey";
 import { submitProposalApproval, submitShadowLabel, type ProposalApprovalResult } from "./api";
 
 export interface IncomingProposal {
@@ -56,7 +57,7 @@ class ProposalManager {
 
   public async approve(
     proposalId: string,
-    options?: { reason?: string; biometricMethod?: "strongbox_biometric" | "fingerprint" | "face" | "passcode" }
+    options?: { reason?: string }
   ): Promise<ProposalApprovalResult> {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
@@ -79,14 +80,21 @@ class ProposalManager {
     item.state = "in_flight";
     this.notify();
 
-    const timestamp = new Date().toISOString();
-    const attestation = item.requiresBiometric
-      ? {
-          method: options?.biometricMethod ?? ("fingerprint" as const),
-          timestamp,
-          signature: `attest_sig_${item.proposalId}_${Date.now()}`,
-        }
-      : undefined;
+    // Every approval is signed by the device-bound Keystore key after a fresh biometric. There is no
+    // fallback: if the plugin is missing, the key is unregistered, or the user cancels, nothing is sent.
+    let attestation: ApprovalAttestation;
+    try {
+      attestation = await signApproval({ proposalId: item.proposalId, nonce: item.approvalNonce, action: "approve" });
+    } catch (err) {
+      item.state = "pending"; // allow retry
+      this.notify();
+      const cancelled = err instanceof ApprovalUnavailableError && err.code === "CANCELLED";
+      return {
+        ok: false,
+        status: cancelled ? "cancelled" : "biometric_unavailable",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
 
     let result: ProposalApprovalResult;
     try {

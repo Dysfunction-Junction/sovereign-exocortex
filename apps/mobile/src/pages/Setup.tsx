@@ -13,6 +13,7 @@ import {
 import { checkProxyHealth, getStatus, HomeNodeUnreachableError } from "../lib/api";
 import { recordEvent, classifyMode } from "../lib/usage";
 import { flushUsageEvents } from "../lib/flush";
+import { registerApprovalKey } from "../lib/approvalKey";
 import { parseConnectionQrPayload } from "../lib/connectionQr";
 import { decodeJwtForDisplay, formatExpiry } from "../lib/jwtDisplay";
 import {
@@ -55,6 +56,9 @@ export default function Setup() {
   const [contactFilter, setContactFilter] = useState("");
   const [smsAllow, setSmsAllow] = useState<Set<string>>(new Set());
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [enrollToken, setEnrollToken] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyMsg, setKeyMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -322,6 +326,20 @@ export default function Setup() {
     flushUsageEvents();
   }
 
+  async function handleRegisterApprovalKey() {
+    setKeyBusy(true);
+    setKeyMsg(null);
+    try {
+      await registerApprovalKey(enrollToken);
+      setEnrollToken("");
+      setKeyMsg("Approval key registered. Approvals now require your biometric.");
+    } catch (err) {
+      setKeyMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -426,6 +444,32 @@ export default function Setup() {
             );
           })()}
         </div>
+      </div>
+
+      <div className="input-group" style={{ marginTop: 18 }}>
+        <label className="input-label">Approval key (biometric)</label>
+        <input
+          type="password"
+          placeholder="Enrollment token (from your PC)"
+          value={enrollToken}
+          onChange={(e) => setEnrollToken(e.target.value)}
+        />
+        <button
+          className="secondary"
+          onClick={handleRegisterApprovalKey}
+          disabled={keyBusy || !enrollToken.trim()}
+          style={{ width: "100%", marginTop: 8 }}
+        >
+          {keyBusy ? "Registering…" : "Register approval key"}
+        </button>
+        {keyMsg && (
+          <p className="setup-note hint" style={{ fontSize: 12, margin: "6px 0 0" }}>
+            {keyMsg}
+          </p>
+        )}
+        <p className="setup-note hint" style={{ fontSize: 12, margin: "6px 0 0" }}>
+          Required once per phone (and again after changing enrolled fingerprints). Approvals are refused until this is done.
+        </p>
       </div>
 
       <div style={{ marginTop: 18 }}>

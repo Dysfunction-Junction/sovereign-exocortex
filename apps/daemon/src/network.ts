@@ -92,7 +92,13 @@ export async function forwardDelegate(
   try {
     const delegated = await fetchImpl(new URL("/mishmash/delegate", upstream), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // The triad refuses delegated approve/reject without its server token.
+        ...(envelope.to === "autonomous-triad" && env.TRIAD_SERVER_TOKEN
+          ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` }
+          : {}),
+      },
       body: JSON.stringify(envelope),
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
