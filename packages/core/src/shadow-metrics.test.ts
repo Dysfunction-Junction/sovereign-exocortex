@@ -1,0 +1,214 @@
+import { describe, it, expect } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import {
+  computeShadowMetrics,
+  formatShadowReport,
+  loadShadowRows,
+  type ShadowRow,
+} from "./shadow-metrics.js";
+
+const DAY = 86_400_000;
+const NOW = 1_800_000_000_000;
+const OPTS = { nowMs: NOW, minLabels: 20 };
+
+function row({ id, ...over }: Partial<ShadowRow> & { id: string }): ShadowRow {
+  return {
+    proposal_id: id,
+    shadow: 1,
+    decision: "SURFACE",
+    mode: "MAINTENANCE",
+    gate_ts: NOW - DAY,
+    label: null,
+    label_source: null,
+    ...over,
+  };
+}
+
+function rows(spec: Record<string, number>): ShadowRow[] {
+  const out: ShadowRow[] = [];
+  let i = 0;
+  for (const [label, n] of Object.entries(spec)) {
+    for (let k = 0; k < n; k++) {
+      out.push(
+        row({
+          id: `p${i++}`,
+          label: label === "none" ? null : (label as ShadowRow["label"]),
+        }),
+      );
+    }
+  }
+  return out;
+}
+
+describe("computeShadowMetrics", () => {
+  it("computes precision, coverage and counts", () => {
+    const m = computeShadowMetrics(rows({ wanted: 18, not_wanted: 2, ignored: 5, already_did: 3, none: 2 }), OPTS);
+    expect(m.surfaced).toBe(30);
+    expect(m.wanted).toBe(18);
+    expect(m.notWanted).toBe(2);
+    expect(m.precision).toBeCloseTo(0.9, 10);
+    expect(m.pessimisticPrecision).toBeCloseTo(18 / 25, 10);
+    expect(m.coverage).toBeCloseTo(20 / 30, 10);
+    expect(m.unlabeled).toBe(2);
+    expect(m.verdict).toBe("pass");
+    expect(m.breakerTripped).toBe(false);
+  });
+
+  it("returns null precision and insufficient_data with no tapped labels", () => {
+    const m = computeShadowMetrics(rows({ ignored: 4 }), OPTS);
+    expect(m.precision).toBeNull();
+    expect(m.wilsonLower).toBeNull();
+    expect(m.verdict).toBe("insufficient_data");
+    expect(m.breakerTripped).toBe(false);
+  });
+
+  it("reports insufficient_data below minLabels even if precision is perfect", () => {
+    const m = computeShadowMetrics(rows({ wanted: 5 }), OPTS);
+    expect(m.precision).toBe(1);
+    expect(m.verdict).toBe("insufficient_data");
+  });
+
+  it("fails and trips breaker when precision is below threshold with enough labels", () => {
+    const m = computeShadowMetrics(rows({ wanted: 15, not_wanted: 10 }), OPTS);
+    expect(m.precision).toBeCloseTo(0.6, 10);
+    expect(m.verdict).toBe("fail");
+    expect(m.breakerTripped).toBe(true);
+  });
+
+  it("wilson lower bound is below the point estimate", () => {
+    const m = computeShadowMetrics(rows({ wanted: 18, not_wanted: 2 }), OPTS);
+    expect(m.wilsonLower!).toBeGreaterThan(0.68);
+    expect(m.wilsonLower!).toBeLessThan(0.9);
+  });
+
+  it("excludes rows outside the window, non-shadow rows and non-SURFACE rows", () => {
+    const data = [
+      ...rows({ wanted: 20 }),
+      row({ id: "old", label: "not_wanted", gate_ts: NOW - 15 * DAY }),
+      row({ id: "live", label: "not_wanted", shadow: 0 }),
+      row({ id: "queued", label: "not_wanted", decision: "QUEUE" }),
+    ];
+    const m = computeShadowMetrics(data, OPTS);
+    expect(m.surfaced).toBe(20);
+    expect(m.precision).toBe(1);
+  });
+
+  it("counts focus regret from SURFACE rows in DEEP_FOCUS", () => {
+    const data = [
+      row({ id: "a", mode: "DEEP_FOCUS" }),
+      row({ id: "b", mode: "DEEP_FOCUS", decision: "QUEUE" }),
+      row({ id: "c" }),
+    ];
+    expect(computeShadowMetrics(data, OPTS).focusRegret).toBe(1);
+  });
+
+  it("splits label sources and honours explicit source", () => {
+    const data = [
+      row({ id: "a", label: "wanted", label_source: "tap" }),
+      row({ id: "b", label: "ignored", label_source: "inferred" }),
+      row({ id: "c", label: "wanted", label_source: "inferred" }),
+    ];
+    const m = computeShadowMetrics(data, OPTS);
+    expect(m.tapped).toBe(1);
+    expect(m.inferred).toBe(2);
+  });
+
+  it("flags heuristic_scorer when the baseline is not beaten", () => {
+    const data = rows({ wanted: 23, not_wanted: 2 });
+    const m = computeShadowMetrics(data, { ...OPTS, baselinePrecision: 0.95 });
+    expect(m.baselineGap).toBeCloseTo(0.92 - 0.95, 10);
+    expect(m.verdict).toBe("heuristic_scorer");
+    const ok = computeShadowMetrics(data, { ...OPTS, baselinePrecision: 0.7 });
+    expect(ok.baselineGap).toBeCloseTo(0.22, 10);
+    expect(ok.verdict).toBe("pass");
+  });
+
+  it("uses only the latest gate decision per proposal and collapses duplicates", () => {
+    const data = [
+      row({ id: "x", decision: "SURFACE", gate_ts: NOW - 2 * DAY, label: "wanted" }),
+      row({ id: "x", decision: "QUEUE", gate_ts: NOW - DAY }),
+      row({ id: "y", decision: "SURFACE", gate_ts: NOW - DAY, label: "wanted" }),
+      row({ id: "y", decision: "SURFACE", gate_ts: NOW - DAY, label: "wanted" }),
+    ];
+    expect(computeShadowMetrics(data, OPTS).surfaced).toBe(1);
+  });
+
+  it("pins window boundaries: excludes gate_ts == since, includes gate_ts == now", () => {
+    const data = [
+      row({ id: "edge-old", gate_ts: NOW - 14 * DAY, label: "wanted" }),
+      row({ id: "edge-now", gate_ts: NOW, label: "wanted" }),
+    ];
+    expect(computeShadowMetrics(data, OPTS).surfaced).toBe(1);
+  });
+
+  it("keeps a failing system failing even when it also loses to the baseline", () => {
+    const m = computeShadowMetrics(rows({ wanted: 15, not_wanted: 10 }), { ...OPTS, baselinePrecision: 0.7 });
+    expect(m.verdict).toBe("fail");
+    expect(m.breakerTripped).toBe(true);
+  });
+
+  it("excludes inferred wanted/not_wanted from precision", () => {
+    const data = [
+      ...rows({ wanted: 18, not_wanted: 2 }),
+      ...Array.from({ length: 30 }, (_, i) => row({ id: `inf${i}`, label: "wanted", label_source: "inferred" })),
+    ];
+    const m = computeShadowMetrics(data, OPTS);
+    expect(m.precision).toBeCloseTo(0.9, 10);
+    expect(m.inferredDecided).toBe(30);
+    expect(m.wanted + m.notWanted + m.alreadyDid + m.ignored + m.unlabeled + m.inferredDecided).toBe(m.surfaced);
+  });
+
+  it("defaults minLabels to 50", () => {
+    const m = computeShadowMetrics(rows({ wanted: 30 }), { nowMs: NOW });
+    expect(m.verdict).toBe("insufficient_data");
+  });
+
+  it("pins the Wilson lower bound for 18/20", () => {
+    const m = computeShadowMetrics(rows({ wanted: 18, not_wanted: 2 }), OPTS);
+    expect(m.wilsonLower!).toBeCloseTo(0.699, 2);
+  });
+});
+
+describe("loadShadowRows + formatShadowReport (sqlite)", () => {
+  it("loads latest gate decision joined with labels, read-only", () => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    raw.exec("PRAGMA foreign_keys = OFF");
+    raw.exec(`
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p1',1,'PRAGMATIC',1,'s','{}',x'01',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','QUEUE','r',${NOW - 2 * DAY});
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','DEEP_FOCUS','SURFACE','r',${NOW - DAY});
+      INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
+    `);
+    const loaded = loadShadowRows(raw);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({
+      proposal_id: "p1",
+      decision: "SURFACE",
+      mode: "DEEP_FOCUS",
+      label: "wanted",
+      label_source: "tap",
+    });
+    expect(() => raw.exec("DELETE FROM proposals")).toThrow();
+    const m = computeShadowMetrics(loaded, OPTS);
+    const text = formatShadowReport(m);
+    expect(text).toContain("Precision@surface");
+    expect(text).toContain("insufficient_data");
+  });
+
+  it("rejects unknown label values instead of dropping them from the accounting", () => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    raw.exec("PRAGMA foreign_keys = OFF");
+    raw.exec("PRAGMA ignore_check_constraints = ON");
+    raw.exec(`
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p1',1,'PRAGMATIC',1,'s','{}',x'01',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','SURFACE','r',${NOW});
+      INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','bogus',NULL,NULL,${NOW});
+    `);
+    expect(() => loadShadowRows(raw)).toThrow(/unknown label/);
+  });
+});
