@@ -11,6 +11,12 @@ import {
   stateDirectory,
 } from "./security.js";
 
+import {
+  WindowsHelloUnavailableError,
+  openInDefaultBrowserWindows,
+  windowsHelloDialog,
+} from "./windows-hello.js";
+
 const execFileAsync = promisify(execFile);
 
 // MESH[2026-07-25T20:41Z][agent:claude-builder][direction:user/1]
@@ -77,6 +83,13 @@ export interface HumanApprovalOptions {
   dialog?: (input: ApprovalDialogInput) => Promise<ApprovalChoice>;
   /** Injected in tests so no browser is ever opened. */
   openDetails?: (path: string) => Promise<void>;
+  /**
+   * Open the read-only detail page BEFORE the first prompt. Defaults to true on Windows, where the
+   * Hello prompt cannot show a details button or the full request. Never grants approval.
+   */
+  presentDetailsFirst?: boolean;
+  /** Overrides process.platform so tests can exercise the Windows flow anywhere. */
+  platform?: NodeJS.Platform;
   now?: () => number;
 }
 
@@ -522,8 +535,8 @@ ${parts.join("\n")}
 <footer>
 <p>This page cannot approve anything. It is a local file written with owner-only
 permissions and deleted once you decide.</p>
-<p>Approve or cancel in the macOS approval dialog, which is the only authorization
-surface a delegated agent cannot reach.</p>
+<p>Approve or cancel in the approval prompt (the macOS dialog, or Windows Hello on
+Windows), which is the only authorization surface a delegated agent cannot reach.</p>
 </footer>
 </main>
 </body>
@@ -593,12 +606,17 @@ export async function requireHumanApproval(
   options: HumanApprovalOptions = {},
 ): Promise<void> {
   const normalized = normalizeApprovalRequest(request);
-  const dialog = options.dialog ?? osascriptDialog;
-  const openDetails = options.openDetails ?? openInDefaultBrowser;
+  const platform = options.platform ?? process.platform;
+  const windowsFlow = platform === "win32";
+  const dialog = options.dialog ?? (windowsFlow ? windowsHelloDialog : osascriptDialog);
+  const openDetails =
+    options.openDetails ?? (windowsFlow ? openInDefaultBrowserWindows : openInDefaultBrowser);
   const now = options.now ?? Date.now;
-  if (!options.dialog && process.platform !== "darwin") {
+  if (!options.dialog && platform !== "darwin" && platform !== "win32") {
     throw new Error("This destructive operation requires an out-of-band human approval UI.");
   }
+  // Default only for the real Hello prompt; an injected dialog keeps the macOS-style flow unless asked.
+  const detailsFirst = options.presentDetailsFirst ?? (windowsFlow && !options.dialog);
   const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 120_000, 5_000), 300_000);
   const startedAt = now();
   const deadline = startedAt + timeoutMs;
@@ -608,9 +626,26 @@ export async function requireHumanApproval(
   };
   const baseText = dialogTextFor(normalized);
   let text = baseText;
-  let detailBudget = MAX_DETAIL_VIEWS;
+  // Windows Hello has no "Open details" button, so the page is shown first and the prompt never offers it.
+  let detailBudget = detailsFirst && windowsFlow ? 0 : MAX_DETAIL_VIEWS;
   let detailPage: string | null = null;
   try {
+    if (detailsFirst) {
+      try {
+        detailPage = await writeDetailPage(normalized, metadata);
+        await openDetails(detailPage);
+      } catch (error) {
+        // The Windows prompt cannot carry the full request, so approving without the page is blind.
+        if (windowsFlow) throw error;
+        const reason = safeLine(error instanceof Error ? error.message : String(error), 200);
+        text = clampText(
+          `${baseText}
+
+The detail page could not be opened: ${reason}`,
+          MAX_DIALOG_CHARACTERS,
+        );
+      }
+    }
     // Bounded: one initial presentation plus at most MAX_DETAIL_VIEWS re-presentations.
     for (let round = 0; round <= MAX_DETAIL_VIEWS; round += 1) {
       const remainingMs = deadline - now();
@@ -645,6 +680,9 @@ export async function requireHumanApproval(
   } catch (error) {
     if (error instanceof Error && error.message === "Human approval was not granted.") {
       throw error;
+    }
+    if (error instanceof WindowsHelloUnavailableError) {
+      throw new Error(`Human approval is unavailable: ${error.message}`);
     }
     throw new Error("Human approval was cancelled, timed out, or unavailable.");
   } finally {
