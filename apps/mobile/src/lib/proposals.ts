@@ -1,4 +1,4 @@
-import { submitProposalApproval, type ProposalApprovalResult } from "./api";
+import { submitProposalApproval, submitShadowLabel, type ProposalApprovalResult } from "./api";
 
 export interface IncomingProposal {
   proposalId: string;
@@ -106,6 +106,7 @@ class ProposalManager {
     if (result.ok) {
       item.state = "consumed";
       item.consumedAt = Date.now();
+      submitShadowLabel(item.proposalId, "wanted", { source: "tap" }).catch(() => {});
     } else {
       // If rejected upstream as expired or nonce mismatch, lock terminal state
       if (result.upstream_status === 404) item.state = "expired";
@@ -136,6 +137,7 @@ class ProposalManager {
 
     item.state = "rejected";
     item.consumedAt = Date.now();
+    submitShadowLabel(item.proposalId, "not_wanted", { source: "tap" }).catch(() => {});
     this.notify();
     return result;
   }

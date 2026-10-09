@@ -8,7 +8,7 @@ import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import type { IngestReq, DeviceRecord } from "@exocortex/core";
+import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
 
 
@@ -135,6 +135,77 @@ function ensureShadowRecorder(): void {
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();
   }
+}
+
+/**
+ * Validates and atomically records a ground-truth shadow label to both the shadow_labels
+ * table and the immutable hash-chained event log. Authoritatively enforces source placement.
+ */
+function applyShadowLabel(
+  db: ExocortexDatabase,
+  deviceId: string,
+  params: {
+    proposalId: string;
+    label: ShadowLabel;
+    source: "tap" | "inferred";
+    actual?: unknown;
+    latencyMs?: number | null;
+  }
+): { proposalId: string; label: ShadowLabel; source: string; recordedAt: number } {
+  const proposal = db.getProposal(params.proposalId);
+  if (!proposal) {
+    throw new Error(`proposal not found: ${params.proposalId}`);
+  }
+
+  let sanitizedActual: Record<string, unknown> = {};
+  if (params.actual && typeof params.actual === "object" && !Array.isArray(params.actual)) {
+    sanitizedActual = { ...(params.actual as Record<string, unknown>) };
+  } else if (params.actual !== undefined && params.actual !== null) {
+    sanitizedActual = { actual: String(params.actual) };
+  }
+  // Enforce authoritative source placement (cannot be overridden by caller's actual object)
+  sanitizedActual.source = params.source;
+  const actualStr = JSON.stringify(sanitizedActual);
+
+  const now = Date.now();
+  const latencyMs = Number.isSafeInteger(params.latencyMs) && (params.latencyMs as number) >= 0
+    ? (params.latencyMs as number)
+    : null;
+
+  db.withTransaction(() => {
+    db.recordShadowLabel({
+      proposal_id: params.proposalId,
+      label: params.label,
+      actual: actualStr,
+      latency_ms: latencyMs,
+      ts: now,
+    });
+
+    const eventId = `label:${params.proposalId}:${now}:${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      db.ingestEvent(deviceId, {
+        event_id: eventId,
+        kind: "label",
+        ts_device: now,
+        schema_ver: 1,
+        payload: {
+          proposal_id: params.proposalId,
+          label: params.label,
+          source: params.source,
+          latency_ms: latencyMs,
+        },
+      });
+    } catch {
+      // If host or device does not have telemetry:write, label row was still persisted atomically
+    }
+  });
+
+  return {
+    proposalId: params.proposalId,
+    label: params.label,
+    source: params.source,
+    recordedAt: now,
+  };
 }
 
 export const server = createServer(async (req, res) => {
@@ -367,6 +438,27 @@ export const server = createServer(async (req, res) => {
           defaultWorldModelHost.onEventsAppended(result.events, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
+        }
+
+        // Synchronize any shadow label events into shadow_labels table
+        for (const ev of result.events) {
+          if (ev.kind === "label") {
+            try {
+              const payload = JSON.parse(ev.payload);
+              if (payload?.proposal_id && isShadowLabel(payload?.label)) {
+                const source = payload.source === "inferred" ? "inferred" : "tap";
+                applyShadowLabel(db, auth.deviceId, {
+                  proposalId: String(payload.proposal_id),
+                  label: payload.label,
+                  source,
+                  actual: payload.actual,
+                  latencyMs: payload.latency_ms,
+                });
+              }
+            } catch {
+              // Non-fatal label sync
+            }
+          }
         }
       }
       sendJson(res, 200, {
@@ -643,6 +735,178 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  // --- Shadow Calibration Engine & Rollback Circuit Breaker ---
+
+  if (method === "GET" && url.pathname === "/v3/shadow/metrics") {
+    try {
+      const db = getDatabase();
+      const callingDev = db.getDevice(auth.deviceId);
+      if (!callingDev || callingDev.revoked_at !== null) {
+        sendJson(res, 403, { error: `caller device not enrolled or revoked: ${auth.deviceId}` });
+        return;
+      }
+
+      // Query params
+      const daysParam = url.searchParams.get("days") ?? url.searchParams.get("window_days");
+      let windowDays = 14;
+      if (daysParam !== null) {
+        if (!/^\d+$/.test(daysParam)) {
+          sendJson(res, 400, { error: "days must be a positive integer" });
+          return;
+        }
+        windowDays = Number(daysParam);
+        if (windowDays < 1 || windowDays > 365) {
+          sendJson(res, 400, { error: "days must be between 1 and 365" });
+          return;
+        }
+      }
+
+      const thresholdParam = url.searchParams.get("threshold");
+      let threshold = 0.90;
+      if (thresholdParam !== null) {
+        const parsed = Number(thresholdParam);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+          sendJson(res, 400, { error: "threshold must be a number between 0 and 1" });
+          return;
+        }
+        threshold = parsed;
+      }
+
+      const minLabelsParam = url.searchParams.get("min_labels");
+      let minLabels = 50;
+      if (minLabelsParam !== null) {
+        if (!/^\d+$/.test(minLabelsParam)) {
+          sendJson(res, 400, { error: "min_labels must be a positive integer" });
+          return;
+        }
+        minLabels = Number(minLabelsParam);
+        if (minLabels < 1 || minLabels > 10000) {
+          sendJson(res, 400, { error: "min_labels must be between 1 and 10000" });
+          return;
+        }
+      }
+
+      const baselineParam = url.searchParams.get("baseline_precision");
+      let baselinePrecision: number | undefined;
+      if (baselineParam !== null) {
+        const parsed = Number(baselineParam);
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+          sendJson(res, 400, { error: "baseline_precision must be a number between 0 and 1" });
+          return;
+        }
+        baselinePrecision = parsed;
+      }
+
+      const metrics = db.getShadowMetrics({
+        nowMs: Date.now(),
+        windowDays,
+        threshold,
+        minLabels,
+        baselinePrecision,
+      });
+
+      const canonicalBreakerTripped = db.isCircuitBreakerTripped();
+
+      sendJson(res, 200, {
+        ok: true,
+        metrics,
+        automated_verdict: metrics.automatedVerdict,
+        breaker_tripped: metrics.breakerTripped,
+        canonical_breaker_tripped: canonicalBreakerTripped,
+        effective_shadow: process.env.SHADOW !== "0" || canonicalBreakerTripped,
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to compute shadow metrics",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/shadow/labels") {
+    try {
+      const db = getDatabase();
+      const callingDev = db.getDevice(auth.deviceId);
+      if (!callingDev || callingDev.revoked_at !== null) {
+        sendJson(res, 403, { error: `caller device not enrolled or revoked: ${auth.deviceId}` });
+        return;
+      }
+
+      const raw = await readBody(req, 64 * 1024);
+      let payloadObj: {
+        proposal_id?: string;
+        label?: string;
+        source?: string;
+        latency_ms?: number;
+        actual?: unknown;
+      } = {};
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          sendJson(res, 400, { error: "invalid JSON body: payload must be a plain JSON object" });
+          return;
+        }
+        payloadObj = parsed;
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+
+      const proposalId = String(payloadObj.proposal_id ?? "").trim();
+      if (!proposalId) {
+        sendJson(res, 400, { error: "proposal_id is required" });
+        return;
+      }
+
+      const rawLabel = String(payloadObj.label ?? "").trim();
+      if (!isShadowLabel(rawLabel)) {
+        sendJson(res, 400, { error: `invalid label: must be one of wanted, not_wanted, already_did, ignored` });
+        return;
+      }
+      const label = rawLabel;
+
+      const source = payloadObj.source === "inferred" ? "inferred" : "tap";
+
+      let latencyMs: number | null = null;
+      if (payloadObj.latency_ms !== undefined) {
+        if (!Number.isSafeInteger(payloadObj.latency_ms) || (payloadObj.latency_ms as number) < 0) {
+          sendJson(res, 400, { error: "latency_ms must be a non-negative integer" });
+          return;
+        }
+        latencyMs = payloadObj.latency_ms as number;
+      }
+
+      const proposal = db.getProposal(proposalId);
+      if (!proposal) {
+        sendJson(res, 404, { error: `proposal not found: ${proposalId}` });
+        return;
+      }
+
+      const result = applyShadowLabel(db, auth.deviceId, {
+        proposalId,
+        label,
+        source,
+        actual: payloadObj.actual,
+        latencyMs,
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        proposal_id: result.proposalId,
+        label: result.label,
+        source: result.source,
+        recorded_at: result.recordedAt,
+      });
+    } catch (err) {
+      sendJson(res, 500, {
+        error: "failed to record shadow label",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
 
 
   if (method === "POST" && url.pathname === "/network/delegate") {
@@ -738,6 +1002,23 @@ export const server = createServer(async (req, res) => {
       if (action === "approve" && !nonce) {
         sendJson(res, 400, { error: "nonce is required for approval" });
         return;
+      }
+
+      if (action === "approve") {
+        try {
+          const db = getDatabase();
+          if (db.isCircuitBreakerTripped()) {
+            sendJson(res, 423, {
+              ok: false,
+              error: "circuit breaker tripped: precision below threshold, actuation clamped to shadow mode",
+              automated_verdict: "BREAKER_TRIPPED_PRECISION_LOW",
+              breaker_tripped: true,
+            });
+            return;
+          }
+        } catch {
+          // If DB is uninitialized or unavailable, proceed
+        }
       }
 
       const outcome = await forwardApprove({ proposalId, nonce, reason, action, biometricAttestation });

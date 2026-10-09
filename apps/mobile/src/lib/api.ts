@@ -330,3 +330,62 @@ export async function getNetworkMap(): Promise<NetworkMapResult> {
   return res.json();
 }
 
+export type ShadowLabel = "wanted" | "not_wanted" | "already_did" | "ignored";
+
+export interface SubmitShadowLabelOptions {
+  source?: "tap" | "inferred";
+  latencyMs?: number;
+  actual?: unknown;
+}
+
+export async function submitShadowLabel(
+  proposalId: string,
+  label: ShadowLabel,
+  options?: SubmitShadowLabelOptions,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await authedFetch("/v3/shadow/labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proposal_id: proposalId,
+        label,
+        source: options?.source ?? "tap",
+        latency_ms: options?.latencyMs,
+        actual: options?.actual,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      return { ok: false, error: body?.error ?? `HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export interface ShadowMetricsQuery {
+  days?: number;
+  threshold?: number;
+  minLabels?: number;
+  baselinePrecision?: number;
+}
+
+export async function getShadowMetrics(query?: ShadowMetricsQuery): Promise<any> {
+  const params = new URLSearchParams();
+  if (query?.days) params.set("days", String(query.days));
+  if (query?.threshold !== undefined) params.set("threshold", String(query.threshold));
+  if (query?.minLabels !== undefined) params.set("min_labels", String(query.minLabels));
+  if (query?.baselinePrecision !== undefined) params.set("baseline_precision", String(query.baselinePrecision));
+
+  const qs = params.toString();
+  const url = `/v3/shadow/metrics${qs ? `?${qs}` : ""}`;
+  const res = await authedFetch(url);
+  if (!res.ok) {
+    throw new Error(`Shadow metrics fetch failed: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+

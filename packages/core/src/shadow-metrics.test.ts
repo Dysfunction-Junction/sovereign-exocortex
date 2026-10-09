@@ -182,7 +182,7 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
       INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','DEEP_FOCUS','SURFACE','r',${NOW - DAY});
       INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
     `);
-    const loaded = loadShadowRows(raw);
+    const loaded = loadShadowRows(raw, { restoreQueryOnly: false });
     expect(loaded).toHaveLength(1);
     expect(loaded[0]).toMatchObject({
       proposal_id: "p1",
@@ -196,6 +196,15 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
     const text = formatShadowReport(m);
     expect(text).toContain("Precision@surface");
     expect(text).toContain("insufficient_data");
+  });
+
+  it("by default restores query_only = OFF on read-write connections", () => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    const loaded = loadShadowRows(raw);
+    expect(loaded).toHaveLength(0);
+    // Writes should succeed because query_only was restored
+    expect(() => raw.exec("INSERT INTO devices(device_id, name, platform, pubkey_spki, scopes, enrolled_at) VALUES ('d1', 'n', 'android', x'01', '[]', 1)")).not.toThrow();
   });
 
   it("rejects unknown label values instead of dropping them from the accounting", () => {

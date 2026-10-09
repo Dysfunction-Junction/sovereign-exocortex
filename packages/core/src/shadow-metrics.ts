@@ -9,7 +9,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { GateDecisionAction, ShadowLabel } from "./schema-types.js";
 
-const LABELS: readonly ShadowLabel[] = ["wanted", "not_wanted", "already_did", "ignored"];
+export const SHADOW_LABELS: readonly ShadowLabel[] = ["wanted", "not_wanted", "already_did", "ignored"] as const;
+
+export function isShadowLabel(val: unknown): val is ShadowLabel {
+  return typeof val === "string" && (SHADOW_LABELS as readonly string[]).includes(val);
+}
 
 const DAY_MS = 86_400_000;
 const WILSON_Z = 1.96;
@@ -36,6 +40,25 @@ export interface ShadowMetricsOptions {
 
 export type ShadowVerdict = "insufficient_data" | "heuristic_scorer" | "pass" | "fail";
 
+export type AutomatedVerdict =
+  | "SUFFICIENT_DATA_PASS"
+  | "BREAKER_TRIPPED_PRECISION_LOW"
+  | "INSUFFICIENT_DATA"
+  | "HEURISTIC_SCORER";
+
+export function toAutomatedVerdict(verdict: ShadowVerdict): AutomatedVerdict {
+  switch (verdict) {
+    case "pass":
+      return "SUFFICIENT_DATA_PASS";
+    case "fail":
+      return "BREAKER_TRIPPED_PRECISION_LOW";
+    case "insufficient_data":
+      return "INSUFFICIENT_DATA";
+    case "heuristic_scorer":
+      return "HEURISTIC_SCORER";
+  }
+}
+
 export interface ShadowMetrics {
   windowDays: number;
   surfaced: number;
@@ -57,6 +80,7 @@ export interface ShadowMetrics {
   threshold: number;
   minLabels: number;
   verdict: ShadowVerdict;
+  automatedVerdict: AutomatedVerdict;
   breakerTripped: boolean;
 }
 
@@ -144,6 +168,7 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     threshold,
     minLabels,
     verdict,
+    automatedVerdict: toAutomatedVerdict(verdict),
     breakerTripped: verdict === "fail",
   };
 }
@@ -168,29 +193,44 @@ function parseSource(actual: string | null): LabelSource | null {
   }
 }
 
-export function loadShadowRows(db: DatabaseSync): ShadowRow[] {
-  db.exec("PRAGMA query_only = ON");
-  const raw = db
-    .prepare(
-      `WITH ranked AS (
-         SELECT g.proposal_id, g.mode, g.decision, g.ts,
-                ROW_NUMBER() OVER (PARTITION BY g.proposal_id ORDER BY g.ts DESC, g.rowid DESC) AS rn
-           FROM gate_decisions g
-       )
-       SELECT r.proposal_id AS proposal_id, p.shadow AS shadow, r.decision AS decision,
-              r.mode AS mode, r.ts AS gate_ts, l.label AS label, l.actual AS actual
-         FROM ranked r
-         JOIN proposals p ON p.proposal_id = r.proposal_id
-         LEFT JOIN shadow_labels l ON l.proposal_id = r.proposal_id
-        WHERE r.rn = 1 AND p.shadow = 1`,
-    )
-    .all() as unknown as RawShadowRow[];
-  return raw.map(({ actual, ...r }) => {
-    if (r.label !== null && !LABELS.includes(r.label)) {
-      throw new Error(`shadow_labels: unknown label "${String(r.label)}" for ${r.proposal_id}`);
+export interface LoadShadowRowsOptions {
+  restoreQueryOnly?: boolean;
+}
+
+export function loadShadowRows(db: DatabaseSync, options?: LoadShadowRowsOptions): ShadowRow[] {
+  const shouldRestore = options?.restoreQueryOnly ?? true;
+  const queryOnlyStmt = db.prepare("PRAGMA query_only");
+  const wasQueryOnly = Boolean((queryOnlyStmt.get() as { query_only?: number } | undefined)?.query_only);
+  if (!wasQueryOnly) {
+    db.exec("PRAGMA query_only = ON");
+  }
+  try {
+    const raw = db
+      .prepare(
+        `WITH ranked AS (
+           SELECT g.proposal_id, g.mode, g.decision, g.ts,
+                  ROW_NUMBER() OVER (PARTITION BY g.proposal_id ORDER BY g.ts DESC, g.rowid DESC) AS rn
+             FROM gate_decisions g
+         )
+         SELECT r.proposal_id AS proposal_id, p.shadow AS shadow, r.decision AS decision,
+                r.mode AS mode, r.ts AS gate_ts, l.label AS label, l.actual AS actual
+           FROM ranked r
+           JOIN proposals p ON p.proposal_id = r.proposal_id
+           LEFT JOIN shadow_labels l ON l.proposal_id = r.proposal_id
+          WHERE r.rn = 1 AND p.shadow = 1`,
+      )
+      .all() as unknown as RawShadowRow[];
+    return raw.map(({ actual, ...r }) => {
+      if (r.label !== null && !SHADOW_LABELS.includes(r.label)) {
+        throw new Error(`shadow_labels: unknown label "${String(r.label)}" for ${r.proposal_id}`);
+      }
+      return { ...r, label_source: parseSource(actual) };
+    });
+  } finally {
+    if (shouldRestore && !wasQueryOnly) {
+      db.exec("PRAGMA query_only = OFF");
     }
-    return { ...r, label_source: parseSource(actual) };
-  });
+  }
 }
 
 function pct(v: number | null): string {

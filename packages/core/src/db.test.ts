@@ -311,5 +311,77 @@ describe("ExocortexDatabase (v3 SQLite Event Store Driver)", () => {
     expect(laptopEvents.length).toBe(1);
     expect(laptopEvents[0].event_id).toBe("evt_laptop_1");
   });
+
+  it("loads shadow rows and computes shadow metrics with circuit breaker evaluation", () => {
+    const now = Date.now();
+    const ev = db.ingestEvent("dev_phone_galaxy", {
+      event_id: "evt_for_shadow_props",
+      kind: "observation",
+      ts_device: now - 5000,
+      payload: { setup: true },
+    });
+
+    for (let i = 1; i <= 50; i++) {
+      const pid = `prop_cal_${i}`;
+      db.insertProposal({
+        proposal_id: pid,
+        created_seq: ev.event.seq,
+        invariant_id: null,
+        policy_type: "PRAGMATIC",
+        tier: 1,
+        summary: `proposal ${i}`,
+        action: "{}",
+        action_hash: new Uint8Array([1, 2, 3]),
+        efe: 1.0,
+        risk_term: 0.1,
+        ambiguity_term: 0.05,
+        state: "SURFACED",
+        shadow: 1,
+        expires_at: now + 60000,
+        updated_at: now,
+      });
+
+      db.recordGateDecision({
+        proposal_id: pid,
+        mode: "MAINTENANCE",
+        decision: "SURFACE",
+        reason: "scheduled",
+        ts: now - 1000,
+      });
+
+      // 48 wanted, 2 not_wanted -> precision = 48/50 = 0.96 >= 0.90
+      const label = i <= 48 ? "wanted" : "not_wanted";
+      db.recordShadowLabel({
+        proposal_id: pid,
+        label,
+        actual: JSON.stringify({ source: "tap" }),
+        latency_ms: 250,
+        ts: now - 500,
+      });
+    }
+
+    const rows = db.loadShadowRows();
+    expect(rows.length).toBe(50);
+
+    const metrics = db.getShadowMetrics({ nowMs: now });
+    expect(metrics.surfaced).toBe(50);
+    expect(metrics.wanted).toBe(48);
+    expect(metrics.notWanted).toBe(2);
+    expect(metrics.precision).toBeCloseTo(0.96, 5);
+    expect(metrics.verdict).toBe("pass");
+    expect(metrics.automatedVerdict).toBe("SUFFICIENT_DATA_PASS");
+    expect(metrics.breakerTripped).toBe(false);
+    expect(db.isCircuitBreakerTripped({ nowMs: now })).toBe(false);
+
+    // Verify subsequent writes still work (query_only was restored)
+    db.ingestEvent("dev_phone_galaxy", {
+      event_id: "evt_after_shadow_query",
+      kind: "telemetry",
+      ts_device: now,
+      payload: { ok: true },
+    });
+    expect(db.getEventById("evt_after_shadow_query")).not.toBeNull();
+  });
 });
+
 

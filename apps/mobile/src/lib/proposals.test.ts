@@ -4,6 +4,7 @@ import * as api from "./api";
 
 vi.mock("./api", () => ({
   submitProposalApproval: vi.fn(),
+  submitShadowLabel: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
 describe("proposalManager", () => {
@@ -57,6 +58,7 @@ describe("proposalManager", () => {
       })
     );
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("consumed");
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "wanted", { source: "tap" });
   });
 
   it("attaches biometric attestation when requiresBiometric is true", async () => {
@@ -171,5 +173,6 @@ describe("proposalManager", () => {
     );
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
     expect(proposalManager.getPending().length).toBe(0);
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", { source: "tap" });
   });
 });

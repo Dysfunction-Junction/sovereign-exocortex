@@ -49,3 +49,15 @@ export function formatExpiry(expiresAt: Date): string {
   if (daysLeft === 0) return "expires today";
   return `expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
 }
+
+export function extractDeviceIdFromToken(token: string): string | null {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecode(parts[1]));
+    return typeof payload.deviceId === "string" ? payload.deviceId : null;
+  } catch {
+    return null;
+  }
+}
+

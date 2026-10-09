@@ -11,6 +11,13 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { canonicalJsonStringify } from "./canonical.js";
+import {
+  computeShadowMetrics,
+  loadShadowRows,
+  type ShadowMetrics,
+  type ShadowMetricsOptions,
+  type ShadowRow,
+} from "./shadow-metrics.js";
 import type {
   DeviceRecord,
   EventIn,
@@ -802,6 +809,26 @@ export class ExocortexDatabase {
       prev_hash: new Uint8Array(row.prev_hash),
       hash: new Uint8Array(row.hash),
     };
+  }
+
+  public loadShadowRows(): ShadowRow[] {
+    return loadShadowRows(this.db, { restoreQueryOnly: true });
+  }
+
+  public getShadowMetrics(opts?: Partial<ShadowMetricsOptions>): ShadowMetrics {
+    const rows = this.loadShadowRows();
+    return computeShadowMetrics(rows, {
+      nowMs: opts?.nowMs ?? Date.now(),
+      windowDays: opts?.windowDays,
+      threshold: opts?.threshold,
+      minLabels: opts?.minLabels,
+      baselinePrecision: opts?.baselinePrecision,
+    });
+  }
+
+  public isCircuitBreakerTripped(opts?: Partial<ShadowMetricsOptions>): boolean {
+    const metrics = this.getShadowMetrics(opts);
+    return metrics.breakerTripped;
   }
 
   public static eventToJson(e: EventRecord): {
