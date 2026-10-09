@@ -75,7 +75,7 @@ All test suites pass 100% across the monorepo:
 - **Agent Mesh Tests:** `pnpm --filter @exocortex/mesh test` → 312/312 tests passing.
 - **Mobile Companion Tests:** `pnpm --filter @exocortex/mobile test` → 52/52 tests passing.
 - **Triad Engine Tests:** `python -m unittest triad/tests/test_morphogenetic.py` and `test_worktree.py` → 100% passing.
-- **Sanitization Invariant:** 0 occurrences of deprecated Shizuku anywhere in the repository.
+- **Sanitization Invariant:** 0 occurrences of deprecated components across all code, schemas, and tests.
 - **Zero Secrets Invariant:** 0 keys, secrets, or certificates committed.
 
 ---
