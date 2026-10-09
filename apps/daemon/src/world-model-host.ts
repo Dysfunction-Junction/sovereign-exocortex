@@ -20,6 +20,9 @@ import {
   type SystemObservation,
 } from "@exocortex/world-model";
 import { defaultDryRunCache, type SpeculativeProposal } from "@exocortex/core";
+import type { ShadowRecorder } from "./shadow-recorder.js";
+
+const MAX_RECORDER_FAILURES = 5;
 
 export class WorldModelHost {
   private static instance: WorldModelHost | null = null;
@@ -27,6 +30,9 @@ export class WorldModelHost {
   public readonly lifeGraph: LivingLifeGraph;
   public readonly cognitiveGate: CognitiveModeGate;
   public readonly activeInference: ActiveInferenceEngine;
+  private shadowRecorder: ShadowRecorder | null = null;
+  private recorderFailures = 0;
+  private recorderDisabled = false;
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
@@ -41,6 +47,24 @@ export class WorldModelHost {
       WorldModelHost.instance = new WorldModelHost();
     }
     return WorldModelHost.instance;
+  }
+
+  /** Attach (or detach with null) the recorder that persists proposals + gate decisions. */
+  public setShadowRecorder(recorder: ShadowRecorder | null): void {
+    this.shadowRecorder = recorder;
+    this.recorderFailures = 0;
+    this.recorderDisabled = false;
+  }
+
+  /** Stop recording for this process (e.g. the database could not be opened). */
+  public disableShadowRecording(): void {
+    this.shadowRecorder = null;
+    this.recorderDisabled = true;
+  }
+
+  /** True once a recorder is attached or recording was deliberately given up on. */
+  public get shadowRecordingSettled(): boolean {
+    return this.shadowRecorder !== null || this.recorderDisabled;
   }
 
   /**
@@ -163,6 +187,18 @@ export class WorldModelHost {
           policy.title,
           300000 // 5 minute TTL
         );
+      }
+
+      // Persistence must never break observation ingest.
+      try {
+        this.shadowRecorder?.record(policy, proposal, gateDecision);
+        this.recorderFailures = 0;
+      } catch (err) {
+        console.error(`[shadow-recorder] failed to record ${policy.id}:`, err instanceof Error ? err.message : err);
+        if (++this.recorderFailures >= MAX_RECORDER_FAILURES) {
+          console.error(`[shadow-recorder] disabled after ${MAX_RECORDER_FAILURES} consecutive failures`);
+          this.disableShadowRecording();
+        }
       }
 
       proposals.push(proposal);

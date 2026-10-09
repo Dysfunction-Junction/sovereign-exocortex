@@ -6,6 +6,7 @@ import { verifyToken } from "./jwt.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
+import { ShadowRecorder } from "./shadow-recorder.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import type { IngestReq, DeviceRecord } from "@exocortex/core";
 
@@ -118,6 +119,22 @@ function sendJson(res: import("node:http").ServerResponse, status: number, body:
     ...CORS_HEADERS,
   });
   res.end(payload);
+}
+
+/**
+ * Lazily attach the shadow recorder on first observation (no DB side effects at import time).
+ * Env is read once at attach; changing SHADOW or EXOCORTEX_SHADOW_RECORD needs a restart.
+ */
+function ensureShadowRecorder(): void {
+  if (process.env.EXOCORTEX_SHADOW_RECORD === "0" || defaultWorldModelHost.shadowRecordingSettled) return;
+  try {
+    defaultWorldModelHost.setShadowRecorder(
+      new ShadowRecorder(getDatabase(), { shadow: process.env.SHADOW !== "0" }),
+    );
+  } catch (err) {
+    console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
+    defaultWorldModelHost.disableShadowRecording();
+  }
 }
 
 export const server = createServer(async (req, res) => {
@@ -278,6 +295,7 @@ export const server = createServer(async (req, res) => {
       const raw = await readBody(req, 64 * 1024);
       const decoded = raw.length === 0 ? {} : JSON.parse(raw);
       const obs = (decoded.observation ?? decoded) as import("@exocortex/world-model").SystemObservation;
+      ensureShadowRecorder();
       const result = defaultWorldModelHost.ingestObservation(obs);
       sendJson(res, 200, { ok: true, result });
     } catch (err) {

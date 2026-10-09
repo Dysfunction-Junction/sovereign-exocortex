@@ -11,7 +11,8 @@
     "./event-bus": "./src/event-bus.ts",
     "./rank": "./src/mishmash-rank.ts",
     "./canonical": "./src/canonical.ts",
-    "./db": "./src/db.ts"
+    "./db": "./src/db.ts",
+    "./shadow-metrics": "./src/shadow-metrics.ts"
   },
 
   "scripts": {
