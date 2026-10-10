@@ -91,6 +91,8 @@ Shadow calibration is four sub-projects:
 3. Label capture from taps (`POST /v3/shadow/labels`, approve/dismiss in the app). Shipped and verified on hardware with test proposals. The inferred labels (`already_did`, `ignored`) are not built.
 4. Precision@surface calibration (target >= 0.90, at least 50 tapped labels) before any tier leaves shadow mode. Waiting on real proposals.
 
+Alongside these, a **next-action prediction log** records guesses about what you will do next, scores them against the event log (misses keep the real action), and reports log loss, Brier score and calibration against a frequency baseline. It does not feed Precision@surface. See [`docs/superpowers/specs/2026-10-10-next-action-prediction-design.md`](docs/superpowers/specs/2026-10-10-next-action-prediction-design.md).
+
 Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md).
 
 ## Docs

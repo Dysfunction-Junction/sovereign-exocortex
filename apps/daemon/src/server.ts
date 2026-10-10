@@ -7,6 +7,7 @@ import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnve
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
+import { defaultPredictionHost } from "./prediction-host.js";
 import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
 import {
@@ -522,6 +523,15 @@ export const server = createServer(async (req, res) => {
           defaultWorldModelHost.onEventsAppended(result.events, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
+        }
+
+        // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
+        if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
+          try {
+            defaultPredictionHost.onEventsAppended(result.events, db);
+          } catch (predErr) {
+            console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
+          }
         }
 
         // Synchronize any shadow label events into shadow_labels table
