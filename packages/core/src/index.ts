@@ -6,5 +6,8 @@ export * from "./precognitive.js";
 export * from "./canonical.js";
 export type * from "./schema-types.js";
 export * from "./shadow-metrics.js";
+export * from "./prediction-log.js";
+export * from "./prob-engine.js";
+export * from "./prediction-events.js";
 
 
