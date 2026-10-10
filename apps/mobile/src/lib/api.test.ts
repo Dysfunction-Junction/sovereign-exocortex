@@ -32,6 +32,18 @@ describe("api contracts", () => {
     expect(out.map((p) => p.proposalId)).toEqual(["a"]);
   });
 
+  it("sends /v3 routes only to the gateway when both a LAN proxy and a gateway are configured", async () => {
+    const { getConnectionTargets } = await import("./config");
+    vi.mocked(getConnectionTargets).mockResolvedValueOnce([
+      { baseUrl: "http://lan:8787", token: "a", mode: "lan" },
+      { baseUrl: "http://gw:8788", token: "b", mode: "remote" },
+    ]);
+    fetchMock.mockResolvedValue(json({ ok: true, proposals: [] }));
+    await getPendingProposals();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://gw:8788/v3/proposals/pending");
+  });
+
   it("getPendingProposals throws on HTTP errors", async () => {
     fetchMock.mockResolvedValue(json({}, 404));
     await expect(getPendingProposals()).rejects.toThrow(/404/);

@@ -52,8 +52,14 @@ const SUMMARIES_CLIENT_FETCH_TIMEOUT_MS = 30000;
 // LAST target surfaces as HomeNodeUnreachableError; a non-auth 4xx (e.g. 404,
 // 400) is returned as-is since retrying a different host won't help.
 async function authedFetch(path: string, init?: RequestInit): Promise<Response> {
-  const targets = await getConnectionTargets();
+  let targets = await getConnectionTargets();
   if (targets.length === 0) throw new ProxyNotConfiguredError();
+  // Approval/proposal routes exist only on the exocortex gateway (Plan B). The Plan A LAN proxy answers
+  // 404 for them, and a 404 is not failed over, so skip it whenever a gateway is configured.
+  if (path.startsWith("/v3/") || path === "/network/approve") {
+    const gateway = targets.filter((t) => t.mode === "remote");
+    if (gateway.length > 0) targets = gateway;
+  }
 
   const baseTimeout = path.startsWith("/mobile/recent/assets")
     ? ASSETS_CLIENT_FETCH_TIMEOUT_MS

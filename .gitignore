@@ -28,7 +28,9 @@ triad/logs/
 .triad_proposed_fix.patch
 
 # Mobile & Android artifacts
+apps/mobile/android/app/google-services.json
 apps/mobile/android/app/build/
+apps/daemon/secrets/
 apps/mobile/android/.gradle/
 apps/mobile/android/capacitor-cordova-android-plugins/build/
 apps/mobile/dist/
