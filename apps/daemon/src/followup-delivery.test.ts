@@ -318,4 +318,5 @@ test("P6c: PushNotifier is a no-op without config, sends data-only FCM v1 push, 
   assert.equal(msg.token, "fcm-token-1");
   assert.deepEqual(msg.data, { type: "proposal", proposal_id: "pn_new" });
   assert.equal(JSON.stringify(msg).includes("summary"), false, "no summary or nonce in the payload");
+  assert.deepEqual(msg.notification, { title: "Approval requested", body: "Open Exocortex to review." }, "visible banner with generic text");
 });

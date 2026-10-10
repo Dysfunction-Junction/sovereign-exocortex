@@ -119,7 +119,14 @@ export class PushNotifier {
           method: "POST",
           headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
           body: JSON.stringify({
-            message: { token: t.token, data: { type: "proposal", proposal_id: proposalId }, android: { priority: "HIGH" } },
+            message: {
+              token: t.token,
+              // Generic text only: a data-only push shows nothing while the app is backgrounded. The proposal
+              // itself (summary, nonce) is still fetched over the authenticated channel after the user taps.
+              notification: { title: "Approval requested", body: "Open Exocortex to review." },
+              data: { type: "proposal", proposal_id: proposalId },
+              android: { priority: "HIGH" },
+            },
           }),
           signal: AbortSignal.timeout(10_000),
         });
