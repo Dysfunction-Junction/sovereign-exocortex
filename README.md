@@ -84,11 +84,12 @@ The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To ex
 
 ## Roadmap
 
-Sub-project 1 of 4 (shadow metrics evaluator) is shipped. Remaining:
+Shadow calibration is four sub-projects:
 
-2. Daemon logs shadow proposals.
-3. Label capture from taps and observed behaviour.
-4. Precision@surface calibration (target >= 0.90) before any tier leaves shadow mode.
+1. Shadow metrics evaluator (`packages/core/src/shadow-report-cli.ts`). Shipped.
+2. Daemon records shadow proposals and gate decisions (`apps/daemon/src/shadow-recorder.ts`). Code shipped, **but nothing feeds it yet**: only `POST /world-model/observation` triggers it, and no component calls that route, so no real proposal has been recorded.
+3. Label capture from taps (`POST /v3/shadow/labels`, approve/dismiss in the app). Shipped and verified on hardware with test proposals. The inferred labels (`already_did`, `ignored`) are not built.
+4. Precision@surface calibration (target >= 0.90, at least 50 tapped labels) before any tier leaves shadow mode. Waiting on real proposals.
 
 Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md).
 
