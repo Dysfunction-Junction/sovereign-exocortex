@@ -74,11 +74,11 @@ pnpm start                   # window 2: gateway :8788
 pnpm enroll -- "My Phone"    # enroll a device, prints its token
 ```
 
-To exercise the whole approval path on real hardware, follow [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md).
+The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To exercise the whole approval path on real hardware, follow [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md).
 
 ## Honest limits
 
-- BiometricPrompt, the Keystore key and the Android attestation chain have not yet been run on hardware. Expect to debug them.
+- The approve and dismiss paths (BiometricPrompt, Keystore key, attestation, Tailscale HTTPS) were run end to end on a Galaxy S26 Ultra on 2026-10-10. Only the read-only `diagnostic_probe` has been approved; nothing has executed.
 - Firebase/FCM credentials are gitignored and must be supplied locally.
 - Nothing here has measured prediction quality against real data yet.
 

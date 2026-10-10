@@ -26,7 +26,15 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 `cap sync` regenerates the Gradle plugin paths for this pnpm layout and links the push plugin. Without it the build fails.
 
-## 2. Start the PC side (two PowerShell windows, same variables in both)
+## 2. Start the PC side
+**Normal setup (verified 2026-10-10).** The `ExocortexDaemon` scheduled task starts the mishmash nodes and the gateway at
+logon, loading every secret from `apps\daemon\secrets\device-test.env` (see `secrets\run-exocortex.ps1`). That file is the
+source of truth for `GATEWAY_JWT_SECRET`, `GATEWAY_ENROLL_TOKEN`, `TRIAD_SERVER_TOKEN` and `SHADOW`. Keep `apps\daemon\.env`
+identical for those four keys: `pnpm start` and `pnpm enroll` read `.env`, and a differing `TRIAD_SERVER_TOKEN` makes
+approvals fail with 401 from the triad, while a differing `GATEWAY_JWT_SECRET` invalidates the phone's device token.
+Both files are gitignored. Do not start a second mishmash set; the nodes are usually already listening.
+
+**Manual alternative (two PowerShell windows, same variables in both).**
 Use your own random values. They never leave this PC.
 ```
 $env:GATEWAY_JWT_SECRET   = "<32+ random characters>"
@@ -43,16 +51,24 @@ cd C:\Users\micha\projects\sovereign-exocortex\apps\daemon
 
 ## 3. Enroll the phone (window 2's variables, a third window is fine)
 ```
-pnpm enroll -- "My S26"
+pnpm enroll "My S26"
 ```
-Copy the token it prints. It also registers the phone in the v3 database with minimum scopes.
+(Do not put `--` before the name: pnpm passes it through and the device is labelled `--`.) Copy the token it prints. It also registers the phone in the v3 database with minimum scopes.
 
 ## 4. Connect the phone to the gateway
+**Over Tailscale (verified).** On the PC run once: `tailscale serve --bg 8788`. It prints the tailnet-only HTTPS URL
+(`https://<pc-name>.<tailnet>.ts.net`). Tailscale must be running on the phone too. Check from any tailnet device:
+`curl https://<pc-name>.<tailnet>.ts.net/mobile/health` (the first request can take ~30 s while the certificate is issued).
+
+In the app: Setup -> the **"Plan B" (remote gateway)** card -> Gateway URL = that HTTPS URL (no trailing path),
+Device Token = the JWT from step 3 -> Test & Save Connection. **Leave the Plan A (LAN) fields empty**: when both its
+address and token are filled, Plan A wins over Plan B and requests go to the wrong place.
+
+**Over USB instead (no Tailscale).**
 ```
 adb reverse tcp:8788 tcp:8788
 ```
-In the app: Setup -> the "Plan B" (remote gateway) card -> Gateway URL `http://127.0.0.1:8788`, Device Token = the JWT
-from step 3 -> Test & Save Connection. (It may say the proxy is unreachable because PiecesOS is not part of this
+then use Gateway URL `http://127.0.0.1:8788`. (It may say the proxy is unreachable because PiecesOS is not part of this
 test; the approval flow does not need it.)
 
 Then, in the same Setup screen, "Approval key (biometric)": paste the `GATEWAY_ENROLL_TOKEN` value -> Register approval key.
@@ -74,12 +90,15 @@ You are asked for your fingerprint once. Success message: "Approval key register
 | Approve returns 423 "shadow mode" | `SHADOW` is not `0` in the daemon window | Set it and restart `pnpm start` |
 | Approve returns 428 | No approval key registered for this device | Repeat the key registration in Setup |
 | Approve returns 422 "attestation ... invalid" | Signature does not match the registered key (e.g. key was regenerated) | Register the key again |
-| Approve returns 401 from the triad | `TRIAD_SERVER_TOKEN` differs between the daemon and the mishmash-up window | Same value in both windows, restart both |
+| Approve returns 401 from the triad | `TRIAD_SERVER_TOKEN` differs between the daemon and the already-running triad (the logon task loads `secrets\device-test.env`) | Copy that value into `.env`, restart only the gateway |
+| Setup says "unauthorized" / Recent tab shows HTTP 401 | Token typed into the Plan A fields, or `GATEWAY_JWT_SECRET` differs from the one that signed the token | Plan B only; re-run `pnpm enroll` after syncing the secrets |
+| "Server is reachable, but cannot reach your home PC" | The old PiecesOS status check (Pieces is shut down) | Ignore; approvals do not use it |
+| Modal screenshot over adb is black | The approval window blocks screen capture | Expected; look at the phone |
 | Modal never appears | Proposal not SURFACED/STAGED, expired (10 min), registry-app not running on :39403, or the app is in the background | Run `pnpm surface-test` again; check window 1 output |
 | `KEY_INVALIDATED` | Fingerprints changed after the key was made | Register the key again |
 | Prompt appears but does nothing / app crashes | Native BiometricPrompt issue (never run before) | `adb logcat -s Capacitor ApprovalKey AndroidRuntime` and send me the output |
 
 ## 7. Clean up
 - Stop both daemon windows (Ctrl+C). Unset the variables by closing the windows.
-- `adb reverse --remove tcp:8788`.
+- If you used USB: `adb reverse --remove tcp:8788`. If you used Tailscale and want to stop exposing the gateway to your tailnet: `tailscale serve --https=443 off`.
 - The test proposal and labels stay in `%LOCALAPPDATA%\exocortex.db`. They are harmless.
