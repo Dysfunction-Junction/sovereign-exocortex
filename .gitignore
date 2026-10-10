@@ -40,3 +40,4 @@ apps/daemon/secrets/
 google-services.json
 *service-account*.json
 *firebase-adminsdk*.json
+apps/daemon/devices.json
