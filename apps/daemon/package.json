@@ -6,8 +6,8 @@
   "description": "exocortexd: Unified Sovereign Exocortex host daemon and high-speed in-memory event orchestrator.",
   "main": "dist/server.js",
   "scripts": {
-    "start": "tsx src/server.ts",
-    "dev": "tsx watch src/server.ts",
+    "start": "tsx --env-file-if-exists=.env src/server.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
     "enroll": "tsx src/enroll-cli.ts",
     "surface-test": "tsx src/surface-test-cli.ts",
     "test": "tsx --test src/network.test.ts src/mishmash.integration.test.ts src/ambient-loop.integration.test.ts src/world-model-host.test.ts src/v3-events.test.ts src/v3-world-model.test.ts src/shadow-recorder.test.ts src/v3-shadow.test.ts src/audit-fixes.test.ts src/approval-attestation.test.ts src/telemetry-validation.test.ts src/mishmash-launch.test.ts src/shadow-actuation.test.ts src/key-attestation.test.ts src/registry-delivery.test.ts src/followup-delivery.test.ts src/dev-tools.test.ts",
