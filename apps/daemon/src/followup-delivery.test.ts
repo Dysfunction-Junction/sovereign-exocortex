@@ -30,12 +30,18 @@ function device(db: ExocortexDatabase, id: string, key: KP, scopes: string[], at
     key_attested: attested, scopes, enrolled_at: Date.now(), revoked_at: null,
   });
 }
-function proposal(db: ExocortexDatabase, id: string, state: "SURFACED" | "STAGED" | "SUPPRESSED" = "SURFACED", expiresIn = 3_600_000) {
+function proposal(
+  db: ExocortexDatabase,
+  id: string,
+  state: "SURFACED" | "STAGED" | "SUPPRESSED" = "SURFACED",
+  expiresIn = 3_600_000,
+  shadow: 0 | 1 = 1,
+) {
   const ev = db.ingestEvent("dev_a", { event_id: `evt_${id}`, kind: "observation", ts_device: Date.now(), schema_ver: 1, payload: {} });
   db.insertProposal({
     proposal_id: id, created_seq: ev.event.seq, invariant_id: null, policy_type: "PRAGMATIC", tier: 1,
     summary: `summary ${id}`, action: "{}", action_hash: new Uint8Array([1]), efe: 1, risk_term: 0.1, ambiguity_term: 0,
-    state, shadow: 1, expires_at: Date.now() + expiresIn, updated_at: Date.now(),
+    state, shadow, expires_at: Date.now() + expiresIn, updated_at: Date.now(),
   });
 }
 
@@ -159,8 +165,8 @@ test("P1: verified approve whose triad forward is ok records the tap 'wanted' la
   const k = p256();
   device(db, "dev_a", k, ["telemetry:write", "approval:write"]);
   setDatabase(db);
-  proposal(db, "pa1");
-  proposal(db, "pa2");
+  proposal(db, "pa1", "SURFACED", 3_600_000, 0);
+  proposal(db, "pa2", "SURFACED", 3_600_000, 0);
   let triadOk = true;
   const triad = createServer((rq, rs) => {
     rq.resume();
