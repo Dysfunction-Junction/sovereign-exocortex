@@ -99,7 +99,7 @@ export class ShadowRecorder {
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
   }
 
-  private ensureHostDevice(): void {
+  public ensureHostDevice(): void {
     if (this.hostReady) return;
     if (!this.db.getDevice(HOST_DEVICE_ID)) {
       // The one-byte key is not a valid SPKI, so any signature check against this device fails closed.
