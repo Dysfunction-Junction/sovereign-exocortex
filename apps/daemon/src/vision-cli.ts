@@ -4,11 +4,13 @@ import { getDatabase } from "./db-host.js";
 import { analyzeTestScreenshot } from "./vision-adapter.js";
 import { recordTestScreenshotClassification } from "./vision-observation.js";
 
-const imagePath = process.argv[2];
-if (!imagePath || process.argv.length !== 3) {
-  console.error("Usage: pnpm --filter @exocortex/daemon vision-tests -- <screenshot-image>");
+const args = process.argv.slice(2).filter((arg) => arg !== "--");
+if (args.length !== 2 || args[0] !== "--confirm-nonsensitive-test-screenshot") {
+  console.error("Usage: pnpm --filter @exocortex/daemon vision-tests -- --confirm-nonsensitive-test-screenshot <screenshot-image>");
   process.exitCode = 2;
 } else {
+  const imagePath = args[1]!;
+  console.warn("Only continue with a nonsensitive test-runner screenshot. The mobile app denylist does not apply to manually selected PC files.");
   const absolutePath = resolve(imagePath);
   const file = await stat(absolutePath);
   if (!file.isFile() || file.size > 20 * 1024 * 1024) {
