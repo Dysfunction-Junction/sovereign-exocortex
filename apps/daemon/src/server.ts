@@ -8,6 +8,7 @@ import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
+import { defaultTriageHost } from "./triage-host.js";
 import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
 import {
@@ -532,6 +533,13 @@ export const server = createServer(async (req, res) => {
           } catch (predErr) {
             console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
           }
+        }
+
+        // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
+        try {
+          defaultTriageHost.onEventsAppended(result.events, db);
+        } catch (triageErr) {
+          console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
         }
 
         // Synchronize any shadow label events into shadow_labels table
