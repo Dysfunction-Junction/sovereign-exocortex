@@ -391,7 +391,7 @@ export function createGatewayApp(config: ServerConfig = {}) {
           const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
             ? Math.min(Math.max(rawLimit, 1), 50)
             : 5;
-          const matches = await localLTM.searchMemories(query, limit);
+          const matches = await localLTM.searchMemoriesHybrid(query, limit);
           result.matches = matches;
           result.query = query;
           result.status = "searched";
