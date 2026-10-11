@@ -1385,7 +1385,8 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`forwarding to home proxy at ${HOME_PROXY_BASE_URL}`);
   });
   if (HOME_PROXY_BASE_URL) {
-    warmUpHomeProxyConnection();
+    // Retries and logs internally; the .catch is a backstop so a future edit can't crash startup.
+    warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();

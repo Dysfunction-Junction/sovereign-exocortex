@@ -39,4 +39,14 @@ describe('pattern-analyzer delegate Origin/Host guard', () => {
       await new Promise<void>((r) => server.close(() => r()));
     }
   });
+
+  it('rejects (instead of hanging) when the port is already in use', async () => {
+    const first = await startPatternDelegate(0);
+    const taken = (first.address() as { port: number }).port;
+    try {
+      await expect(startPatternDelegate(taken)).rejects.toMatchObject({ code: 'EADDRINUSE' });
+    } finally {
+      await new Promise<void>((r) => first.close(() => r()));
+    }
+  });
 });

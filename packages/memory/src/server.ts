@@ -797,6 +797,8 @@ export function startGatewayServer(config: ServerConfig = {}): Promise<{ server:
           if (isReady) {
             pieces.checkHealth(1500).then((health) => {
               console.log(`[pieces-for-all] PiecesOS detected online at ${pieces.getBaseUrl()} (version: ${health.version ?? "unknown"})`);
+            }).catch((err) => {
+              console.warn(`[pieces-for-all] PiecesOS health check failed: ${err instanceof Error ? err.message : err}`);
             });
           } else {
             console.log(`[pieces-for-all] Notice: PiecesOS not detected at ${pieces.getBaseUrl()}. Gateway will operate in offline/degraded mode.`);

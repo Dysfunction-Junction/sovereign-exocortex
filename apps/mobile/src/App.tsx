@@ -6,6 +6,7 @@ import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
 import { flushUsageEvents } from "./lib/flush";
+import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
 import { isScreenContextEnabled, isNotificationCaptureEnabled } from "./lib/config";
 import { startPassiveCaptureListener } from "./lib/passiveCapture";
@@ -54,9 +55,9 @@ export default function App() {
         }).then((handle) => {
           if (appStateDisposed) handle.remove();
           else removeAppStateListener = () => handle.remove();
-        });
+        }).catch(logRejection("app.appStateListener"));
       }
-    });
+    }).catch(logRejection("app.screenContextInit")); // failure leaves capture OFF (fail-closed)
 
     // Part 1: notification capture. Independent of screen-context — a user can
     // want the notification firehose without the accessibility screen scraper.
@@ -66,7 +67,7 @@ export default function App() {
       if (enabled && Capacitor.isNativePlatform()) {
         startNotificationCaptureListener();
       }
-    });
+    }).catch(logRejection("app.notificationCaptureInit")); // failure leaves capture OFF (fail-closed)
 
     // Part 2: SMS backfill. One-shot on foreground — catches texts that arrived
     // while the app was closed / phone was off. No-op if READ_SMS isn't granted
