@@ -1,3 +1,4 @@
+import "./setup-ltm.js"; // must stay first: redirects memory.add away from the tracked data file
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
