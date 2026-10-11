@@ -213,7 +213,10 @@ export class WorldModelHost {
    * If an anomaly is observed, synthesizes policies, pre-compiles them into
    * the DryRunCache, and routes them through the CognitiveModeGate.
    */
-  public ingestObservation(obs: SystemObservation): {
+  public ingestObservation(
+    obs: SystemObservation,
+    options: { allowAutoExecute?: boolean } = {},
+  ): {
     surprisalNats: number;
     isAnomaly: boolean;
     generatedPoliciesCount: number;
@@ -283,7 +286,7 @@ export class WorldModelHost {
       }
 
       // Executor re-check: actuate only if allowlisted, SHADOW=0 and the breaker is clear; else record only.
-      if (this.autoExecutor) {
+      if (this.autoExecutor && options.allowAutoExecute !== false) {
         let db: ExocortexDatabase | null = null;
         try {
           db = hasDatabase() ? getDatabase() : null;
