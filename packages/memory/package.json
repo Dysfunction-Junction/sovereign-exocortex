@@ -8,7 +8,8 @@
   "exports": {
     ".": "./src/local-ltm.ts",
     "./client": "./src/pieces.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./embeddings": "./src/embeddings.ts"
   },
   "scripts": {
     "build": "tsc",
