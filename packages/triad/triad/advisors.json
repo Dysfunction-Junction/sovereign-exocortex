@@ -101,13 +101,14 @@
     },
     {
       "name": "ollama",
-      "display_name": "Ollama Local Advisor (qwen2.5-coder:14b)",
+      "display_name": "Ollama Local Advisor (qwen3:1.7b)",
       "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
       "fallback_binary": "ollama",
       "priority": 4,
       "execution_flags": [
         "run",
-        "qwen2.5-coder:14b"
+        "qwen3:1.7b",
+        "--think=false"
       ],
       "input_mode": "stdin",
       "output_mode": "stdout",
