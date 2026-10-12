@@ -2,8 +2,8 @@ import { registerPlugin } from "@capacitor/core";
 import { getConnectionTargets } from "./config";
 import { extractDeviceIdFromToken } from "./jwtDisplay";
 
-// Device-bound approval signing (see ApprovalKeyPlugin.java). The signed message format MUST match
-// approvalMessage()/approvalKeyMessage() in apps/daemon/src/approval-attestation.ts.
+// Device-bound approval signing (see ApprovalKeyPlugin.java). The signed message formats MUST match
+// approvalMessage()/labelMessage()/approvalKeyMessage() in apps/daemon/src/approval-attestation.ts.
 
 interface ApprovalKeyNative {
   isAvailable(): Promise<{ available: boolean; status: number }>;
@@ -22,6 +22,10 @@ export interface ApprovalAttestation {
   sig: string;
 }
 
+export interface LabelAttestation extends ApprovalAttestation {
+  nonce: string;
+}
+
 export class ApprovalUnavailableError extends Error {
   readonly code: string;
   constructor(message: string, code: string = "UNAVAILABLE") {
@@ -33,7 +37,7 @@ export class ApprovalUnavailableError extends Error {
 
 const APPROVAL_MSG_PREFIX = "exo-approval-v1";
 const APPROVAL_KEY_MSG_PREFIX = "exo-approval-key-v1";
-const LABEL_MSG_PREFIX = "exo-label-v1";
+const LABEL_MSG_PREFIX = "exo-label-v2";
 
 function join(prefix: string, fields: string[]): string {
   for (const f of fields) {
@@ -49,8 +53,16 @@ export function approvalMessage(
   return join(APPROVAL_MSG_PREFIX, [p.deviceId, p.proposalId, p.nonce, p.action, String(ts)]);
 }
 
-export function labelMessage(p: { deviceId: string; proposalId: string; label: string }, ts: number): string {
-  return join(LABEL_MSG_PREFIX, [p.deviceId, p.proposalId, p.label, String(ts)]);
+export function labelMessage(p: { deviceId: string; proposalId: string; label: string; nonce: string }, ts: number): string {
+  return join(LABEL_MSG_PREFIX, [p.deviceId, p.proposalId, p.label, p.nonce, String(ts)]);
+}
+
+function createLabelNonce(): string {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.getRandomValues) {
+    throw new ApprovalUnavailableError("Secure random generation is unavailable", "NO_SECURE_RANDOM");
+  }
+  return Array.from(cryptoApi.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function approvalKeyMessage(deviceId: string, challenge: string): string {
@@ -96,17 +108,18 @@ export async function signApproval(p: {
 }
 
 /**
- * Prompts for a strong biometric and signs (deviceId, proposalId, label, ts) so the daemon can count the
- * label as a human tap. Throws on any failure (the caller decides whether to fall back to an unsigned label).
+ * Prompts for a strong biometric and signs (deviceId, proposalId, label, nonce, ts) so the daemon can count the
+ * label as a single-use human tap. Throws on any failure (the caller decides whether to fall back to an unsigned label).
  */
-export async function signLabel(p: { proposalId: string; label: string }): Promise<ApprovalAttestation> {
+export async function signLabel(p: { proposalId: string; label: string }): Promise<LabelAttestation> {
   const deviceId = await getDeviceId();
   const ts = Date.now();
-  const message = labelMessage({ deviceId, ...p }, ts);
+  const nonce = createLabelNonce();
+  const message = labelMessage({ deviceId, ...p, nonce }, ts);
   const { signatureB64 } = await callNative(() =>
     ApprovalKey.sign({ message, title: "Confirm dismiss", subtitle: "Authenticate to confirm this choice" })
   );
-  return { v: 1, method: "biometric", ts, sig: signatureB64 };
+  return { v: 1, method: "biometric", ts, sig: signatureB64, nonce };
 }
 
 /**

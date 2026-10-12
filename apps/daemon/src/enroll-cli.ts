@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addDevice } from "./device-registry.js";
 import { issueToken } from "./jwt.js";
-import { getDatabase } from "./db-host.js";
-import { enrollV3Device } from "./dev-tools.js";
 
 const JWT_SECRET = process.env.GATEWAY_JWT_SECRET;
 if (!JWT_SECRET) {
@@ -19,7 +17,6 @@ if (!label) {
 const deviceId = randomUUID();
 const record = addDevice(deviceId, label);
 // Also register in the v3 database: /v3 routes and the biometric approval key need the device there.
-enrollV3Device(getDatabase(), deviceId, label);
 const token = issueToken(deviceId, JWT_SECRET);
 
 console.log(`Enrolled device: ${record.label} (${record.deviceId})`);

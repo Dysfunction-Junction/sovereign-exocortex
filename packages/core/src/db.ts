@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS proposals (
                    'APPROVED','REJECTED','EXPIRED','EXECUTING','SUCCEEDED','FAILED')),
   shadow         INTEGER NOT NULL DEFAULT 1,
   expires_at     INTEGER NOT NULL,
-  updated_at     INTEGER NOT NULL
+  updated_at     INTEGER NOT NULL,
+  notified_at    INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS proposals_state ON proposals(state, expires_at);
 
@@ -160,6 +161,13 @@ CREATE TABLE IF NOT EXISTS device_push_tokens (
   token      TEXT NOT NULL,
   platform   TEXT NOT NULL,
   updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS label_attestation_nonces (
+  device_id  TEXT NOT NULL REFERENCES devices(device_id),
+  nonce_hash TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (device_id, nonce_hash)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS mutations (
@@ -283,6 +291,10 @@ export class ExocortexDatabase {
 
     const sql = options.schemaSql ?? V3_SCHEMA_SQL;
     this.db.exec(sql);
+    const proposalColumns = this.db.prepare("PRAGMA table_info(proposals)").all() as Array<{ name: string }>;
+    if (proposalColumns.length > 0 && !proposalColumns.some((column) => column.name === "notified_at")) {
+      this.db.exec("ALTER TABLE proposals ADD COLUMN notified_at INTEGER");
+    }
   }
 
   public get raw(): DatabaseSync {
@@ -399,6 +411,31 @@ export class ExocortexDatabase {
       .prepare(`SELECT proposal_id FROM proposals WHERE state IN (${marks})${notExpiredAt !== undefined ? " AND expires_at > ?" : ""} ORDER BY updated_at ASC`)
       .all(...states, ...(notExpiredAt !== undefined ? [notExpiredAt] : [])) as any[];
     return rows.map((r) => this.getProposal(String(r.proposal_id))!).filter(Boolean);
+  }
+
+  public listUnnotifiedSurfacedProposalIds(now = Date.now()): string[] {
+    return (this.db.prepare(
+      "SELECT proposal_id FROM proposals WHERE state = 'SURFACED' AND expires_at > ? AND notified_at IS NULL ORDER BY updated_at",
+    ).all(now) as Array<{ proposal_id: string }>).map((row) => row.proposal_id);
+  }
+
+  public markProposalNotified(proposalId: string, at = Date.now()): void {
+    this.db.prepare(
+      "UPDATE proposals SET notified_at = ? WHERE proposal_id = ? AND state = 'SURFACED' AND notified_at IS NULL",
+    ).run(at, proposalId);
+  }
+
+  /** Consume a short-lived, device-bound label nonce once; duplicate signatures cannot count twice as taps. */
+  public consumeLabelAttestationNonce(deviceId: string, nonce: string, expiresAt: number, now = Date.now()): boolean {
+    if (!nonce || !Number.isSafeInteger(expiresAt) || expiresAt <= now) return false;
+    const nonceHash = createHash("sha256").update(nonce, "utf8").digest("hex");
+    return this.withTransaction(() => {
+      this.db.prepare("DELETE FROM label_attestation_nonces WHERE expires_at <= ?").run(now);
+      const result = this.db.prepare(
+        "INSERT OR IGNORE INTO label_attestation_nonces (device_id, nonce_hash, expires_at) VALUES (?, ?, ?)",
+      ).run(deviceId, nonceHash, expiresAt);
+      return Number(result.changes) === 1;
+    });
   }
 
   public revokeDevice(deviceId: string): void {

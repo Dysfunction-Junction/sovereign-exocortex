@@ -8,7 +8,7 @@
 import { createPublicKey, createVerify, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const APPROVAL_MSG_PREFIX = "exo-approval-v1";
-export const LABEL_MSG_PREFIX = "exo-label-v1";
+export const LABEL_MSG_PREFIX = "exo-label-v2";
 export const APPROVAL_KEY_MSG_PREFIX = "exo-approval-key-v1";
 /** Loose on purpose: phone and PC clocks drift, and the nonce is what makes an approval single-use. */
 export const APPROVAL_TS_WINDOW_MS = 10 * 60 * 1000;
@@ -36,15 +36,17 @@ export interface LabelContext {
   deviceId: string;
   proposalId: string;
   label: string;
+  nonce: string;
 }
 
-/** "exo-label-v1
+/** "exo-label-v2
 {deviceId}
 {proposalId}
 {label}
+{nonce}
 {ts}" */
 export function labelMessage(ctx: LabelContext, ts: number): Buffer {
-  return joinFields(LABEL_MSG_PREFIX, [ctx.deviceId, ctx.proposalId, ctx.label, String(ts)]);
+  return joinFields(LABEL_MSG_PREFIX, [ctx.deviceId, ctx.proposalId, ctx.label, ctx.nonce, String(ts)]);
 }
 
 export function approvalKeyMessage(deviceId: string, challenge: string): Buffer {
@@ -95,15 +97,41 @@ export function verifyApprovalAttestation(
   return verifyBiometricAttestation(attestation, (ts) => approvalMessage(ctx, ts), deviceKeySpki, keyAttested, now);
 }
 
-/** Same signature scheme and +-10min window as approvals, over the label message. */
+export type LabelAttestationResult =
+  | { ok: true; ts: number; nonce: string }
+  | { ok: false; reason: string };
+
+/** Same signature scheme and +-10min window as approvals, over a single-use label message. */
 export function verifyLabelAttestation(
   attestation: unknown,
-  ctx: LabelContext,
+  ctx: Omit<LabelContext, "nonce">,
   deviceKeySpki: Uint8Array | null,
   keyAttested: boolean,
   now = Date.now(),
-): AttestationResult {
-  return verifyBiometricAttestation(attestation, (ts) => labelMessage(ctx, ts), deviceKeySpki, keyAttested, now);
+): LabelAttestationResult {
+  let parsed = attestation;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return { ok: false, reason: "attestation is not valid JSON" };
+    }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, reason: "attestation required" };
+  }
+  const nonce = (parsed as Record<string, unknown>).nonce;
+  if (typeof nonce !== "string" || !/^[a-f0-9]{48}$/.test(nonce)) {
+    return { ok: false, reason: "attestation nonce invalid" };
+  }
+  const result = verifyBiometricAttestation(
+    parsed,
+    (ts) => labelMessage({ ...ctx, nonce }, ts),
+    deviceKeySpki,
+    keyAttested,
+    now,
+  );
+  return result.ok ? { ...result, nonce } : result;
 }
 
 function verifyBiometricAttestation(

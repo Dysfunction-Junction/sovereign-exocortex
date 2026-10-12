@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { generateKeyPairSync, createSign, generateKeyPairSync as rsa, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, createSign, generateKeyPairSync as rsa, randomBytes, type KeyObject } from "node:crypto";
 import { issueToken } from "./jwt.js";
 import { setDatabase } from "./db-host.js";
 import { ExocortexDatabase } from "@exocortex/core/db";
@@ -91,10 +91,10 @@ test("P3: enroll validates scopes against a per-platform allowlist", async () =>
 
 test("P1: label helpers bind device, proposal, label and ts", () => {
   const k = p256();
-  const ctx = { deviceId: "dev_a", proposalId: "p1", label: "wanted" };
+  const ctx = { deviceId: "dev_a", proposalId: "p1", label: "wanted", nonce: randomBytes(24).toString("hex") };
   const ts = Date.now();
-  const att = { v: 1, method: "biometric", ts, sig: sign(k, labelMessage(ctx, ts)) };
-  assert.equal(labelMessage(ctx, 5).toString(), "exo-label-v1\ndev_a\np1\nwanted\n5");
+  const att = { v: 1, method: "biometric", ts, sig: sign(k, labelMessage(ctx, ts)), nonce: ctx.nonce };
+  assert.equal(labelMessage(ctx, 5).toString(), `exo-label-v2\ndev_a\np1\nwanted\n${ctx.nonce}\n5`);
   assert.equal(verifyLabelAttestation(att, ctx, spki(k), true).ok, true);
   for (const bad of [{ ...ctx, label: "not_wanted" }, { ...ctx, proposalId: "p2" }, { ...ctx, deviceId: "dev_b" }]) {
     assert.equal(verifyLabelAttestation(att, bad, spki(k), true).ok, false);
@@ -119,7 +119,8 @@ test("P1: tap source requires a valid signed attestation (labels endpoint and /v
       fetch(`${base}/v3/shadow/labels`, { method: "POST", headers: bearer("dev_a"), body: JSON.stringify(b) });
     const att = (pid: string, label: string, key = k, dev = "dev_a") => {
       const ts = Date.now();
-      return { v: 1, method: "biometric", ts, sig: sign(key, labelMessage({ deviceId: dev, proposalId: pid, label }, ts)) };
+      const nonce = randomBytes(24).toString("hex");
+      return { v: 1, method: "biometric", ts, nonce, sig: sign(key, labelMessage({ deviceId: dev, proposalId: pid, label, nonce }, ts)) };
     };
     // no attestation, claims tap -> inferred
     let r = await (await post({ proposal_id: "pl1", label: "wanted", source: "tap" })).json();
@@ -297,8 +298,8 @@ test("P6c: PushNotifier is a no-op without config, sends data-only FCM v1 push, 
     getDb: () => db, env: { FCM_PROJECT_ID: "proj-1", GOOGLE_APPLICATION_CREDENTIALS: "/sa.json" },
     fetchImpl, readFile: () => sa, log: (m) => logs.push(m),
   });
-  n.start(60_000); // primes with pn_old, does not push it
-  assert.equal(await n.pollOnce(), 0);
+  n.start(60_000); // catches up surfaced proposals that may have appeared while the daemon was offline
+  assert.equal(await n.pollOnce(), 1);
   proposal(db, "pn_new");
   assert.equal(await n.pollOnce(), 1);
   assert.equal(await n.pollOnce(), 0, "not re-sent");

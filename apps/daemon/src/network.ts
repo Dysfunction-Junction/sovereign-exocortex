@@ -45,8 +45,33 @@ export function loopbackBase(raw: string): string | null {
   if (url.protocol !== "http:" && url.protocol !== "https:") return null;
   if (url.username || url.password) return null;
   const host = url.hostname;
-  if (host !== "127.0.0.1" && host !== "localhost" && host !== "[::1]" && host !== "::1") return null;
+  if (host !== "127.0.0.1" && host !== "[::1]" && host !== "::1") return null;
   return `${url.protocol}//${url.host}`;
+}
+
+async function readBodyCapped(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done || !value) break;
+      const remaining = maxBytes - total;
+      const chunk = Buffer.from(value.subarray(0, remaining));
+      chunks.push(chunk);
+      total += chunk.length;
+      if (value.length > remaining) {
+        await reader.cancel();
+        break;
+      }
+    }
+    if (total >= maxBytes) await reader.cancel();
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export function localNodes(env: NodeJS.ProcessEnv = process.env): LocalNode[] {
@@ -103,8 +128,7 @@ export async function forwardDelegate(
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
-    const rawText = await delegated.text();
-    const text = rawText.slice(0, 65536);
+    const text = await readBodyCapped(delegated, 65536);
     const contentType = delegated.headers.get("content-type") ?? "application/json";
     try {
       return { status: delegated.status, body: JSON.parse(text) as unknown, contentType };

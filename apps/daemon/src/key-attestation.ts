@@ -6,6 +6,7 @@
 
 import { X509Certificate } from "node:crypto";
 import { GOOGLE_ATTESTATION_ROOTS_PEM } from "./attestation-roots/google-roots.js";
+import { normalizeCertificateSerial } from "./attestation-status.js";
 
 export const KEY_DESCRIPTION_OID = "1.3.6.1.4.1.11129.2.1.17";
 const MAX_CHAIN = 8;
@@ -174,6 +175,8 @@ export function pinnedRoots(): X509Certificate[] {
 export interface ChainOptions {
   /** PEM roots to trust instead of the pinned Google bundle (tests). */
   roots?: readonly string[];
+  /** Certificate serials listed as revoked or suspended by Google's cached status document. */
+  revokedSerials?: ReadonlySet<string>;
   now?: number;
 }
 
@@ -194,6 +197,14 @@ export function verifyKeyAttestationChain(
     }
   } catch {
     return { ok: false, reason: "attestation_chain contains an unparseable certificate" };
+  }
+
+  if (opts.revokedSerials) {
+    for (const cert of certs) {
+      if (opts.revokedSerials.has(normalizeCertificateSerial(cert.serialNumber))) {
+        return { ok: false, reason: "attestation certificate is revoked or suspended" };
+      }
+    }
   }
 
   for (const c of certs) {

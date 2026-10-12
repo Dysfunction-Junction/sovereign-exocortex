@@ -9,8 +9,9 @@
  *   3. a new guess is made from the current screen and context and logged with its full context.
  *
  * Shadow only. Nothing here surfaces anything to the user, acts on a prediction, or feeds Precision@surface.
- * Engine state is rebuilt from the event log the first time a device is seen after a restart, so no
- * model state is persisted and replaying the log always reproduces it.
+ * Engine state is rebuilt from the latest 5,000 eligible events for a device the first time it is seen
+ * after a restart. This bounded warm start is deterministic for that window, but it does not reproduce
+ * a model trained on the device's full history once the history exceeds the limit.
  *
  * Guesses are left open until the next screen view arrives; the horizon is applied then (a late next
  * action resolves as EXPIRED). They are not expired against the server clock, because device clocks drift.

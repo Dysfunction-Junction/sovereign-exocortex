@@ -100,15 +100,15 @@ export function backfillPieces(db: ExocortexDatabase, exportDir: string): Backfi
 
   const result: BackfillResult = { summaries: prepared.length, inserted: 0, duplicate: 0, skipped: 0, withRealRange: 0 };
   // Oldest first, so sequence order matches chronology.
-  prepared.sort((a, b) => Date.parse(a.when ?? "") - Date.parse(b.when ?? ""));
+  const ordered = prepared
+    .filter((item) => item.when !== null && str(item.s.id) !== null)
+    .sort((a, b) => Date.parse(a.when!) - Date.parse(b.when!));
+  result.skipped = prepared.length - ordered.length;
 
   ensureDevice(db);
-  for (const { s, rangeFrom, rangeTo, created, when } of prepared) {
+  for (const { s, rangeFrom, rangeTo, created, when } of ordered) {
     const id = str(s.id);
-    if (!id || !when) {
-      result.skipped++;
-      continue;
-    }
+    if (!id || !when) continue;
     if (rangeFrom) result.withRealRange++;
     const { status } = db.ingestEvent(BACKFILL_DEVICE_ID, {
       event_id: `pieces:${id}`,

@@ -36,7 +36,7 @@ test("an upstream off this PC is not used", () => {
 
 test("loopbackBase supports IPv4 and IPv6 loopback correctly", () => {
   assert.equal(loopbackBase("http://127.0.0.1:8080/foo"), "http://127.0.0.1:8080");
-  assert.equal(loopbackBase("http://localhost:8080"), "http://localhost:8080");
+  assert.equal(loopbackBase("http://localhost:8080"), null);
   assert.equal(loopbackBase("http://[::1]:8080"), "http://[::1]:8080");
   assert.equal(loopbackBase("http://10.0.0.1:8080"), null);
 });

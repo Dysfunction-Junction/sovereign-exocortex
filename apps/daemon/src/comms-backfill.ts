@@ -49,11 +49,11 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-/** Digits only, US country code dropped. Returns null for anything that is not a 10-digit number. */
+/** Normalize phone numbers to digits, removing the North American country code when present. */
 export function normalizePhone(raw: string): string | null {
   const d = raw.replace(/\D/g, "");
   const n = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
-  return n.length === 10 ? n : null;
+  return n.length > 0 ? n : null;
 }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -109,15 +109,35 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 /** Newer Google exports put a narrow no-break space (U+202F) before AM/PM; treat all such spaces as plain spaces. */
 const plainSpaces = (s: string): string => s.replace(/[\u00A0\u2007\u2009\u202F]/g, " ").trim();
 
-function parseWhen(date: string, time: string, offsetMin: number): number | null {
+function parseWhen(date: string, time: string, offsetMin: number, timeZoneFormatter?: Intl.DateTimeFormat): number | null {
   const d = /^([A-Z][a-z]{2}) (\d{1,2}), (\d{4})$/.exec(plainSpaces(date));
   const t = /^(\d{1,2}):(\d{2}) (AM|PM)$/.exec(plainSpaces(time));
   if (!d || !t) return null;
   const month = MONTHS.indexOf(d[1]!);
   if (month < 0) return null;
+  if (Number(t[1]) < 1 || Number(t[1]) > 12 || Number(t[2]) > 59) return null;
   let h = Number(t[1]) % 12;
   if (t[3] === "PM") h += 12;
-  return Date.UTC(Number(d[3]), month, Number(d[2]), h, Number(t[2])) - offsetMin * 60_000;
+  const year = Number(d[3]);
+  const day = Number(d[2]);
+  const minute = Number(t[2]);
+  const wallTime = Date.UTC(year, month, day, h, minute);
+  const check = new Date(wallTime);
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month || check.getUTCDate() !== day || minute > 59) return null;
+  if (!timeZoneFormatter) return wallTime - offsetMin * 60_000;
+
+  let candidate = wallTime;
+  for (let i = 0; i < 4; i++) {
+    const parts = Object.fromEntries(timeZoneFormatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]));
+    const representedAsUtc = Date.UTC(Number(parts.year), MONTHS.indexOf(parts.month as string), Number(parts.day), Number(parts.hour), Number(parts.minute));
+    const adjusted = wallTime - (representedAsUtc - candidate);
+    if (adjusted === candidate) break;
+    candidate = adjusted;
+  }
+  const resolved = Object.fromEntries(timeZoneFormatter.formatToParts(new Date(candidate)).map((part) => [part.type, part.value]));
+  return Number(resolved.year) === year && MONTHS.indexOf(resolved.month as string) === month && Number(resolved.day) === day && Number(resolved.hour) === h && Number(resolved.minute) === minute
+    ? candidate
+    : null;
 }
 
 const parseDuration = (s: string): number => {
@@ -150,13 +170,16 @@ interface Ev {
   payload: Record<string, unknown>;
 }
 
-export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv: string, salt: string): CommsResult {
+export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv: string, salt: string, timeZone?: string): CommsResult {
   if (salt.length < 16) throw new Error("salt must be at least 16 characters");
   const contacts = loadContacts(contactsCsv);
   const rows = parseCsv(fiCsv);
   const head = rows[0] ?? [];
   const off = /\(([+-])(\d{2}):(\d{2})\)/.exec(head[0] ?? "");
   const offsetMin = off ? (off[1] === "-" ? -1 : 1) * (Number(off[2]) * 60 + Number(off[3])) : 0;
+  const timeZoneFormatter = timeZone
+    ? new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", weekday: "short", hourCycle: "h23" })
+    : undefined;
 
   const anon = (n: string) => `anon_${createHmac("sha256", salt).update(n).digest("hex").slice(0, 12)}`;
   const result: CommsResult = {
@@ -181,7 +204,7 @@ export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv:
   const seen = new Map<string, number>();
   for (const r of rows.slice(1)) {
     const t = TYPES[(r[3] ?? "").toLowerCase()];
-    const ts = parseWhen(r[0] ?? "", r[1] ?? "", offsetMin);
+    const ts = parseWhen(r[0] ?? "", r[1] ?? "", offsetMin, timeZoneFormatter);
     if (!t || ts === null) {
       result.malformed++;
       continue;
@@ -203,14 +226,20 @@ export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv:
           const known = n ? contacts.get(n) : undefined;
           if (known) result.matchedToContact++;
           else result.anonymous++;
-          return known ? { id: known.id, labels: known.labels } : { id: n ? anon(n) : "anon_unparsed", labels: [] as string[] };
+          return known ? { id: known.id, labels: known.labels } : { id: anon(n ?? p.trim().toLowerCase()), labels: [] as string[] };
         })
       : [{ id: "anon_unknown", labels: [] as string[] }];
 
     const key = [r[0], r[1], raw, r[3], r[4]].join("|");
     const nth = (seen.get(key) ?? 0) + 1;
     seen.set(key, nth);
+    const localParts = timeZoneFormatter
+      ? Object.fromEntries(timeZoneFormatter.formatToParts(new Date(ts)).map((part) => [part.type, part.value]))
+      : null;
     const local = new Date(ts + offsetMin * 60_000);
+    const weekday = localParts
+      ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(String(localParts.weekday))
+      : local.getUTCDay();
     events.push({
       id: `comms:${createHash("sha256").update(`${key}#${nth}`).digest("hex").slice(0, 32)}`,
       ts,
@@ -223,8 +252,8 @@ export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv:
         people: people.map((p) => p.id),
         labels: [...new Set(people.flatMap((p) => p.labels))].sort(),
         group: people.length > 1,
-        local_hour: local.getUTCHours(),
-        local_dow: local.getUTCDay(),
+        local_hour: localParts ? Number(localParts.hour) : local.getUTCHours(),
+        local_dow: weekday,
       },
     });
   }

@@ -11,6 +11,7 @@ export interface MishmashHandle {
   env: Record<string, string>;
   upstreams: Record<string, string>;
   logs: () => string;
+  restartNode?: (id: string) => Promise<void>;
 }
 
 function looksLikeRepoRoot(dir: string): boolean {
@@ -197,18 +198,18 @@ export async function startMishmash(options: {
   const pythonBin = process.env.MISHMASH_PYTHON || (process.platform === "win32" ? "python" : "python3");
 
   const children: ChildProcess[] = [];
-  let stderr = "";
+  const nodeLogs = new Map<string, string>();
   const capture = (id: string, child: ChildProcess) => {
     const take = (chunk: Buffer) => {
-      stderr = (stderr + `[${id}] ` + chunk.toString("utf8")).slice(-8000);
+      nodeLogs.set(id, `${nodeLogs.get(id) ?? ""}${chunk.toString("utf8")}`.slice(-8000));
     };
     child.stdout?.on("data", take);
     child.stderr?.on("data", take);
     child.on("error", (err) => {
-      stderr = (stderr + `[${id} error] ` + err.message + "\n").slice(-8000);
+      nodeLogs.set(id, `${nodeLogs.get(id) ?? ""}[spawn error] ${err.message}\n`.slice(-8000));
     });
   };
-  const logs = () => stderr;
+  const logs = () => [...nodeLogs].map(([id, text]) => `[${id}]\n${text}`).join("\n");
   const upstreams: Record<string, string> = {};
   const env: Record<string, string> = {};
 
@@ -219,21 +220,20 @@ export async function startMishmash(options: {
       upstreams[spec.id] = upstream;
       env[spec.envKey] = upstream;
     }
-    for (const spec of MISHMASH_LAUNCH) {
+    const spawnNode = (spec: MishmashNodeSpec): ChildProcess => {
       const port = options.ports?.[spec.id] ?? spec.port;
       const cwd = join(reposRoot, spec.repo);
       const childEnv = buildChildEnv(spec.portVariable, port, env, spec.id);
-      let child: ChildProcess;
-      if (spec.runner === "python") {
-        child = spawn(pythonBin, ["-m", spec.script], { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
-      } else if (spec.runner === "tsx") {
-        child = spawn(process.execPath, [tsx as string, spec.script], { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
-      } else {
-        child = spawn(process.execPath, [spec.script], { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] });
-      }
+      const spawnOptions = { cwd, env: childEnv, stdio: ["ignore", "pipe", "pipe"] as ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" };
+      const child = spec.runner === "python"
+        ? spawn(pythonBin, ["-m", spec.script], spawnOptions)
+        : spec.runner === "tsx"
+          ? spawn(process.execPath, [tsx as string, spec.script], spawnOptions)
+          : spawn(process.execPath, [spec.script], spawnOptions);
       capture(spec.id, child);
-      children.push(child);
-    }
+      return child;
+    };
+    for (const spec of MISHMASH_LAUNCH) children.push(spawnNode(spec));
     await Promise.all(
       MISHMASH_LAUNCH.map((spec, i) =>
         Promise.race([
@@ -242,7 +242,17 @@ export async function startMishmash(options: {
         ])
       )
     );
-    return { children, env, upstreams, logs };
+    const restartNode = async (id: string): Promise<void> => {
+      const index = MISHMASH_LAUNCH.findIndex((spec) => spec.id === id);
+      if (index < 0) throw new Error(`unknown mishmash node: ${id}`);
+      const previous = children[index];
+      if (previous) await stopMishmash({ children: [previous], env, upstreams, logs });
+      const spec = MISHMASH_LAUNCH[index]!;
+      const child = spawnNode(spec);
+      children[index] = child;
+      await waitForPing(id, upstreams[id] as string, logs, child);
+    };
+    return { children, env, upstreams, logs, restartNode };
   } catch (err) {
     await stopMishmash({ children, env, upstreams, logs });
     throw err;
@@ -250,8 +260,10 @@ export async function startMishmash(options: {
 }
 
 export async function stopMishmash(handle: MishmashHandle): Promise<void> {
+  let needsGrace = false;
   for (const child of handle.children) {
     if (child.pid && child.exitCode === null && child.signalCode === null) {
+      needsGrace = true;
       if (process.platform === "win32") {
         await new Promise<void>((resolve) => {
           let settled = false;
@@ -263,7 +275,7 @@ export async function stopMishmash(handle: MishmashHandle): Promise<void> {
           };
           const timer = setTimeout(finish, 5000);
           try {
-            const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+            const killer = spawn("taskkill", ["/pid", String(child.pid), "/T"], {
               stdio: "ignore",
               windowsHide: true,
             });
@@ -286,18 +298,46 @@ export async function stopMishmash(handle: MishmashHandle): Promise<void> {
           }
         });
       } else {
-        child.kill("SIGTERM");
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill("SIGTERM");
+        }
       }
     }
   }
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  if (needsGrace) await new Promise((resolve) => setTimeout(resolve, 3000));
   for (const child of handle.children) {
     if (child.exitCode === null && child.signalCode === null) {
       try {
-        child.kill("SIGKILL");
+        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
+        else if (process.platform === "win32" && child.pid) {
+          await new Promise<void>((resolve) => {
+            const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+            killer.once("close", () => resolve());
+            killer.once("error", () => resolve());
+            setTimeout(resolve, 3000).unref();
+          });
+        } else child.kill("SIGKILL");
       } catch {
         // The process already exited.
       }
     }
   }
+  await Promise.all(handle.children.map((child) => waitForChildExit(child, 1000)));
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      child.off("exit", finish);
+      child.off("error", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    child.once("exit", finish);
+    child.once("error", finish);
+  });
 }

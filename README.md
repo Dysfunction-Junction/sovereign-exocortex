@@ -62,6 +62,8 @@ pnpm exo status     # system status
 pnpm exo help       # list CLI commands
 ```
 
+`exo status` and `exo world` read live daemon state. Set `EXOCORTEX_ADMIN_TOKEN` to a valid device JWT whose device has the `admin:read` scope; the daemon URL defaults to `http://127.0.0.1:8788` and can be overridden with `EXOCORTEX_DAEMON_URL`.
+
 Run the host (needs secrets; copy values into `apps/daemon/.env`, which is gitignored and loaded automatically):
 
 ```powershell
