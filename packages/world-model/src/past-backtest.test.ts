@@ -24,3 +24,10 @@ test('splits by time even when input is shuffled', () => {
 test('refuses fewer than 2 sessions with a clear error', () => {
   expect(() => backtestNextTopic([])).toThrow(/at least 2/);
 });
+
+test('coarse overlap target also learns the cycle', async () => {
+  const { backtestAnyTopic } = await import('./past-backtest.js');
+  const r = backtestAnyTopic(sessions, [1]);
+  expect(r.graph[1]).toBe(1);
+  expect(r.repeatLast[1]).toBe(0);
+});

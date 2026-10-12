@@ -17,6 +17,8 @@ export interface PastSession {
   ts: number; // epoch ms
   tags: string[];
   persons: string[];
+  /** How `ts` was obtained; only "range_start" is a real activity time. */
+  timeBasis?: 'range_start' | 'record_created';
 }
 
 export interface PastSeedOptions {

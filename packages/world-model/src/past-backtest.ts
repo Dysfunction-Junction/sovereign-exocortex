@@ -101,3 +101,61 @@ export function backtestNextTopic(sessions: PastSession[], opts: BacktestOptions
     ci95: { top1: wilson(acc.model.top1, acc.model.n), top3: wilson(acc.model.top3, acc.model.n) },
   };
 }
+
+export interface OverlapReport {
+  evaluated: number;
+  /** Hit rate when ANY of a session's recurring topics is among the top-k predictions. */
+  graph: Record<number, number>;
+  mostCommon: Record<number, number>;
+  /** The previous session's own topics, ranked by training frequency. */
+  repeatLast: Record<number, number>;
+  ci95Graph: Record<number, [number, number]>;
+}
+
+/**
+ * Coarser target: does the next session touch any of the top-k predicted topics? The graph ranking sums
+ * next-topic probabilities over all of the previous session's recurring topics.
+ */
+export function backtestAnyTopic(sessions: PastSession[], ks = [1, 3, 5], opts: BacktestOptions = {}): OverlapReport {
+  if (sessions.length < 2) throw new Error('backtest needs at least 2 sessions');
+  const minCount = opts.minTopicCount ?? 2;
+  const ordered = [...sessions].sort((a, b) => a.ts - b.ts);
+  const split = Math.max(1, Math.min(ordered.length - 1, Math.floor(ordered.length * (opts.trainFraction ?? 0.7))));
+  const train = ordered.slice(0, split);
+
+  const counts = new Map<string, number>();
+  for (const s of train) for (const id of topicIds(s)) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const kept = new Set([...counts].filter(([, c]) => c >= minCount).map(([id]) => id));
+  const byFreq = (a: string, b: string) => counts.get(b)! - counts.get(a)! || a.localeCompare(b);
+  const keptOf = (s: PastSession) => topicIds(s).filter((i) => kept.has(i)).sort(byFreq);
+
+  const graph = new LivingLifeGraph();
+  seedFromPastSessions(graph, train, { now: train[train.length - 1]!.ts, minTopicCount: minCount });
+  const common = [...kept].sort(byFreq);
+
+  const hits = { graph: {} as Record<number, number>, common: {} as Record<number, number>, repeat: {} as Record<number, number> };
+  for (const k of ks) hits.graph[k] = hits.common[k] = hits.repeat[k] = 0;
+  let evaluated = 0;
+  for (let i = split; i < ordered.length; i++) {
+    const truth = new Set(keptOf(ordered[i]!));
+    const prev = keptOf(ordered[i - 1]!);
+    if (truth.size === 0) continue;
+    evaluated++;
+    const score = new Map<string, number>();
+    for (const p of prev) for (const n of graph.predictNextState(p)) score.set(n.predictedId, (score.get(n.predictedId) ?? 0) + n.probability);
+    const gRank = [...score].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([id]) => id);
+    for (const k of ks) {
+      if (gRank.slice(0, k).some((t) => truth.has(t))) hits.graph[k]!++;
+      if (common.slice(0, k).some((t) => truth.has(t))) hits.common[k]!++;
+      if (prev.slice(0, k).some((t) => truth.has(t))) hits.repeat[k]!++;
+    }
+  }
+  const rate = (h: Record<number, number>) => Object.fromEntries(ks.map((k) => [k, evaluated ? h[k]! / evaluated : 0]));
+  return {
+    evaluated,
+    graph: rate(hits.graph),
+    mostCommon: rate(hits.common),
+    repeatLast: rate(hits.repeat),
+    ci95Graph: Object.fromEntries(ks.map((k) => [k, wilson(hits.graph[k]!, evaluated)])) as Record<number, [number, number]>,
+  };
+}
