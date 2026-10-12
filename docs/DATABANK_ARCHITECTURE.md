@@ -49,8 +49,10 @@ service. The drive is local to Lubuntu; the router is not involved.
 1. **LUKS2 (aes-xts-plain64, argon2id) on the whole volume.** Protects against theft or
    disposal of the drive or the Lubuntu box. **The passphrase is never stored on
    Lubuntu.** After a reboot the vault is locked and the service stays down until you run
-   `ssh -t lubuntu databank-unlock` from the PC. (Trade-off: no unattended boot; an
-   always-on keyfile would only defend against drive-only theft.)
+   the **Unlock Databank** desktop button (or `ssh -t lubuntu sudo databank-unlock`). The button
+   (`ops/windows/unlock-databank.ps1`) prompts for the passphrase with hidden input and pipes it
+   over SSH into `databank-unlock --stdin`; nothing is saved on either machine. (Trade-off: no
+   unattended boot; an always-on keyfile would only defend against drive-only theft.)
 2. **Per-blob AES-256-GCM (streamed, 1 MiB frames)**, subkey from HKDF of a 32-byte master
    key file kept on the PC (and in your password manager), *not* on the drive. Protects
    copies of `blobs/` that leave the machine (offsite backup) and a mounted-but-unattended
@@ -123,7 +125,8 @@ one esbuild-bundled file, no Docker and no node_modules.
 2. On the PC: `databank keygen <file>`; back it up outside the vault; copy it to
    `/etc/databank.key` on Lubuntu (mode 640 root:michael).
 3. `ops/deploy.sh michael@100.69.94.119`, then edit `/etc/databank.env` (token, key path).
-4. `ssh -t lubuntu sudo databank-unlock` (after every reboot), then
+4. After every reboot click **Unlock Databank** (`ops/windows/make-shortcuts.ps1` creates the
+   Unlock / Lock / Status buttons), then
    `tailscale serve --bg --https=8443 http://127.0.0.1:8790` once.
 5. `databank ingest-dir /home/michael/oldpc-archive --source oldpc`, then
    `databank archive-memories packages/memory/data/memories.jsonl --older-than-days 90`.
