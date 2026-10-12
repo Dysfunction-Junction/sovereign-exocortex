@@ -53,17 +53,40 @@ const MIN_COSINE = Number(process.env.EXOCORTEX_EMBED_MIN_COSINE ?? "0.5");
 export interface LocalLTMOptions {
   /** Optional semantic embedder. Omit (or null) for pure token-overlap search. */
   embedder?: OllamaEmbedder | null;
+  /**
+   * Resolved on first use instead of at construction, so settings loaded from a .env file after
+   * this module is imported (EXOCORTEX_EMBEDDINGS, OLLAMA_URL, ...) still take effect.
+   * Ignored when `embedder` is given.
+   */
+  embedderFactory?: () => OllamaEmbedder | null;
 }
 
 export class LocalLTM {
-  private filePath: string;
-  private embedder: OllamaEmbedder | null;
-  private vectors: VectorCache | null;
+  private explicitPath: string | undefined;
+  private resolvedPath: string | undefined;
+  private options: LocalLTMOptions;
+  private resolvedEmbed: { embedder: OllamaEmbedder | null; vectors: VectorCache | null } | undefined;
 
   constructor(filePath?: string, options: LocalLTMOptions = {}) {
-    this.filePath = filePath ?? getDefaultLtmFile();
-    this.embedder = options.embedder ?? null;
-    this.vectors = this.embedder ? new VectorCache(`${this.filePath}.vec.jsonl`, this.embedder.model) : null;
+    this.explicitPath = filePath;
+    this.options = options;
+  }
+
+  /** Memory file; the env-derived default is read on first use, not at import. */
+  private get filePath(): string {
+    this.resolvedPath ??= this.explicitPath ?? getDefaultLtmFile();
+    return this.resolvedPath;
+  }
+
+  private get embed(): { embedder: OllamaEmbedder | null; vectors: VectorCache | null } {
+    if (!this.resolvedEmbed) {
+      const embedder = this.options.embedder ?? this.options.embedderFactory?.() ?? null;
+      this.resolvedEmbed = {
+        embedder,
+        vectors: embedder ? new VectorCache(`${this.filePath}.vec.jsonl`, embedder.model) : null,
+      };
+    }
+    return this.resolvedEmbed;
   }
 
   public async addMemory(entry: {
@@ -190,30 +213,31 @@ export class LocalLTM {
    * need to handle embedding failure.
    */
   public async searchMemoriesHybrid(query: string, limit = 5): Promise<MemorySearchResult[]> {
-    if (!this.embedder || !this.vectors) return this.searchMemories(query, limit);
+    const { embedder, vectors } = this.embed;
+    if (!embedder || !vectors) return this.searchMemories(query, limit);
     if (query.trim().length === 0) return [];
 
-    const queryVec = await this.embedder.embedQuery(query);
+    const queryVec = await embedder.embedQuery(query);
     if (!queryVec) return this.searchMemories(query, limit);
 
     const memories = await this.getAllMemories();
     if (memories.length === 0) return [];
 
-    const cache = await this.vectors.load();
+    const cache = await vectors.load();
     const texts = memories.map((m) => `${m.title}\n${m.body}\n${(m.tags || []).join(" ")}`);
-    const keys = texts.map((t) => this.vectors!.keyFor(t));
+    const keys = texts.map((t) => vectors.keyFor(t));
 
     const missing: number[] = [];
     keys.forEach((k, i) => {
       if (!cache.has(k)) missing.push(i);
     });
     if (missing.length > 0) {
-      const fresh = await this.embedder.embedDocuments(missing.map((i) => texts[i]));
+      const fresh = await embedder.embedDocuments(missing.map((i) => texts[i]));
       const toStore: Array<{ k: string; v: number[] }> = [];
       fresh.forEach((v, n) => {
         if (v) toStore.push({ k: keys[missing[n]], v });
       });
-      await this.vectors.put(toStore);
+      await vectors.put(toStore);
     }
 
     const queryTokens = tokenize(query);
@@ -232,8 +256,9 @@ export class LocalLTM {
   }
 }
 
-const embeddingsEnabled = (process.env.EXOCORTEX_EMBEDDINGS ?? "1") !== "0";
-export const localLTM = new LocalLTM(undefined, { embedder: embeddingsEnabled ? new OllamaEmbedder() : null });
+export const localLTM = new LocalLTM(undefined, {
+  embedderFactory: () => ((process.env.EXOCORTEX_EMBEDDINGS ?? "1") !== "0" ? new OllamaEmbedder() : null),
+});
 export const getAllMemories = () => localLTM.getAllMemories();
 export const searchMemories = (query: string, limit = 5) => localLTM.searchMemories(query, limit);
 export const searchMemoriesHybrid = (query: string, limit = 5) => localLTM.searchMemoriesHybrid(query, limit);

@@ -135,3 +135,26 @@ test("LocalLTM hybrid semantic search", async (t) => {
     await rm(CACHE_FILE, { force: true });
   }
 });
+
+test("LocalLTM resolves its embedder lazily, after .env would have loaded", async () => {
+  const file = "data/test-lazy-memories.jsonl";
+  await rm(file, { force: true });
+  await rm(`${file}.vec.jsonl`, { force: true });
+  try {
+    let factoryCalls = 0;
+    const ltm = new LocalLTM(file, {
+      embedderFactory: () => {
+        factoryCalls++;
+        return null; // env says embeddings are off by the time it is first needed
+      },
+    });
+    assert.equal(factoryCalls, 0, "nothing is read at construction/import time");
+    await ltm.addMemory({ title: "Lazy", body: "resolved on first use", source: "test" });
+    assert.equal((await ltm.searchMemoriesHybrid("lazy", 3))[0]?.title, "Lazy");
+    await ltm.searchMemoriesHybrid("lazy", 3);
+    assert.equal(factoryCalls, 1, "resolved once and reused");
+  } finally {
+    await rm(file, { force: true });
+    await rm(`${file}.vec.jsonl`, { force: true });
+  }
+});
