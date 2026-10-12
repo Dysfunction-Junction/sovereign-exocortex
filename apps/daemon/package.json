@@ -17,7 +17,8 @@
     "pieces-backfill": "tsx --env-file-if-exists=.env src/pieces-backfill-cli.ts",
     "pieces-backtest": "tsx --env-file-if-exists=.env src/pieces-backtest-cli.ts",
     "comms-backfill": "tsx --env-file-if-exists=.env src/comms-backfill-cli.ts",
-    "comms-backtest": "tsx --env-file-if-exists=.env src/comms-backtest-cli.ts"
+    "comms-backtest": "tsx --env-file-if-exists=.env src/comms-backtest-cli.ts",
+    "comms-timing": "tsx --env-file-if-exists=.env src/comms-timing-cli.ts"
   },
   "dependencies": {
     "@exocortex/core": "workspace:*",
