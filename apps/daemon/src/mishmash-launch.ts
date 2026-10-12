@@ -165,6 +165,12 @@ export function buildChildEnv(portVariable: string, port: number, extraEnv: Reco
   if (nodeId === "autonomous-triad" && process.env.TRIAD_SERVER_TOKEN) {
     env.TRIAD_SERVER_TOKEN = process.env.TRIAD_SERVER_TOKEN;
   }
+  // Likewise only the memory gateway may search the archive; no other node sees the databank token.
+  if (nodeId === "pieces-for-all") {
+    for (const key of ["DATABANK_URL", "DATABANK_TOKEN"]) {
+      if (process.env[key]) env[key] = process.env[key];
+    }
+  }
   for (const key of allowedKeys) {
     if (process.env[key] !== undefined) {
       env[key] = process.env[key];

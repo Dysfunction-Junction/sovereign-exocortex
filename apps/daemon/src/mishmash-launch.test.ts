@@ -31,6 +31,28 @@ test("waitForPing sends TRIAD_SERVER_TOKEN only to autonomous-triad", async () =
   assert.equal(otherSeen[0]?.Authorization, undefined, "token must not leak to other nodes");
 });
 
+test("buildChildEnv passes the databank settings to the memory gateway only", () => {
+  const prev = { url: process.env.DATABANK_URL, token: process.env.DATABANK_TOKEN };
+  process.env.DATABANK_URL = "https://bank.example";
+  process.env.DATABANK_TOKEN = "bank-token-123456";
+  try {
+    const memory = buildChildEnv("PORT", 1, {}, "pieces-for-all");
+    assert.equal(memory.DATABANK_URL, "https://bank.example");
+    assert.equal(memory.DATABANK_TOKEN, "bank-token-123456");
+    for (const other of ["autonomous-triad", "registry-app", "agent-mesh-mcp", "pattern-analyzer"]) {
+      const env = buildChildEnv("PORT", 1, {}, other);
+      assert.equal(env.DATABANK_URL, undefined, `${other} must not see the databank url`);
+      assert.equal(env.DATABANK_TOKEN, undefined, `${other} must not see the databank token`);
+    }
+    assert.equal(buildChildEnv("PORT", 1, {}).DATABANK_TOKEN, undefined, "no node id, no token");
+  } finally {
+    if (prev.url === undefined) delete process.env.DATABANK_URL;
+    else process.env.DATABANK_URL = prev.url;
+    if (prev.token === undefined) delete process.env.DATABANK_TOKEN;
+    else process.env.DATABANK_TOKEN = prev.token;
+  }
+});
+
 test("buildChildEnv passes TRIAD_SERVER_TOKEN to the triad child only", () => {
   const prev = process.env.TRIAD_SERVER_TOKEN;
   process.env.TRIAD_SERVER_TOKEN = "tok-xyz";
