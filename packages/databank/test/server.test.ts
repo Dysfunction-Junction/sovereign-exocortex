@@ -82,4 +82,21 @@ describe("databank server", () => {
     assert.equal(h.ok, true);
     assert.ok(h.items >= 1);
   });
+
+  it("serves the search UI without a token but nothing else", async () => {
+    const r = await call("/", {}, null);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get("content-type") ?? "", /text\/html/);
+    const html = await r.text();
+    assert.match(html, /Databank Search/);
+    assert.doesNotMatch(html, new RegExp(TOKEN));
+    assert.equal((await call("/index.html", {}, null)).status, 200);
+    assert.equal((await call("/item/" + "a".repeat(32), {}, null)).status, 401);
+  });
+
+  it("reports per-source counts for the UI filters", async () => {
+    const h = (await (await call("/health")).json()) as { bySource: Record<string, number>; byKind: Record<string, number> };
+    assert.ok(Object.values(h.bySource).reduce((a, b) => a + b, 0) >= 1);
+    assert.ok(Object.keys(h.byKind).length >= 1);
+  });
 });

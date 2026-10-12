@@ -419,11 +419,15 @@ export class Databank {
     return (this.db.prepare("SELECT * FROM items WHERE item_id = ?").get(itemId) as unknown as ItemRow) ?? null;
   }
 
-  stats(): { items: number; chunks: number; vectors: number; blobs: number; byKind: Record<string, number> } {
+  stats(): { items: number; chunks: number; vectors: number; blobs: number; byKind: Record<string, number>; bySource: Record<string, number> } {
     const n = (sql: string): number => Number((this.db.prepare(sql).get() as Row).n);
     const byKind: Record<string, number> = {};
     for (const r of this.db.prepare("SELECT kind, COUNT(*) AS n FROM items GROUP BY kind").all() as Row[]) {
       byKind[String(r.kind)] = Number(r.n);
+    }
+    const bySource: Record<string, number> = {};
+    for (const r of this.db.prepare("SELECT source, COUNT(*) AS n FROM items GROUP BY source").all() as Row[]) {
+      bySource[String(r.source)] = Number(r.n);
     }
     return {
       items: n("SELECT COUNT(*) AS n FROM items"),
@@ -431,6 +435,7 @@ export class Databank {
       vectors: n("SELECT COUNT(*) AS n FROM vectors"),
       blobs: n("SELECT COUNT(DISTINCT blob_id) AS n FROM items WHERE blob_id IS NOT NULL"),
       byKind,
+      bySource,
     };
   }
 

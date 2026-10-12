@@ -3,6 +3,7 @@
  * Minimal authenticated HTTP API in front of the databank. Bind it to loopback and let
  * Tailscale Serve provide the tailnet HTTPS.
  *
+ *   GET  /                            -> search UI (public shell; token is typed into the page)
  *   GET  /health                      -> {ok, items}
  *   POST /search  {q, k?, kind?, source?, since?, until?}
  *   GET  /item/:id
@@ -14,6 +15,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from "node:crypto";
 import { isBlobId } from "./blobstore.js";
 import type { Databank, ItemKind } from "./databank.js";
+import { UI_HTML } from "./ui.js";
 
 const KINDS = new Set(["memory", "document", "photo", "video", "audio", "text", "other"]);
 const MAX_BODY = 4 * 1024 * 1024;
@@ -45,6 +47,16 @@ export function createDatabankServer(bank: Databank, opts: ServerOptions): Serve
 async function handle(bank: Databank, req: IncomingMessage, res: ServerResponse, ok: boolean): Promise<void> {
   const url = new URL(req.url ?? "/", "http://x");
   const method = req.method ?? "GET";
+  if (method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+    });
+    res.end(UI_HTML);
+    return;
+  }
   if (!ok) return json(res, 401, { error: "unauthorized" });
 
   if (method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true, ...bank.stats() });
