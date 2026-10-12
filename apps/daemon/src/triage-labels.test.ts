@@ -43,6 +43,7 @@ describe("triage labels", () => {
         { kind: "telemetry", text: "Bank: unusual sign-in attempt" },
         { kind: "telemetry", text: "Reminder: water bill due in 5 days" },
         { kind: "telemetry", text: "Promo: 20% off pizza" },
+        { kind: "telemetry", text: "SMS outbound Mom See you at six" },
         { kind: "touch", text: "" },
       ].map((e) => ({
         event_id: `e${++n}`, schema_ver: 1 as const, kind: e.kind, ts_device: T0 + n,
@@ -55,8 +56,22 @@ describe("triage labels", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("finds only telemetry events that carry text", () => {
+  it("finds only incoming telemetry events that carry text (not touches, not your own sent messages)", () => {
     assert.equal(triageableEvents(db).length, 3);
+    assert.ok(triageableEvents(db).every((e) => !e.text.includes("outbound")));
+  });
+
+  it("breaks scores down by event type and ignores labels on events triage does not run on", async () => {
+    await backfill(db, { models: [A], host: { fetchImpl: fakeFetch() } });
+    const [bank] = triageableEvents(db);
+    addLabel(db, bank.seq, "urgent");
+    const outbound = (db.raw.prepare("SELECT seq FROM events WHERE payload LIKE '%SMS outbound%'").get() as { seq: number }).seq;
+    addLabel(db, outbound, "noise"); // labeled earlier, before outgoing messages were excluded
+    const r = score(db, [A]);
+    assert.equal(r.labeled, 1, "the outgoing-message label is not counted");
+    assert.deepEqual(r.models[0].byType.other, { n: 1, correct: 1, urgent: 1 });
+    assert.deepEqual(r.models[0].byType.voicemail, { n: 0, correct: 0, urgent: 0 });
+    assert.match(formatReport(r), /other\s+1\/1 correct \(100%\), 1 labeled urgent/);
   });
 
   it("backfills each model once and resumes without re-running finished pairs", async () => {

@@ -92,6 +92,9 @@ export function triageTextOf(ev: Pick<RawEvent, "kind" | "payload">): string | n
   if (p.type !== "system_telemetry" || typeof p.telemetry !== "string") return null;
   const text = p.telemetry.trim();
   if (text.length === 0) return null;
+  // A message you sent yourself never needs your attention; triaging it only wastes CPU and, in
+  // evaluation, inflates accuracy (a model that says "noise" for everything looks right on 40% of events).
+  if (text.startsWith("SMS outbound")) return null;
   const label = typeof p.app_label === "string" && p.app_label ? `${p.app_label}: ` : "";
   return (label + text).slice(0, MAX_TEXT_CHARS);
 }

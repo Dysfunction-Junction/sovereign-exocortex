@@ -111,6 +111,12 @@ describe("TriageHost", () => {
     assert.throws(() => db.raw.prepare("DELETE FROM triage_results").run(), /append-only/);
   });
 
+  it("skips messages you sent yourself", () => {
+    const mk = (t: string) => ({ kind: "telemetry", payload: JSON.stringify({ type: "system_telemetry", telemetry: t, app_label: "Messages" }) }) as never;
+    assert.equal(triageTextOf(mk("SMS outbound Mom Hello there")), null);
+    assert.ok(triageTextOf(mk("SMS inbound Mom Hello there")));
+  });
+
   it("triageTextOf prefixes the app label and caps length", () => {
     const t = triageTextOf({ kind: "telemetry", payload: JSON.stringify({ type: "system_telemetry", telemetry: "x".repeat(5000), app_label: "Bank" }) } as never);
     assert.ok(t!.startsWith("Bank: x"));

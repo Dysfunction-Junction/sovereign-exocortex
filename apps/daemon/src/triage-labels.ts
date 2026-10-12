@@ -154,6 +154,16 @@ export function addLabel(db: ExocortexDatabase, seq: number, label: TriageCatego
   db.raw.prepare("INSERT INTO triage_labels (event_seq, label, labeled_at) VALUES (?, ?, ?)").run(seq, label, now);
 }
 
+/** Coarse event type, so one easy class (or one rare class) cannot hide behind the overall number. */
+export type EventType = "voicemail" | "sms-inbound" | "other";
+
+export function eventTypeOf(text: string): EventType {
+  const t = text.replace(/^[^:]*:s*/, ""); // drop the "Messages: " app prefix
+  if (t.startsWith("SMS inbound") && /voicemail/i.test(t)) return "voicemail";
+  if (t.startsWith("SMS inbound")) return "sms-inbound";
+  return "other";
+}
+
 export interface ModelScore {
   model: string;
   n: number;
@@ -163,6 +173,8 @@ export interface ModelScore {
   urgentRecall: number | null;
   /** Of the events the model called urgent, how many you labeled urgent. */
   urgentPrecision: number | null;
+  /** Per event type: labeled count, correct, and how many you labeled urgent. */
+  byType: Record<EventType, { n: number; correct: number; urgent: number }>;
   /** confusion[actual][predicted] */
   confusion: Record<TriageCategory, Record<TriageCategory, number>>;
 }
@@ -186,6 +198,9 @@ export function score(db: ExocortexDatabase, models: string[]): ScoreReport {
   for (const r of db.raw.prepare("SELECT event_seq, label FROM triage_labels ORDER BY id").all() as Row[]) {
     labels.set(Number(r.event_seq), r.label as TriageCategory);
   }
+  // Only events triage would actually run on (own outgoing messages are excluded).
+  const typeOf = new Map(triageableEvents(db).map((e) => [e.seq, eventTypeOf(e.text)] as const));
+  for (const seq of [...labels.keys()]) if (!typeOf.has(seq)) labels.delete(seq);
   const labelCounts: Record<TriageCategory, number> = { urgent: 0, routine: 0, noise: 0 };
   for (const l of labels.values()) labelCounts[l]++;
 
@@ -193,13 +208,25 @@ export function score(db: ExocortexDatabase, models: string[]): ScoreReport {
   const report: ScoreReport = { labeled: labels.size, labelCounts, models: [] };
   for (const model of models) {
     const confusion = blankConfusion();
+    const byType: ModelScore["byType"] = {
+      voicemail: { n: 0, correct: 0, urgent: 0 },
+      "sms-inbound": { n: 0, correct: 0, urgent: 0 },
+      other: { n: 0, correct: 0, urgent: 0 },
+    };
     let n = 0;
     let correct = 0;
     for (const [seq, actual] of labels) {
+      const type = typeOf.get(seq);
+      if (!type) continue;
       const predicted = verdicts.get(seq)?.get(model);
       if (!predicted) continue;
       n++;
-      if (predicted === actual) correct++;
+      byType[type].n++;
+      if (predicted === actual) {
+        correct++;
+        byType[type].correct++;
+      }
+      if (actual === "urgent") byType[type].urgent++;
       confusion[actual][predicted]++;
     }
     const urgentActual = confusion.urgent.urgent + confusion.urgent.routine + confusion.urgent.noise;
@@ -211,6 +238,7 @@ export function score(db: ExocortexDatabase, models: string[]): ScoreReport {
       accuracy: n ? correct / n : 0,
       urgentRecall: urgentActual ? confusion.urgent.urgent / urgentActual : null,
       urgentPrecision: urgentPred ? confusion.urgent.urgent / urgentPred : null,
+      byType,
       confusion,
     });
   }
@@ -226,8 +254,12 @@ export function formatReport(r: ScoreReport): string {
   for (const m of r.models) {
     lines.push(
       `${m.model}: accuracy ${m.correct}/${m.n} (${pct(m.n ? m.accuracy : null)}), urgent recall ${pct(m.urgentRecall)}, urgent precision ${pct(m.urgentPrecision)}`,
-      "  actual \\ predicted   urgent routine  noise",
     );
+    for (const t of Object.keys(m.byType) as EventType[]) {
+      const b = m.byType[t];
+      if (b.n) lines.push(`  ${t.padEnd(12)} ${b.correct}/${b.n} correct (${pct(b.correct / b.n)}), ${b.urgent} labeled urgent`);
+    }
+    lines.push("  actual \\ predicted   urgent routine  noise");
     for (const a of TRIAGE_CATEGORIES) {
       lines.push(`  ${a.padEnd(18)}  ${String(m.confusion[a].urgent).padStart(6)} ${String(m.confusion[a].routine).padStart(7)} ${String(m.confusion[a].noise).padStart(6)}`);
     }
