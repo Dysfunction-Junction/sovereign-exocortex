@@ -88,6 +88,8 @@ async function writeQueue(events: UsageEvent[]): Promise<void> {
 export async function recordEvent(event: UsageEvent): Promise<void> {
   return withQueueLock(async () => {
     const queue = await readQueue();
+    // A caller-supplied id means "this exact event": never queue it twice (e.g. an SMS pulled again).
+    if (event.id && queue.some((q) => q.id === event.id)) return;
     const eventWithId: UsageEvent = {
       ...event,
       id: event.id || `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,

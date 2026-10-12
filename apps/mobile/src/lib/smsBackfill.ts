@@ -11,6 +11,28 @@ const PAGE_SIZE = 200;
 // next run resumes where this one stopped.
 const MAX_PER_RUN = 5000;
 
+/**
+ * Stable event id for one SMS: the phone's own message id and date, plus a hash of who and what.
+ * Re-pulling the same message (a reset marker, a retried run) then produces the same id, so neither
+ * the local queue nor the daemon (UNIQUE event_id) stores it twice. Random ids made every re-pull look new.
+ */
+export function stableSmsEventId(m: { id: string; address: string; body: string; date: number }): string {
+  // cyrb53: small, fast, deterministic 53-bit string hash (not security-sensitive).
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  const text = `${m.address}
+${m.body}`;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const digest = (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  return `sms-${m.id}-${m.date}-${digest}`;
+}
+
 export interface SmsBackfillProgress {
   ingested: number;
   done: boolean;
@@ -107,7 +129,22 @@ async function ensureQueueRoom(needed: number): Promise<boolean> {
  * up to MAX_PER_RUN messages per call. Flushed in the background by flushUsageEvents.
  * Safe to call repeatedly — a no-op once caught up or when the allowlist is empty.
  */
-export async function runSmsBackfill(
+let inFlight: Promise<SmsBackfillProgress> | null = null;
+
+/**
+ * Single-flight: it now runs on every foreground, so a run that is still going (a big first history) must
+ * not be started a second time. Callers that arrive meanwhile share the running one.
+ */
+export function runSmsBackfill(onProgress?: (p: SmsBackfillProgress) => void): Promise<SmsBackfillProgress> {
+  if (inFlight) return inFlight;
+  const run = runSmsBackfillOnce(onProgress).finally(() => {
+    if (inFlight === run) inFlight = null;
+  });
+  inFlight = run;
+  return run;
+}
+
+async function runSmsBackfillOnce(
   onProgress?: (p: SmsBackfillProgress) => void
 ): Promise<SmsBackfillProgress> {
   if (!(await smsPermissionGranted())) {
@@ -139,6 +176,7 @@ export async function runSmsBackfill(
     for (const m of messages ?? []) {
       const who = m.contactName || m.address || "unknown";
       await recordEvent({
+        id: stableSmsEventId(m),
         type: "system_telemetry",
         screen: "background",
         // Prefix parsed by apps/proxy/src/seeder.ts summarizeTelemetry.

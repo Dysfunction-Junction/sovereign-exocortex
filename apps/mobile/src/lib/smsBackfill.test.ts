@@ -82,3 +82,48 @@ describe("runSmsBackfill queue capacity", () => {
     expect(sent.length + remaining.length).toBe(800);
   });
 });
+
+describe("SMS event ids and overlapping runs", () => {
+  const msg = (i: number, extra: Record<string, unknown> = {}) => ({
+    id: String(i), address: "+15555550100", contactName: "Pat", body: `hello ${i}`, date: BASE + i, direction: "inbound" as const, ...extra,
+  });
+  const onePage = (messages: unknown[]) =>
+    sms.backfill.mockImplementation(async () => ({ messages, hasMore: false, scanned: messages.length, lastScannedDate: BASE + 50 }));
+
+  it("gives the same message the same id, and a different one to a different message", async () => {
+    const { stableSmsEventId } = await import("./smsBackfill");
+    expect(stableSmsEventId(msg(1))).toBe(stableSmsEventId(msg(1)));
+    expect(stableSmsEventId(msg(1))).not.toBe(stableSmsEventId(msg(2)));
+    expect(stableSmsEventId(msg(1))).not.toBe(stableSmsEventId(msg(1, { body: "edited" })));
+    expect(stableSmsEventId(msg(1))).not.toBe(stableSmsEventId(msg(1, { address: "+15555550199" })));
+    expect(stableSmsEventId(msg(1)).length).toBeLessThanOrEqual(128);
+  });
+
+  it("does not queue a message twice when the marker is reset and it is pulled again", async () => {
+    onePage([msg(1), msg(2), msg(3)]);
+    await runSmsBackfill();
+    expect((await peekQueue()).length).toBe(3);
+
+    await Preferences.set({ key: "pieces-android:smsBackfillHighWater", value: "0" }); // marker lost
+    await runSmsBackfill();
+    const queue = await peekQueue();
+    expect(queue.length).toBe(3);
+    expect(new Set(queue.map((e) => (e as { id: string }).id)).size).toBe(3);
+  });
+
+  it("shares one run between callers that overlap (resume + cold start)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    sms.backfill.mockImplementation(async () => {
+      await gate;
+      return { messages: [msg(1)], hasMore: false, scanned: 1, lastScannedDate: BASE + 1 };
+    });
+    const a = runSmsBackfill();
+    const b = runSmsBackfill();
+    expect(b).toBe(a);
+    release();
+    await a;
+    expect(sms.backfill).toHaveBeenCalledTimes(1);
+    expect((await peekQueue()).length).toBe(1);
+  });
+});
