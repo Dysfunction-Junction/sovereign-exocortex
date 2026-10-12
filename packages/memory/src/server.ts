@@ -32,6 +32,7 @@ import {
 } from "./memories.js";
 import { localLTM } from "./local-ltm.js";
 import { ArchiveClient } from "./archive-client.js";
+import { GraphClient } from "./graph-client.js";
 
 function safeCompareTokens(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
@@ -64,6 +65,8 @@ export interface ServerConfig {
    * (null = archive search disabled; the response then has no `archive` field).
    */
   archiveClient?: ArchiveClient | null;
+  /** Neo4j knowledge-graph client. Omit to read NEO4J_* on first use (null = graph search disabled). */
+  graphClient?: GraphClient | null;
 }
 
 export interface AskRequestBody {
@@ -254,6 +257,12 @@ export function createGatewayApp(config: ServerConfig = {}) {
     if (envArchive === undefined) envArchive = ArchiveClient.fromEnv();
     return envArchive;
   };
+  let envGraph: GraphClient | null | undefined;
+  const getGraph = (): GraphClient | null => {
+    if (config.graphClient !== undefined) return config.graphClient;
+    if (envGraph === undefined) envGraph = GraphClient.fromEnv();
+    return envGraph;
+  };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const origin = req.headers.origin;
@@ -405,12 +414,15 @@ export function createGatewayApp(config: ServerConfig = {}) {
             : 5;
           const archive = getArchive();
           // Local and archive searches run together; the archive can only add time up to its own timeout.
-          const [matches, archived] = await Promise.all([
+          const graph = getGraph();
+          const [matches, archived, graphed] = await Promise.all([
             localLTM.searchMemoriesHybrid(query, limit),
             archive ? archive.search(query, limit) : Promise.resolve(null),
+            graph ? graph.search(query, limit) : Promise.resolve(null),
           ]);
           result.matches = matches;
           if (archived) result.archive = archived;
+          if (graphed) result.graph = graphed;
           result.query = query;
           result.status = "searched";
         } else {
