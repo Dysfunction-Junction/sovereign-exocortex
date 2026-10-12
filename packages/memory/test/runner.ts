@@ -21,6 +21,7 @@ const testFiles = [
   join(__dirname, "server.test.ts"),
   join(__dirname, "local-ltm.test.ts"),
   join(__dirname, "embeddings.test.ts"),
+  join(__dirname, "archive-client.test.ts"),
 ];
 
 // Keep the suite hermetic: only embeddings.test.ts exercises embeddings (with a

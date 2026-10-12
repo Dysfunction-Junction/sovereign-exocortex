@@ -31,6 +31,7 @@ import {
   RECENT_CAPTURE_QUERY,
 } from "./memories.js";
 import { localLTM } from "./local-ltm.js";
+import { ArchiveClient } from "./archive-client.js";
 
 function safeCompareTokens(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
@@ -58,6 +59,11 @@ export interface ServerConfig {
   gatewayToken?: string;
   memoryLogPath?: string;
   saveMemoriesToPieces?: boolean;
+  /**
+   * Databank client for archived memories. Omit to read DATABANK_URL / DATABANK_TOKEN on first use
+   * (null = archive search disabled; the response then has no `archive` field).
+   */
+  archiveClient?: ArchiveClient | null;
 }
 
 export interface AskRequestBody {
@@ -242,6 +248,12 @@ export function createGatewayApp(config: ServerConfig = {}) {
   const gatewayToken = config.gatewayToken !== undefined ? config.gatewayToken : (process.env.GATEWAY_TOKEN ?? process.env.PIECES_GATEWAY_TOKEN);
   const startTime = Date.now();
   let activeInferences = 0;
+  let envArchive: ArchiveClient | null | undefined;
+  const getArchive = (): ArchiveClient | null => {
+    if (config.archiveClient !== undefined) return config.archiveClient;
+    if (envArchive === undefined) envArchive = ArchiveClient.fromEnv();
+    return envArchive;
+  };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const origin = req.headers.origin;
@@ -391,8 +403,14 @@ export function createGatewayApp(config: ServerConfig = {}) {
           const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
             ? Math.min(Math.max(rawLimit, 1), 50)
             : 5;
-          const matches = await localLTM.searchMemoriesHybrid(query, limit);
+          const archive = getArchive();
+          // Local and archive searches run together; the archive can only add time up to its own timeout.
+          const [matches, archived] = await Promise.all([
+            localLTM.searchMemoriesHybrid(query, limit),
+            archive ? archive.search(query, limit) : Promise.resolve(null),
+          ]);
           result.matches = matches;
+          if (archived) result.archive = archived;
           result.query = query;
           result.status = "searched";
         } else {
