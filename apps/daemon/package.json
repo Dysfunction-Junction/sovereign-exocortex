@@ -16,7 +16,8 @@
     "triage-label": "tsx --env-file-if-exists=.env src/triage-label-cli.ts",
     "pieces-backfill": "tsx --env-file-if-exists=.env src/pieces-backfill-cli.ts",
     "pieces-backtest": "tsx --env-file-if-exists=.env src/pieces-backtest-cli.ts",
-    "comms-backfill": "tsx --env-file-if-exists=.env src/comms-backfill-cli.ts"
+    "comms-backfill": "tsx --env-file-if-exists=.env src/comms-backfill-cli.ts",
+    "comms-backtest": "tsx --env-file-if-exists=.env src/comms-backtest-cli.ts"
   },
   "dependencies": {
     "@exocortex/core": "workspace:*",

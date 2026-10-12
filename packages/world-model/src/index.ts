@@ -11,3 +11,4 @@ export * from './generative-model.js';
 export * from './past-seed.js';
 export * from './past-backtest.js';
 export * from './past-ladder.js';
+export * from './comms-ladder.js';
