@@ -9,3 +9,4 @@ export * from './cognitive-gate.js';
 export * from './active-inference.js';
 export * from './generative-model.js';
 export * from './past-seed.js';
+export * from './past-backtest.js';
