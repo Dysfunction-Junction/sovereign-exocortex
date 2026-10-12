@@ -71,7 +71,7 @@ export interface TriageHostOptions {
   now?: () => number;
 }
 
-interface Job {
+export interface TriageJob {
   db: ExocortexDatabase;
   seq: number;
   deviceId: string;
@@ -104,7 +104,7 @@ export class TriageHost {
   private readonly maxQueue: number;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
-  private readonly queue: Job[] = [];
+  private readonly queue: TriageJob[] = [];
   private readonly ready = new WeakSet<object>();
   private running: Promise<void> | null = null;
 
@@ -145,13 +145,19 @@ export class TriageHost {
   private async drain(): Promise<void> {
     for (let job = this.queue.shift(); job; job = this.queue.shift()) {
       try {
-        const started = this.now();
-        const verdict = await this.classify(job.text);
-        if (verdict) this.store(job, verdict, this.now() - started);
+        await this.run(job);
       } catch (err) {
         console.error("[triage-host] job failed:", err instanceof Error ? err.message : err);
       }
     }
+  }
+
+  /** Classify one job now and store the verdict (null when the model or response is unusable). */
+  async run(job: TriageJob): Promise<TriageVerdict | null> {
+    const started = this.now();
+    const verdict = await this.classify(job.text);
+    if (verdict) this.store(job, verdict, this.now() - started);
+    return verdict;
   }
 
   async classify(text: string): Promise<TriageVerdict | null> {
@@ -191,7 +197,7 @@ export class TriageHost {
     }
   }
 
-  private store(job: Job, v: TriageVerdict, latencyMs: number): void {
+  private store(job: TriageJob, v: TriageVerdict, latencyMs: number): void {
     if (!this.ready.has(job.db)) {
       job.db.raw.exec(TRIAGE_SCHEMA_SQL);
       this.ready.add(job.db);
