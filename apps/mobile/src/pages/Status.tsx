@@ -9,6 +9,7 @@ import { onPassiveCapture, getLastPassiveCapture, startPassiveCaptureListener } 
 import { withPlayCategoryFallback } from "../lib/playCategories";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Switch } from "../components/Switch";
+import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
 
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
@@ -639,6 +640,8 @@ export default function Status() {
           )}
         </>
       )}
+
+      <PermissionsPanel />
     </div>
   );
 }

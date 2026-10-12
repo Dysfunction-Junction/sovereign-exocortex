@@ -98,4 +98,15 @@
          contacts are captured). -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+    <!-- Ambient context permissions, requested from the in-app Permissions panel (DevicePermissionsPlugin). -->
+    <!-- Lets the sync job keep running under Doze/battery optimization: the likely cure for stalled telemetry. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Runtime prompt: still / walking / driving, feeds the cognitive-mode gate. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Special access granted in Settings: read Do Not Disturb / focus state. -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <!-- Optional runtime prompts. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
 </manifest>
