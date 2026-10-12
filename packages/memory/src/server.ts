@@ -33,6 +33,7 @@ import {
 import { localLTM } from "./local-ltm.js";
 import { ArchiveClient } from "./archive-client.js";
 import { GraphClient } from "./graph-client.js";
+import { Mem0Client } from "./mem0-client.js";
 
 function safeCompareTokens(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
@@ -67,6 +68,8 @@ export interface ServerConfig {
   archiveClient?: ArchiveClient | null;
   /** Neo4j knowledge-graph client. Omit to read NEO4J_* on first use (null = graph search disabled). */
   graphClient?: GraphClient | null;
+  /** Mem0 recall via the Mem0 CLI. Omit to read MEM0_CLI on first use (null = Mem0 search disabled). */
+  mem0Client?: Mem0Client | null;
 }
 
 export interface AskRequestBody {
@@ -263,6 +266,12 @@ export function createGatewayApp(config: ServerConfig = {}) {
     if (envGraph === undefined) envGraph = GraphClient.fromEnv();
     return envGraph;
   };
+  let envMem0: Mem0Client | null | undefined;
+  const getMem0 = (): Mem0Client | null => {
+    if (config.mem0Client !== undefined) return config.mem0Client;
+    if (envMem0 === undefined) envMem0 = Mem0Client.fromEnv();
+    return envMem0;
+  };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const origin = req.headers.origin;
@@ -415,14 +424,17 @@ export function createGatewayApp(config: ServerConfig = {}) {
           const archive = getArchive();
           // Local and archive searches run together; the archive can only add time up to its own timeout.
           const graph = getGraph();
-          const [matches, archived, graphed] = await Promise.all([
+          const mem0 = getMem0();
+          const [matches, archived, graphed, remembered] = await Promise.all([
             localLTM.searchMemoriesHybrid(query, limit),
             archive ? archive.search(query, limit) : Promise.resolve(null),
             graph ? graph.search(query, limit) : Promise.resolve(null),
+            mem0 ? mem0.search(query, limit) : Promise.resolve(null),
           ]);
           result.matches = matches;
           if (archived) result.archive = archived;
           if (graphed) result.graph = graphed;
+          if (remembered) result.mem0 = remembered;
           result.query = query;
           result.status = "searched";
         } else {
