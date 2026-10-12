@@ -18,8 +18,11 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
@@ -216,13 +219,15 @@ public class SmsPlugin extends Plugin {
                 // Scan a wider window than `limit` since most rows may be filtered
                 // out by the allowlist; cap the scan so one call stays bounded.
                 final int scanCap = Math.min(4000, limit * 10);
-                String sortOrder = Telephony.Sms.DATE + " ASC LIMIT " + scanCap;
-                JSArray messages = new JSArray();
-                int kept = 0;
-                int scanned = 0;
-                long lastScannedDate = since;
-                boolean hasMore = false;
 
+                // Two providers hold texts: the SMS table, and the MMS table (messages the default
+                // messaging app stores as MMS: chat/RCS-style messages, group and picture messages).
+                // Reading only SMS silently lost every recent message of the second kind.
+                List<Raw> rows = new ArrayList<>();
+                long smsLast = since;
+                long mmsLast = since;
+
+                int smsRows = 0;
                 try (Cursor c = cr.query(
                         Telephony.Sms.CONTENT_URI,
                         new String[]{
@@ -234,49 +239,102 @@ public class SmsPlugin extends Plugin {
                         },
                         Telephony.Sms.DATE + " > ?",
                         new String[]{String.valueOf(since)},
-                        sortOrder)) {
-
+                        Telephony.Sms.DATE + " ASC LIMIT " + scanCap)) {
                     while (c != null && c.moveToNext()) {
-                        scanned++;
-                        String address = c.getString(1) != null ? c.getString(1) : "";
-                        long date = c.getLong(3);
-                        lastScannedDate = date;
+                        smsRows++;
+                        Raw r = new Raw();
+                        r.mms = false;
+                        r.id = c.getString(0);
+                        r.address = c.getString(1) != null ? c.getString(1) : "";
+                        r.body = c.getString(2) != null ? c.getString(2) : "";
+                        r.dateMs = c.getLong(3);
+                        r.type = c.getInt(4);
+                        smsLast = r.dateMs;
+                        rows.add(r);
+                    }
+                }
+                final boolean smsCapped = smsRows >= scanCap;
 
-                        if (!allow.contains(normalize(address))) {
-                            continue;
-                        }
+                int mmsRows = 0;
+                try (Cursor c = cr.query(
+                        Uri.parse("content://mms"),
+                        new String[]{"_id", "date", "msg_box"},
+                        "date > ? AND msg_box IN (1, 2)",
+                        new String[]{String.valueOf(since / 1000L)},
+                        "date ASC LIMIT " + scanCap)) {
+                    while (c != null && c.moveToNext()) {
+                        mmsRows++;
+                        Raw r = new Raw();
+                        r.mms = true;
+                        r.id = "mms-" + c.getString(0);
+                        long d = c.getLong(1);
+                        r.dateMs = d < 100_000_000_000L ? d * 1000L : d; // MMS dates are in seconds
+                        r.type = c.getInt(2); // msg_box: 1 inbox, 2 sent
+                        mmsLast = r.dateMs;
+                        rows.add(r);
+                    }
+                } catch (Exception ignored) {
+                    // No MMS provider access: carry on with SMS only.
+                }
+                final boolean mmsCapped = mmsRows >= scanCap;
 
-                        String id = c.getString(0);
-                        String body = c.getString(2) != null ? c.getString(2) : "";
-                        int type = c.getInt(4);
-                        if (body.length() > MAX_BODY_CHARS) body = body.substring(0, MAX_BODY_CHARS);
+                Collections.sort(rows, (a, b) -> Long.compare(a.dateMs, b.dateMs));
 
-                        String direction;
-                        switch (type) {
+                // If a source was cut off at the cap, rows of the other source past that point could be
+                // preceded by unread rows of the capped one: stop at that horizon.
+                long horizon = Long.MAX_VALUE;
+                if (smsCapped) horizon = Math.min(horizon, smsLast);
+                if (mmsCapped) horizon = Math.min(horizon, mmsLast);
+
+                JSArray messages = new JSArray();
+                int kept = 0;
+                int scanned = 0;
+                long lastScannedDate = since;
+                boolean hasMore = smsCapped || mmsCapped;
+
+                for (int i = 0; i < rows.size(); i++) {
+                    Raw r = rows.get(i);
+                    if (r.dateMs > horizon) { hasMore = true; break; }
+                    scanned++;
+                    lastScannedDate = r.dateMs;
+
+                    String address;
+                    String body;
+                    String direction;
+                    if (r.mms) {
+                        MmsInfo info = readMms(cr, r.id.substring(4), r.type == 1, allow);
+                        if (info == null) continue; // not on the allowlist, or nothing to read
+                        address = info.address;
+                        body = info.body;
+                        direction = r.type == 1 ? "inbound" : "outbound";
+                    } else {
+                        address = r.address;
+                        if (!allow.contains(normalize(address))) continue;
+                        body = r.body;
+                        switch (r.type) {
                             case Telephony.Sms.MESSAGE_TYPE_INBOX:  direction = "inbound";  break;
                             case Telephony.Sms.MESSAGE_TYPE_SENT:    direction = "outbound"; break;
                             case Telephony.Sms.MESSAGE_TYPE_DRAFT:   direction = "draft";    break;
                             case Telephony.Sms.MESSAGE_TYPE_OUTBOX:  direction = "outbound"; break;
                             default:                                 direction = "other";   break;
                         }
-
-                        JSObject m = new JSObject();
-                        m.put("id", id);
-                        m.put("address", address);
-                        m.put("contactName", lookupContact(address));
-                        m.put("body", body);
-                        m.put("date", date);
-                        m.put("direction", direction);
-                        messages.put(m);
-
-                        kept++;
-                        if (kept >= limit) {
-                            hasMore = c.moveToNext();
-                            break;
-                        }
                     }
-                    // If we scanned the full cap without breaking, there may be more.
-                    if (!hasMore && scanned >= scanCap) hasMore = true;
+                    if (body.length() > MAX_BODY_CHARS) body = body.substring(0, MAX_BODY_CHARS);
+
+                    JSObject m = new JSObject();
+                    m.put("id", r.id);
+                    m.put("address", address);
+                    m.put("contactName", lookupContact(address));
+                    m.put("body", body);
+                    m.put("date", r.dateMs);
+                    m.put("direction", direction);
+                    messages.put(m);
+
+                    kept++;
+                    if (kept >= limit) {
+                        if (i + 1 < rows.size()) hasMore = true;
+                        break;
+                    }
                 }
 
                 JSObject ret = new JSObject();
@@ -289,6 +347,65 @@ public class SmsPlugin extends Plugin {
                 call.reject("Backfill query failed: " + e.getMessage());
             }
         });
+    }
+
+    private static final class Raw {
+        boolean mms;
+        String id;
+        String address;
+        String body;
+        long dateMs;
+        int type;
+    }
+
+    private static final class MmsInfo {
+        String address;
+        String body;
+    }
+
+    /**
+     * Text and counterpart of one MMS-table message, or null when nobody on the allowlist took part
+     * or it has no text part (a bare picture). Participants come from the addr table: type 137 is the
+     * sender, 151 a recipient; a message counts if any of them is allowlisted.
+     */
+    private MmsInfo readMms(ContentResolver cr, String mmsId, boolean inbound, Set<String> allow) {
+        String match = null;
+        try (Cursor a = cr.query(Uri.parse("content://mms/" + mmsId + "/addr"),
+                new String[]{"address", "type"}, null, null, null)) {
+            while (a != null && a.moveToNext()) {
+                String addr = a.getString(0);
+                int type = a.getInt(1);
+                if (addr == null || addr.isEmpty() || addr.contains("insert-address-token")) continue;
+                if (type != 137 && type != 151) continue;
+                if (allow.contains(normalize(addr))) {
+                    // Prefer the counterpart: the sender of an inbound, a recipient of an outbound.
+                    boolean counterpart = inbound ? type == 137 : type == 151;
+                    if (match == null || counterpart) match = addr;
+                }
+            }
+        } catch (Exception e) {
+            return null;
+        }
+        if (match == null) return null;
+
+        StringBuilder text = new StringBuilder();
+        try (Cursor p = cr.query(Uri.parse("content://mms/part"),
+                new String[]{"text"}, "mid = ? AND ct = 'text/plain'", new String[]{mmsId}, "seq ASC")) {
+            while (p != null && p.moveToNext()) {
+                String t = p.getString(0);
+                if (t != null && !t.isEmpty()) {
+                    if (text.length() > 0) text.append("\n");
+                    text.append(t);
+                }
+            }
+        } catch (Exception e) {
+            return null;
+        }
+        if (text.length() == 0) return null;
+        MmsInfo info = new MmsInfo();
+        info.address = match;
+        info.body = text.toString();
+        return info;
     }
 
     // ---------------------------------------------------------------------
