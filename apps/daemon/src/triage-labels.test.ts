@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExocortexDatabase } from "@exocortex/core/db";
-import { addLabel, backfill, formatReport, labeledSeqs, nextToLabel, score, triageableEvents } from "./triage-labels.js";
+import { addLabel, backfill, eventTypeOf, formatReport, labeledSeqs, nextToLabel, score, triageableEvents } from "./triage-labels.js";
 
 const T0 = Date.UTC(2026, 9, 11, 15, 0, 0);
 const DEVICE = "phone-1";
@@ -174,6 +174,13 @@ describe("triage labels", () => {
     assert.deepEqual(r.labelCounts, { urgent: 1, routine: 0, noise: 1 });
     assert.deepEqual([r.models[0].n, r.models[0].correct], [2, 2]);
     assert.ok(labeledSeqs(db).has(bank));
+  });
+
+  it("classifies events by type, with or without the app label prefix", () => {
+    assert.equal(eventTypeOf("Messages: SMS inbound Mom\nNew voicemail from +1 555 (00:32)"), "voicemail");
+    assert.equal(eventTypeOf("SMS inbound Mom\nNew voicemail from +1 555 (00:32)"), "voicemail", "colon later in the body is not a prefix");
+    assert.equal(eventTypeOf("Messages: SMS inbound Mom\nSee you at six"), "sms-inbound");
+    assert.equal(eventTypeOf("Bank: unusual sign-in attempt"), "other");
   });
 
   it("labels are append-only and reject unknown categories", () => {

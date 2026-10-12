@@ -206,7 +206,7 @@ export function addLabel(db: ExocortexDatabase, seq: number, label: TriageCatego
 export type EventType = "voicemail" | "sms-inbound" | "other";
 
 export function eventTypeOf(text: string): EventType {
-  const t = text.replace(/^[^:]*:s*/, ""); // drop the "Messages: " app prefix
+  const t = text.replace(/^[^:\n]{1,40}:\s+/, ""); // drop the "Messages: " app prefix (same line only)
   if (t.startsWith("SMS inbound") && /voicemail/i.test(t)) return "voicemail";
   if (t.startsWith("SMS inbound")) return "sms-inbound";
   return "other";
