@@ -9,6 +9,7 @@ import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
+import { dropKnownTelemetry } from "./telemetry-dedupe.js";
 import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
 import {
@@ -518,7 +519,13 @@ export const server = createServer(async (req, res) => {
       }
 
       const db = getDatabase();
-      const result = db.ingestBatch(reqObj);
+      // Telemetry the log already holds (the phone re-sends old SMS with fresh ids) is dropped, not re-stored.
+      const deduped = dropKnownTelemetry(db, reqObj);
+      const stored =
+        deduped.req.events.length > 0
+          ? db.ingestBatch(deduped.req)
+          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"] };
+      const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.events.length > 0) {
         try {
           defaultWorldModelHost.onEventsAppended(result.events, db);

@@ -145,6 +145,37 @@ describe("triage labels", () => {
     assert.match(formatReport(r), /Only 3 labels/);
   });
 
+  it("treats a message the phone sent several times as one: one queue entry, one score weight, latest label wins", async () => {
+    // The phone re-pulls its last 30 days on some app starts, with fresh random event ids each time.
+    const resend = [{ text: "Bank: unusual sign-in attempt", ts: T0 + 1 }, { text: "Promo: 20% off pizza", ts: T0 + 3 }];
+    db.ingestBatch({
+      device_id: DEVICE,
+      events: resend.map((e) => ({
+        event_id: `dup${++n}`, schema_ver: 1 as const, kind: "telemetry", ts_device: e.ts,
+        payload: { type: "system_telemetry", telemetry: e.text, app_label: "Messages" },
+      })),
+    });
+    assert.equal(db.raw.prepare("SELECT COUNT(*) AS c FROM events WHERE kind='telemetry'").get()!.c, 6, "stored copies");
+    assert.equal(triageableEvents(db).length, 3, "distinct messages");
+
+    await backfill(db, { models: [A], host: { fetchImpl: fakeFetch() } });
+    assert.equal((db.raw.prepare("SELECT COUNT(*) AS c FROM triage_results").get() as { c: number }).c, 3, "each message is triaged once");
+
+    const [bank, , promo] = triageableEvents(db).map((e) => e.seq);
+    const copies = (db.raw.prepare("SELECT seq FROM events WHERE payload LIKE '%unusual sign-in%' ORDER BY seq").all() as Array<{ seq: number }>).map((r) => r.seq);
+    assert.equal(copies.length, 2);
+    addLabel(db, copies[0], "noise");
+    addLabel(db, copies[1], "urgent"); // seen again as a duplicate and labeled differently: the latest wins
+    addLabel(db, promo, "noise");
+
+    assert.deepEqual(nextToLabel(db, [A], true, true).map((c) => c.seq), [triageableEvents(db)[1].seq], "labeled messages are not offered again");
+    const r = score(db, [A]);
+    assert.equal(r.labeled, 2, "two distinct messages, not three labels");
+    assert.deepEqual(r.labelCounts, { urgent: 1, routine: 0, noise: 1 });
+    assert.deepEqual([r.models[0].n, r.models[0].correct], [2, 2]);
+    assert.ok(labeledSeqs(db).has(bank));
+  });
+
   it("labels are append-only and reject unknown categories", () => {
     addLabel(db, 1, "urgent");
     assert.throws(() => db.raw.prepare("UPDATE triage_labels SET label = 'noise'").run(), /append-only/);

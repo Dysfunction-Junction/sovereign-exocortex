@@ -45,13 +45,60 @@ export interface TriageEvent {
   text: string;
 }
 
-/** Every stored telemetry event that has triageable text, oldest first. */
-export function triageableEvents(db: ExocortexDatabase): TriageEvent[] {
-  const rows = db.raw.prepare("SELECT seq, device_id, kind, payload FROM events WHERE kind = 'telemetry' ORDER BY seq").all() as Row[];
-  const out: TriageEvent[] = [];
+/**
+ * The phone can send the same message more than once (it re-pulls its last 30 days on some app
+ * starts and gives every queued event a fresh random id), so the event log may hold one message
+ * several times. Evaluation treats a message as one item: identified by device, message time and text.
+ */
+const messageKey = (deviceId: string, ts: number, text: string): string => `${deviceId}|${ts}|${text}`;
+
+interface TriageableRow extends TriageEvent {
+  key: string;
+}
+
+function allTriageableRows(db: ExocortexDatabase): TriageableRow[] {
+  const rows = db.raw.prepare("SELECT seq, device_id, ts_device, kind, payload FROM events WHERE kind = 'telemetry' ORDER BY seq").all() as Row[];
+  const out: TriageableRow[] = [];
   for (const r of rows) {
     const text = triageTextOf({ kind: String(r.kind), payload: r.payload as never });
-    if (text) out.push({ seq: Number(r.seq), deviceId: String(r.device_id), text });
+    if (text) {
+      const deviceId = String(r.device_id);
+      out.push({ seq: Number(r.seq), deviceId, text, key: messageKey(deviceId, Number(r.ts_device), text) });
+    }
+  }
+  return out;
+}
+
+/** Every distinct message that has triageable text, oldest first (the first stored copy represents it). */
+export function triageableEvents(db: ExocortexDatabase): TriageEvent[] {
+  const seen = new Set<string>();
+  const out: TriageEvent[] = [];
+  for (const r of allTriageableRows(db)) {
+    if (seen.has(r.key)) continue;
+    seen.add(r.key);
+    out.push({ seq: r.seq, deviceId: r.deviceId, text: r.text });
+  }
+  return out;
+}
+
+/** Maps every stored copy of a message to the seq that represents it. */
+function canonicalSeqs(db: ExocortexDatabase): Map<number, number> {
+  const first = new Map<string, number>();
+  const map = new Map<number, number>();
+  for (const r of allTriageableRows(db)) {
+    if (!first.has(r.key)) first.set(r.key, r.seq);
+    map.set(r.seq, first.get(r.key)!);
+  }
+  return map;
+}
+
+/** Latest label per distinct message, whichever stored copy it was given on. */
+export function latestLabels(db: ExocortexDatabase): Map<number, TriageCategory> {
+  const canon = canonicalSeqs(db);
+  const out = new Map<number, TriageCategory>();
+  for (const r of db.raw.prepare("SELECT event_seq, label FROM triage_labels ORDER BY id").all() as Row[]) {
+    const c = canon.get(Number(r.event_seq));
+    if (c !== undefined) out.set(c, r.label as TriageCategory);
   }
   return out;
 }
@@ -113,8 +160,9 @@ function verdictsBySeq(db: ExocortexDatabase, models: string[]): Map<number, Map
   return by;
 }
 
+/** Representative seqs of messages that already have a label. */
 export function labeledSeqs(db: ExocortexDatabase): Set<number> {
-  return new Set((db.raw.prepare("SELECT DISTINCT event_seq FROM triage_labels").all() as Row[]).map((r) => Number(r.event_seq)));
+  return new Set(latestLabels(db).keys());
 }
 
 /**
@@ -194,10 +242,7 @@ const blankConfusion = (): ModelScore["confusion"] => ({
 /** Scores each model on the events it has a verdict for and you have labeled (latest label wins). */
 export function score(db: ExocortexDatabase, models: string[]): ScoreReport {
   ensureTables(db);
-  const labels = new Map<number, TriageCategory>();
-  for (const r of db.raw.prepare("SELECT event_seq, label FROM triage_labels ORDER BY id").all() as Row[]) {
-    labels.set(Number(r.event_seq), r.label as TriageCategory);
-  }
+  const labels = latestLabels(db);
   // Only events triage would actually run on (own outgoing messages are excluded).
   const typeOf = new Map(triageableEvents(db).map((e) => [e.seq, eventTypeOf(e.text)] as const));
   for (const seq of [...labels.keys()]) if (!typeOf.has(seq)) labels.delete(seq);
