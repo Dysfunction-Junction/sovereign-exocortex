@@ -12,6 +12,8 @@
 
 import {
   seedFromPastSessions,
+  seedFromComms,
+  type CommsSeedResult,
   type PastSeedResult,
   LivingLifeGraph,
   CognitiveModeGate,
@@ -190,6 +192,33 @@ export class WorldModelHost {
       return sessions.length > 0 ? seedFromPastSessions(this.lifeGraph, sessions) : null;
     } catch (err) {
       console.error("[life-graph] past seeding skipped:", err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  private commsSeeded = false;
+
+  /**
+   * Seed real people into the life graph from past call/text events (kind "past", origin "comms-backfill").
+   * Runs at most once per process and never throws; only entity activation and edge weights change.
+   */
+  public seedCommsFromPastEvents(db: ExocortexDatabase): CommsSeedResult | null {
+    if (this.commsSeeded) return null;
+    this.commsSeeded = true;
+    try {
+      const events = db.listEvents({ kind: "past" }).flatMap((e) => {
+        try {
+          const p = JSON.parse(String(e.payload)) as { origin?: unknown; people?: unknown; labels?: unknown };
+          if (p.origin !== "comms-backfill" || !Array.isArray(p.people) || typeof p.people[0] !== "string") return [];
+          const labels = Array.isArray(p.labels) ? p.labels.filter((x): x is string => typeof x === "string") : [];
+          return [{ ts: e.ts_device, person: p.people[0] as string, labels }];
+        } catch {
+          return [];
+        }
+      });
+      return events.length > 0 ? seedFromComms(this.lifeGraph, events) : null;
+    } catch (err) {
+      console.error("[life-graph] comms seeding skipped:", err instanceof Error ? err.message : err);
       return null;
     }
   }

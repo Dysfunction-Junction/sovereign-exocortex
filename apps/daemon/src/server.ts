@@ -144,6 +144,8 @@ function ensureShadowRecorder(): void {
     defaultWorldModelHost.setShadowRecorder(
       new ShadowRecorder(getDatabase(), { shadow: process.env.SHADOW !== "0" }),
     );
+    const people = defaultWorldModelHost.seedCommsFromPastEvents(getDatabase());
+    if (people) console.log(`[life-graph] seeded ${people.people} people from ${people.events} past calls and texts`);
     const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
     if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.topics} topics, ${seeded.persons} people, ${seeded.edges} edges`);
   } catch (err) {
