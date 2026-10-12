@@ -18,10 +18,11 @@ if (!(trainFraction > 0 && trainFraction < 1)) {
 }
 
 const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-const sessions = getDatabase().listEvents({ kind: "past" }).map((e) => {
-  const p = JSON.parse(String(e.payload)) as { tags?: unknown; persons?: unknown; time_basis?: unknown };
+const sessions = getDatabase().listEvents({ kind: "past" }).flatMap((e) => {
+  const p = JSON.parse(String(e.payload)) as { origin?: unknown; tags?: unknown; persons?: unknown; time_basis?: unknown };
+  if (p.origin !== "pieces-backfill") return [];
   const timeBasis = p.time_basis === "range_start" ? ("range_start" as const) : ("record_created" as const);
-  return { ts: e.ts_device, tags: strs(p.tags), persons: strs(p.persons), timeBasis };
+  return [{ ts: e.ts_device, tags: strs(p.tags), persons: strs(p.persons), timeBasis }];
 });
 
 const r = backtestNextTopic(sessions, { trainFraction });

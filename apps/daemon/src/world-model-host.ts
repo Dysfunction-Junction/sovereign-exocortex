@@ -179,7 +179,8 @@ export class WorldModelHost {
     try {
       const sessions = db.listEvents({ kind: "past" }).flatMap((e) => {
         try {
-          const p = JSON.parse(String(e.payload)) as { tags?: unknown; persons?: unknown };
+          const p = JSON.parse(String(e.payload)) as { origin?: unknown; tags?: unknown; persons?: unknown };
+          if (p.origin !== "pieces-backfill") return [];
           const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
           return [{ ts: e.ts_device, tags: strs(p.tags), persons: strs(p.persons) }];
         } catch {
