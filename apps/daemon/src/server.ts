@@ -144,6 +144,8 @@ function ensureShadowRecorder(): void {
     defaultWorldModelHost.setShadowRecorder(
       new ShadowRecorder(getDatabase(), { shadow: process.env.SHADOW !== "0" }),
     );
+    const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
+    if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.topics} topics, ${seeded.persons} people, ${seeded.edges} edges`);
   } catch (err) {
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();

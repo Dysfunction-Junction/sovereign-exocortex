@@ -11,6 +11,8 @@
  */
 
 import {
+  seedFromPastSessions,
+  type PastSeedResult,
   LivingLifeGraph,
   CognitiveModeGate,
   ActiveInferenceEngine,
@@ -163,6 +165,32 @@ export class WorldModelHost {
     this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95);
+  }
+
+  private pastSeeded = false;
+
+  /**
+   * Seed the life graph from past events (Pieces backfill, kind "past"). Runs at most once per process and never
+   * throws; past events are history, so this changes only entity activation and edge weights, not the event log.
+   */
+  public seedFromPastEvents(db: ExocortexDatabase): PastSeedResult | null {
+    if (this.pastSeeded) return null;
+    this.pastSeeded = true;
+    try {
+      const sessions = db.listEvents({ kind: "past" }).flatMap((e) => {
+        try {
+          const p = JSON.parse(String(e.payload)) as { tags?: unknown; persons?: unknown };
+          const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+          return [{ ts: e.ts_device, tags: strs(p.tags), persons: strs(p.persons) }];
+        } catch {
+          return [];
+        }
+      });
+      return sessions.length > 0 ? seedFromPastSessions(this.lifeGraph, sessions) : null;
+    } catch (err) {
+      console.error("[life-graph] past seeding skipped:", err instanceof Error ? err.message : err);
+      return null;
+    }
   }
 
   /**
