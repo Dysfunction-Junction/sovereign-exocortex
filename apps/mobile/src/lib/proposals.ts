@@ -1,4 +1,4 @@
-import { ApprovalUnavailableError, signApproval, signLabel, type LabelAttestation } from "./approvalKey";
+import { ApprovalUnavailableError, signApproval, signLabel, type ApprovalAttestation, type LabelAttestation } from "./approvalKey";
 import { submitProposalApproval, submitShadowLabel, type ProposalApprovalResult } from "./api";
 
 export interface IncomingProposal {

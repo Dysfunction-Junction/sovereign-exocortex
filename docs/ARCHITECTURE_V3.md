@@ -246,5 +246,5 @@ Shadow mode runs the full pipeline live and blocks only the executor. The execut
 | 0. Harden | Path jail, no-op guard, observation validation, signed approvals | Tests for each pass; attestation verified end to end |
 | 1. Shadow | Everything live, executor off, 7 to 14 days | Baseline gap above 0 and focus regret near 0 |
 | 2. T0 and T1 | Read-only probes and reversible local actions run automatically, with a notice | 2 weeks, no unwanted action |
-| 3. T2 and T3 | Signed one-tap approval | Precision@surface above 0.8 over 2 weeks |
+| 3. T2 and T3 | Signed one-tap approval | Precision@surface at least 0.90 from 50 or more direct tap labels over 14 days, with a positive baseline gap |
 | 4. Morphogenetic | Patch branches only, human merge | Stays at patch-only; no auto-merge phase |

@@ -30,6 +30,19 @@ from triad.triad_engine import (
 )
 
 
+def _has_runnable_python3() -> bool:
+    """Return whether `env python3` can launch an interpreter in this environment."""
+    python3 = shutil.which("python3")
+    if not python3:
+        return False
+    try:
+        return subprocess.run(
+            [python3, "--version"], capture_output=True, timeout=5, check=False
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _expected_failure_posix_only(fn):
     """Mark as expectedFailure on POSIX/Linux where /bin/sh is dash and chmod bits differ from Windows Git Bash."""
     if sys.platform != "win32":
@@ -3550,6 +3563,7 @@ class TestPhase3AdvisoryCouncilRefinements(unittest.TestCase):
             self.assertFalse(res, "Rollback must refuse to overwrite concurrently recreated file")
             self.assertEqual(test_file.read_bytes(), b"recreated by user!\n", "Recreated file must be preserved")
 
+    @unittest.skipUnless(_has_runnable_python3(), "requires a runnable python3 executable on PATH for the POSIX shebang test")
     def test_hook_chaining_preserves_python_shebang_script_basename(self):
         """Verify TRIAD_HOOK_TEMPLATE runner executes Python shebang scripts with basename 'pre-commit'."""
         from triad.triad_engine import cmd_hook
@@ -3928,6 +3942,7 @@ class TestPhase3AdvisoryCouncilRefinements(unittest.TestCase):
             if os.name != "nt":
                 self.assertEqual(hook_file.stat().st_mode & 0o777, 0o644, "Original 0644 mode must be restored")
 
+    @unittest.skipUnless(_has_runnable_python3(), "requires a runnable python3 executable on PATH for the POSIX shebang test")
     def test_python_legacy_hook_main_pickle_semantics(self):
         """Verify Python legacy hook execution properly binds sys.modules['__main__'] so class pickling succeeds."""
         sh_bin = shutil.which("sh") or r"C:\Program Files\Git\bin\sh.exe"

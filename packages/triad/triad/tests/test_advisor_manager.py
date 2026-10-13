@@ -101,8 +101,8 @@ class TestAdvisorManager(unittest.TestCase):
         self.assertIn("characters", resp)
 
     @unittest.skipUnless(
-        shutil.which("claude"),
-        "requires a local, authenticated Claude Code CLI on PATH -- not available in CI",
+        os.environ.get("TRIAD_RUN_LIVE_ADVISOR_TESTS") == "1" and shutil.which("claude"),
+        "set TRIAD_RUN_LIVE_ADVISOR_TESTS=1 and provide an authenticated Claude Code CLI to run this live integration test",
     )
     def test_query_configured_advisor_claude(self):
         """Verify live querying of Claude Code advisor."""

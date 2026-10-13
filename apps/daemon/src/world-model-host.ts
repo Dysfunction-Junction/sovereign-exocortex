@@ -37,6 +37,25 @@ const MAX_RECORDER_FAILURES = 5;
 
 const SCREEN_STATES = ["ON", "OFF", "UNLOCKED"];
 
+/** Convert only explicit, supported observations into homeostatic signals. */
+function systemObservationForEvent(
+  event: EventRecord,
+  extracted: { factor: string; obs: string },
+): SystemObservation | null {
+  if (event.kind !== "observation") return null;
+  const invariantBySignal: Record<string, { invariantId: string; observedState: boolean }> = {
+    "repo_health\u0000tests_pass": { invariantId: "inv_clean_test_suite", observedState: true },
+    "repo_health\u0000tests_fail": { invariantId: "inv_clean_test_suite", observedState: false },
+    "repo_health\u0000clean_checkout": { invariantId: "inv_zero_broken_commits", observedState: true },
+    "repo_health\u0000uncommitted_edits": { invariantId: "inv_zero_broken_commits", observedState: false },
+    "link_health\u0000ping_fast": { invariantId: "inv_bridge_connected", observedState: true },
+    "link_health\u0000ws_dropped": { invariantId: "inv_bridge_connected", observedState: false },
+  };
+  const signal = invariantBySignal[`${extracted.factor}\u0000${extracted.obs}`];
+  if (!signal) return null;
+  return { ...signal, observedAt: event.ts_device, confidence: 1 };
+}
+
 /** Validate untrusted telemetry signals before any state is mutated. Throws TypeError on bad input. */
 function validateSignals(signals: unknown): asserts signals is ContextualSignals {
   if (!signals || typeof signals !== "object" || Array.isArray(signals)) {
@@ -436,7 +455,13 @@ export class WorldModelHost {
       try {
         const extracted = eventToObservation(ev);
         if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
-          this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+          const systemObservation = systemObservationForEvent(ev, extracted);
+          if (systemObservation) {
+            // ingestObservation updates the same learned factor and also runs active inference.
+            this.ingestObservation(systemObservation);
+          } else {
+            this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+          }
           touchedFactors.add(extracted.factor);
           lastObsSeq = ev.seq;
           batchSnapshots.push(this.learnedEngine.createBeliefSnapshot(ev.seq));

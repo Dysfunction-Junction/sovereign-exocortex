@@ -141,7 +141,7 @@ function sendInternalError(res: import("node:http").ServerResponse, message: str
 }
 
 /**
- * Lazily attach the shadow recorder on first observation (no DB side effects at import time).
+ * Lazily attach the shadow recorder on first event or observation (no DB side effects at import time).
  * Env is read once at attach; changing SHADOW or EXOCORTEX_SHADOW_RECORD needs a restart.
  */
 function ensureShadowRecorder(): void {
@@ -545,6 +545,9 @@ export const server = createServer(async (req, res) => {
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.events.length > 0) {
         try {
+          // Attach the shadow recorder to the normal append-only event pipeline. The host
+          // maps only explicitly supported observation signals into shadow proposals.
+          ensureShadowRecorder();
           defaultWorldModelHost.onEventsAppended(result.events, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
