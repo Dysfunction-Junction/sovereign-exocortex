@@ -882,6 +882,200 @@ class TestGitWorktreeIsolation(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 require_git_toplevel(child)
 
+    def test_volatile_dir_pruning(self):
+        """Verify _is_volatile_dir prunes only volatile dependency store logs/.cache without affecting user code."""
+        from triad.worktree import _is_volatile_dir
+
+        # Outside dependency store (e.g. user src/logs)
+        self.assertFalse(_is_volatile_dir(("ws", "src"), "logs"))
+        self.assertFalse(_is_volatile_dir(("ws", "src"), ".cache"))
+        self.assertFalse(_is_volatile_dir(("repo", "packages", "triad"), "logs"))
+
+        # Under dependency store
+        self.assertTrue(_is_volatile_dir(("repo", "node_modules", "triad"), "logs"))
+        self.assertTrue(_is_volatile_dir(("repo", "node_modules", "@exocortex", "core"), "logs"))
+        self.assertTrue(_is_volatile_dir(("repo", "node_modules", "some-pkg"), ".cache"))
+        self.assertFalse(_is_volatile_dir(("repo", "node_modules", "other-pkg"), "logs"))
+        self.assertFalse(_is_volatile_dir(("repo", "node_modules", "triad", "src"), "logs"))
+
+    def test_capture_directory_snapshot_normalization(self):
+        """Verify directory entries normalize st_size to 0 across platforms while regular files keep sizes."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "sub").mkdir()
+            file_path = tmp_path / "sub" / "data.txt"
+            file_path.write_bytes(b"hello world")
+
+            snap = capture_directory_snapshot(tmp_path)
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap["."], (0, 0), "root directory must be normalized to (0, 0)")
+            self.assertEqual(snap["sub"], (0, 0), "subdirectory must be normalized to (0, 0)")
+            self.assertEqual(snap[str(Path("sub") / "data.txt")][0], 11, "regular file must retain exact byte size")
+
+    def test_capture_directory_snapshot_volatile_dir_creation_stability(self):
+        """Verify that creating volatile logs under dep store between two snapshots produces an identical snapshot."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            triad_dir = tmp_root / "node_modules" / "triad"
+            triad_dir.mkdir(parents=True)
+            (triad_dir / "index.js").write_text("console.log('triad')", encoding="utf-8")
+
+            # Snapshot 1
+            snap1 = capture_directory_snapshot(tmp_root)
+            self.assertIsNotNone(snap1)
+
+            # Create volatile logs directory and log file (simulating advisor execution during test)
+            logs_dir = triad_dir / "logs"
+            logs_dir.mkdir(parents=True)
+            (logs_dir / "advisor.log").write_text("new runtime log entry", encoding="utf-8")
+
+            # Snapshot 2
+            snap2 = capture_directory_snapshot(tmp_root)
+            self.assertIsNotNone(snap2)
+
+            self.assertEqual(snap1, snap2, "Snapshots must be identical even after volatile logs creation")
+
+    def test_capture_directory_snapshot_end_to_end_pruning(self):
+        """Verify end-to-end that capture_directory_snapshot prunes dep store logs/.cache but preserves legitimate files."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            # Volatile logs to be pruned
+            (tmp_root / "node_modules" / "triad" / "logs").mkdir(parents=True)
+            (tmp_root / "node_modules" / "triad" / "logs" / "advisor.log").write_text("log data", encoding="utf-8")
+            (tmp_root / "node_modules" / "foo" / ".cache").mkdir(parents=True)
+            (tmp_root / "node_modules" / "foo" / ".cache" / "cached.dat").write_text("cache data", encoding="utf-8")
+
+            # Legitimate content that must be preserved
+            (tmp_root / "node_modules" / "foo" / "lib").mkdir(parents=True)
+            (tmp_root / "node_modules" / "foo" / "lib" / "index.js").write_text("module.exports = {};", encoding="utf-8")
+            (tmp_root / "src" / "logs").mkdir(parents=True)
+            (tmp_root / "src" / "logs" / "app.log").write_text("real app log", encoding="utf-8")
+
+            snap = capture_directory_snapshot(tmp_root)
+            self.assertIsNotNone(snap)
+
+            # Pruned keys must be absent
+            self.assertNotIn(str(Path("node_modules/triad/logs")), snap)
+            self.assertNotIn(str(Path("node_modules/triad/logs/advisor.log")), snap)
+            self.assertNotIn(str(Path("node_modules/foo/.cache")), snap)
+            self.assertNotIn(str(Path("node_modules/foo/.cache/cached.dat")), snap)
+
+            # Preserved keys must be present
+            self.assertIn(str(Path("node_modules/foo/lib/index.js")), snap)
+            self.assertIn(str(Path("src/logs/app.log")), snap)
+
+    def test_capture_directory_snapshot_ancestor_node_modules_not_leaked(self):
+        """Verify that when snapshot root is under an ancestor named node_modules, user code .cache is KEPT."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Simulate a checkout nested under node_modules (e.g. tmp/node_modules/ws)
+            ws_root = Path(tmp) / "node_modules" / "ws"
+            user_cache_dir = ws_root / "src" / ".cache"
+            user_cache_dir.mkdir(parents=True)
+            (user_cache_dir / "build.dat").write_text("cached build artifact", encoding="utf-8")
+
+            snap = capture_directory_snapshot(ws_root)
+            self.assertIsNotNone(snap)
+            # User .cache must be KEPT because snapshot root ws is NOT inside node_modules
+            self.assertIn(str(Path("src/.cache/build.dat")), snap)
+
+    def test_capture_directory_snapshot_scoped_and_nested_pruning(self):
+        """Verify volatile pruning handles root node_modules, scoped packages, and nested stores."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            # 1. Root is node_modules with .cache
+            nm_root = tmp_root / "node_modules"
+            nm_root.mkdir()
+            cache_dir = nm_root / ".cache"
+            cache_dir.mkdir()
+            (cache_dir / "cache.dat").write_text("cache", encoding="utf-8")
+
+            # 2. Scoped package .cache: node_modules/@scope/pkg/.cache
+            scoped_cache = nm_root / "@scope" / "pkg" / ".cache"
+            scoped_cache.mkdir(parents=True)
+            (scoped_cache / "scoped.dat").write_text("scoped cache", encoding="utf-8")
+
+            # 3. Legitimate package file inside scoped package
+            pkg_file = nm_root / "@scope" / "pkg" / "index.js"
+            pkg_file.write_text("console.log('hi');", encoding="utf-8")
+
+            # 4. Nested store logs: node_modules/a/node_modules/triad/logs
+            nested_logs = nm_root / "a" / "node_modules" / "triad" / "logs"
+            nested_logs.mkdir(parents=True)
+            (nested_logs / "advisor.log").write_text("advisor log", encoding="utf-8")
+
+            snap = capture_directory_snapshot(nm_root)
+            self.assertIsNotNone(snap)
+
+            # Assert .cache at root of node_modules is pruned
+            self.assertNotIn(str(Path(".cache/cache.dat")), snap)
+            self.assertNotIn(".cache", snap)
+
+            # Assert scoped package .cache is pruned
+            self.assertNotIn(str(Path("@scope/pkg/.cache/scoped.dat")), snap)
+            self.assertNotIn(str(Path("@scope/pkg/.cache")), snap)
+
+            # Assert legitimate scoped pkg file is kept
+            self.assertIn(str(Path("@scope/pkg/index.js")), snap)
+
+            # Assert nested store triad logs are pruned
+            self.assertNotIn(str(Path("a/node_modules/triad/logs/advisor.log")), snap)
+            self.assertNotIn(str(Path("a/node_modules/triad/logs")), snap)
+
+    def test_capture_directory_snapshot_link_retargeting_detected(self):
+        """Verify that retargeting a directory symlink or junction changes the snapshot via link signature."""
+        from triad.worktree import capture_directory_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_root = Path(tmp)
+            target1 = tmp_root / "target1"
+            target2 = tmp_root / "target2"
+            target1.mkdir()
+            target2.mkdir()
+            (target1 / "f.txt").write_text("1", encoding="utf-8")
+            (target2 / "f.txt").write_text("2", encoding="utf-8")
+            link_dir = tmp_root / "link_dir"
+
+            is_junction = False
+            try:
+                os.symlink(str(target1), str(link_dir), target_is_directory=True)
+            except OSError:
+                if os.name == "nt":
+                    res = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(link_dir), str(target1)], capture_output=True)
+                    if res.returncode == 0:
+                        is_junction = True
+                    else:
+                        self.skipTest(f"Symlinks/junctions not supported: {res.stderr}")
+                else:
+                    self.skipTest("Symlinks not supported on host")
+
+            snap1 = capture_directory_snapshot(tmp_root)
+            self.assertIsNotNone(snap1)
+
+            # Retarget link/junction to target2 (target paths have identical lengths)
+            if is_junction:
+                os.rmdir(str(link_dir))
+                res = subprocess.run(["cmd.exe", "/c", "mklink", "/J", str(link_dir), str(target2)], capture_output=True)
+                self.assertEqual(res.returncode, 0)
+            else:
+                link_dir.unlink()
+                os.symlink(str(target2), str(link_dir), target_is_directory=True)
+
+            snap2 = capture_directory_snapshot(tmp_root)
+            self.assertIsNotNone(snap2)
+            self.assertNotEqual(snap1, snap2)
+            self.assertEqual(set(snap1.keys()), set(snap2.keys()))
+            self.assertNotEqual(snap1["link_dir"], snap2["link_dir"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

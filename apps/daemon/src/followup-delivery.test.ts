@@ -318,7 +318,17 @@ test("P6c: PushNotifier is a no-op without config, sends data-only FCM v1 push, 
   const jwtParts = new URLSearchParams(String(oauth.init.body)).get("assertion")!.split(".");
   assert.equal(jwtParts.length, 3);
   assert.equal(JSON.parse(Buffer.from(jwtParts[1]!, "base64url").toString()).scope, "https://www.googleapis.com/auth/firebase.messaging");
-  const send = calls.find((c) => c.url.includes("fcm.googleapis.com"))!;
+  const fcmCalls = calls.filter((c) => c.url.includes("fcm.googleapis.com"));
+  const sends = fcmCalls.filter((c) => {
+    try {
+      const parsed = JSON.parse(String(c.init.body));
+      return parsed.message?.data?.proposal_id === "pn_new";
+    } catch {
+      return false;
+    }
+  });
+  assert.equal(sends.length, 1, "expected exactly 1 FCM send for pn_new proposal");
+  const send = sends[0]!;
   assert.equal(send.url, "https://fcm.googleapis.com/v1/projects/proj-1/messages:send");
   assert.equal((send.init.headers as Record<string, string>).Authorization, "Bearer ya29.x");
   const msg = JSON.parse(String(send.init.body)).message;

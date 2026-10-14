@@ -20,6 +20,7 @@ import gc
 import json
 import hashlib
 import threading
+import zlib
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Optional, Union, List, Dict, Any, Generator, Tuple
@@ -925,10 +926,60 @@ def deprovision_worktree_dependencies(worktree_path: Union[str, Path]) -> None:
         target_manifest.unlink(missing_ok=True)
 
 
+_DEP_STORES = frozenset({"node_modules", "site-packages"})
+
+
+def _link_sig(p: Path) -> Tuple[int, int]:
+    """
+    Compute a tagged length and CRC32 signature of a symlink or junction target path.
+    Falls back to lstat signature on non-symlink reparse points (OneDrive/cloud placeholders, dedup).
+    Tagged with 0x1_0000_0000 so the signature can never collide with (0, 0) or ordinary file tuples.
+    """
+    try:
+        tgt = os.readlink(p)
+        b = os.fsencode(tgt)
+        return (len(b), zlib.crc32(b) | 0x1_0000_0000)
+    except OSError:
+        try:
+            st = p.lstat()
+            return (-st.st_size - 2, st.st_mtime_ns)
+        except (OSError, ValueError):
+            return (-1, -1)
+
+
+def _is_volatile_dir(rel_parts: Tuple[str, ...], d: str) -> bool:
+    """
+    Identify volatile runtime directories (.cache, advisor execution logs) under dependency stores
+    that should be excluded from parent workspace mutation snapshots.
+    Excludes node_modules/.cache, node_modules/<pkg>/.cache, node_modules/@scope/<pkg>/.cache,
+    and logs inside triad or @exocortex/<pkg> under any dependency store.
+    """
+    dl = d.lower()
+    if dl not in (".cache", "logs"):
+        return False
+
+    # Find innermost dependency store in rel_parts
+    last_dep_idx = -1
+    for i, part in enumerate(rel_parts):
+        if part in _DEP_STORES:
+            last_dep_idx = i
+
+    if last_dep_idx == -1:
+        return False
+
+    rem = rel_parts[last_dep_idx + 1 :]
+    if dl == ".cache":
+        return len(rem) == 0 or len(rem) == 1 or (len(rem) == 2 and rem[0].startswith("@"))
+    if dl == "logs":
+        return rem == ("triad",) or (len(rem) == 2 and rem[0] == "@exocortex")
+    return False
+
+
 def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str, Tuple[int, int]]]:
     """
     Recursively snapshot a directory tree's files and subdirectories (size, mtime_ns),
     without following symlinks, to detect any in-place mutation deep within dependency stores.
+    Tracks real directory existence as (0, 0) while tracking link and junction targets by target path signature.
     Returns None if directory does not exist or is a reparse point / symlink.
     """
     p = Path(dir_path).resolve()
@@ -936,31 +987,55 @@ def capture_directory_snapshot(dir_path: Union[str, Path]) -> Optional[Dict[str,
         return None
 
     snapshot: Dict[str, Tuple[int, int]] = {}
+    walk_errors: List[str] = []
+
+    def _on_walk_error(err: OSError) -> None:
+        walk_errors.append(str(err.filename or err))
+
     try:
         try:
             st = p.stat(follow_symlinks=False)
-            snapshot["."] = (st.st_size, st.st_mtime_ns)
-        except Exception:
+            snapshot["."] = (0, 0) if stat.S_ISDIR(st.st_mode) else (st.st_size, st.st_mtime_ns)
+        except (OSError, ValueError):
             pass
 
-        for root, dirs, files in os.walk(p, followlinks=False):
-            rel_root = Path(root).relative_to(p)
-            for d in dirs:
-                full_d = Path(root) / d
+        for root, dirs, files in os.walk(p, followlinks=False, onerror=_on_walk_error):
+            parent_path = Path(root)
+            rel_root = parent_path.relative_to(p)
+            rel_parts = tuple(x.lower() for x in (p.name, *rel_root.parts))
+            dirs[:] = [d for d in dirs if not _is_volatile_dir(rel_parts, d)]
+            for d in list(dirs):
+                full_d = parent_path / d
                 try:
+                    is_link = is_reparse_or_link(full_d)
+                    if is_link and d in dirs:
+                        dirs.remove(d)
                     st = full_d.stat(follow_symlinks=False)
-                    snapshot[str(rel_root / d)] = (st.st_size, st.st_mtime_ns)
-                except Exception:
-                    pass
+                    snapshot[str(rel_root / d)] = (
+                        _link_sig(full_d) if is_link else (0, 0) if stat.S_ISDIR(st.st_mode) else (st.st_size, st.st_mtime_ns)
+                    )
+                except (OSError, ValueError):
+                    if d in dirs:
+                        dirs.remove(d)
             for f in files:
-                full_f = Path(root) / f
+                full_f = parent_path / f
                 try:
-                    st = full_f.stat(follow_symlinks=False)
-                    snapshot[str(rel_root / f)] = (st.st_size, st.st_mtime_ns)
-                except Exception:
+                    is_link = is_reparse_or_link(full_f)
+                    if is_link:
+                        snapshot[str(rel_root / f)] = _link_sig(full_f)
+                    else:
+                        st = full_f.stat(follow_symlinks=False)
+                        snapshot[str(rel_root / f)] = (st.st_size, st.st_mtime_ns)
+                except (OSError, ValueError):
                     pass
-    except Exception:
-        pass
+        for err_path in walk_errors:
+            try:
+                rel_err = str(Path(err_path).relative_to(p))
+            except Exception:
+                rel_err = Path(err_path).name or str(err_path)
+            snapshot[f"<walk-error>:{rel_err}"] = (-1, -1)
+    except (OSError, ValueError):
+        return {"<scan-failed>": (-1, -1)}
     return snapshot
 
 

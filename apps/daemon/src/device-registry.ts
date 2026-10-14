@@ -17,22 +17,48 @@ export interface DeviceRegistry {
 }
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-const legacyPaths = [...new Set([
-  process.env.DEVICE_REGISTRY_PATH ? resolve(process.env.DEVICE_REGISTRY_PATH) : "",
+const defaultLegacyPaths = [...new Set([
   resolve("./devices.json"),
   resolve(moduleDir, "../devices.json"),
-].filter(Boolean))];
+])];
+
+const warnedMissingPaths = new Set<string>();
+
+/**
+ * Resolves legacy devices.json paths.
+ * Setting DEVICE_REGISTRY_PATH adds a custom location ahead of the default locations.
+ * Explicitly setting "none", "disabled", or "0" disables legacy migration entirely (for test isolation).
+ * An empty string ("") is treated as unset, preserving default paths.
+ */
+function getLegacyPaths(): string[] {
+  if (process.env.DEVICE_REGISTRY_PATH !== undefined) {
+    const raw = process.env.DEVICE_REGISTRY_PATH.trim();
+    if (raw === "0" || raw.toLowerCase() === "none" || raw.toLowerCase() === "disabled") {
+      return [];
+    }
+    if (raw) {
+      const p = resolve(raw);
+      if (!existsSync(p) && !warnedMissingPaths.has(p)) {
+        warnedMissingPaths.add(p);
+        console.warn(`[device-registry] DEVICE_REGISTRY_PATH set to '${raw}' but file does not exist at ${p}`);
+      }
+      return [...new Set([p, ...defaultLegacyPaths])];
+    }
+  }
+  return defaultLegacyPaths;
+}
+
 let legacyMigrationDone = false;
 
 function v3DbAvailable(): boolean {
-  return hasDatabase() || existsSync(getDefaultDbPath()) || legacyPaths.some((path) => existsSync(path));
+  return hasDatabase() || existsSync(getDefaultDbPath()) || getLegacyPaths().some((path) => existsSync(path));
 }
 
 function migrateLegacyDevices(): void {
   if (legacyMigrationDone) return;
   const db = getDatabase();
   const legacyRegistries: Array<{ path: string; registry: DeviceRegistry }> = [];
-  for (const path of legacyPaths) {
+  for (const path of getLegacyPaths()) {
     if (!existsSync(path)) continue;
     try {
       const legacy = JSON.parse(readFileSync(path, "utf8")) as DeviceRegistry;

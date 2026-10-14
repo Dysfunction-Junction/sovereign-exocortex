@@ -49,11 +49,70 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-/** Normalize phone numbers to digits, removing the North American country code when present. */
+/**
+ * Normalizes phone numbers to digits for stable person identity hashing.
+ * - NANP numbers return 10 digits (e.g. "9795550102"), removing North American country code +1.
+ * - Non-+1 international numbers return normalized digits (e.g. "442079460958") preserving legacy hash stability.
+ * - Strips UK/DE/AU trunk zeros like '+44 (0)20...' to canonical '4420...'.
+ * - Safely truncates extensions and pause markers (',', ';', 'ext', 'x', '#') capped at 64 chars.
+ * - Normalizes '00' international prefix.
+ * - Shortcodes, invalid lengths, or malformed numbers return null.
+ */
 export function normalizePhone(raw: string): string | null {
+  if (!raw) return null;
+  let cleaned = raw.trim();
+  if (cleaned.length === 0 || cleaned === "+" || cleaned.length > 64) return null;
+  if (/^tel:/i.test(cleaned)) {
+    cleaned = cleaned.slice(4).trim();
+  }
+  cleaned = cleaned.replace(/\(\s*0\s*\)/g, "");
+
+  const oneLine = cleaned.replace(/\s+/g, " ");
+  const extMatch = /^(.*?)(?:[,;]|\s*(?:ext\.?|x|#))\s*=?\s*\d/i.exec(oneLine);
+  if (extMatch && extMatch[1] !== undefined) {
+    cleaned = extMatch[1].trim();
+  }
+
+  if (/^00[\s.-]*[1-9]/.test(cleaned)) {
+    cleaned = "+" + cleaned.replace(/^00[\s.-]*/, "");
+  } else if (/^011[\s.-]*[1-9]/.test(cleaned)) {
+    cleaned = "+" + cleaned.replace(/^011[\s.-]*/, "");
+  }
+
+  const hasPlus = cleaned.startsWith("+");
+  const d = cleaned.replace(/\D/g, "");
+  if (d.length === 0) return null;
+
+  if (hasPlus) {
+    if (d.startsWith("1")) {
+      const n = d.slice(1);
+      return n.length === 10 && /^[2-9]\d{2}[2-9]\d{6}$/.test(n) ? n : null;
+    }
+    return /^[1-9]\d{7,14}$/.test(d) ? d : null; // E.164 international numbers: 8 to 15 digits
+  }
+
+  // Bare 10-digit NANP number
+  if (d.length === 10 && /^[2-9]\d{2}[2-9]\d{6}$/.test(d)) return d;
+
+  // 11-digit NANP starting with 1
+  if (d.length === 11 && d.startsWith("1")) {
+    const n = d.slice(1);
+    return /^[2-9]\d{2}[2-9]\d{6}$/.test(n) ? n : null;
+  }
+
+  // Bare international number (12-15 digits without '+'): exclude 1 (NANP) and 0
+  if (d.length >= 12 && d.length <= 15 && /^[2-9]/.test(d)) {
+    return d;
+  }
+
+  return null;
+}
+
+/** Fast legacy phone key (7+ digits, removing leading NANP 1) for backwards-compatible matching. */
+export function legacyDigits(raw: string): string | null {
   const d = raw.replace(/\D/g, "");
   const n = d.length === 11 && d.startsWith("1") ? d.slice(1) : d;
-  return n.length > 0 ? n : null;
+  return n.length >= 7 ? n : null;
 }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -87,6 +146,8 @@ export function loadContacts(csv: string): Map<string, Person> {
       for (const part of (r[i] ?? "").split(":::")) {
         const n = normalizePhone(part);
         if (n) numbers.add(n);
+        const leg = legacyDigits(part);
+        if (leg) numbers.add(leg);
       }
     }
     if (numbers.size === 0) continue;
@@ -223,10 +284,14 @@ export function backfillComms(db: ExocortexDatabase, fiCsv: string, contactsCsv:
     const people = parts.length
       ? parts.map((p) => {
           const n = normalizePhone(p);
-          const known = n ? contacts.get(n) : undefined;
+          const leg = legacyDigits(p);
+          const known = (n ? contacts.get(n) : undefined) ?? (leg ? contacts.get(leg) : undefined);
           if (known) result.matchedToContact++;
           else result.anonymous++;
-          return known ? { id: known.id, labels: known.labels } : { id: anon(n ?? p.trim().toLowerCase()), labels: [] as string[] };
+          const key = n ?? leg;
+          return known
+            ? { id: known.id, labels: known.labels }
+            : { id: anon(key ?? p.trim().toLowerCase()), labels: [] as string[] };
         })
       : [{ id: "anon_unknown", labels: [] as string[] }];
 

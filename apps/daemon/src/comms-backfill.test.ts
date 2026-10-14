@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ExocortexDatabase } from "@exocortex/core/db";
-import { backfillComms, loadContacts, normalizePhone, parseCsv } from "./comms-backfill.js";
+import { backfillComms, legacyDigits, loadContacts, normalizePhone, parseCsv } from "./comms-backfill.js";
 import { PAST_KIND } from "./pieces-backfill.js";
 
 // All numbers below are fictitious (555 exchange).
@@ -30,10 +30,44 @@ test("parseCsv handles quoted commas, newlines and escaped quotes", () => {
   assert.deepEqual(parseCsv('a,"b,c","d\ne","f""g"\n1,2,3,4'), [["a", "b,c", "d\ne", 'f"g'], ["1", "2", "3", "4"]]);
 });
 
-test("normalizePhone keeps only 10-digit numbers", () => {
+test("normalizePhone keeps 10-digit NANP and valid E.164 international numbers", () => {
   assert.equal(normalizePhone("+1 979-555-0102"), "9795550102");
+  assert.equal(normalizePhone("+44 20 7946 0958"), "442079460958");
+  assert.equal(normalizePhone("+65 8123 4567"), "6581234567");
   assert.equal(normalizePhone("#225"), null);
   assert.equal(normalizePhone("74*27*63"), null);
+  assert.equal(normalizePhone("12345"), null);
+  assert.equal(normalizePhone("+1 979 555 010"), null);
+  assert.equal(normalizePhone("tel:+442079460958"), "442079460958");
+  assert.equal(normalizePhone("+1 979-555-0102 x12"), "9795550102");
+  assert.equal(normalizePhone("+44 (0)20 7946 0958"), "442079460958");
+  assert.equal(normalizePhone("+44 20 7946 0958,123"), "442079460958");
+  assert.equal(normalizePhone("+1 979-555-0102;ext=123"), "9795550102");
+  assert.equal(normalizePhone("+1 979 555 0102 ext. 12"), "9795550102");
+  assert.equal(normalizePhone("(979) 555-0102"), "9795550102");
+  assert.equal(normalizePhone("001 979 555 0102"), "9795550102");
+  assert.equal(normalizePhone("00 44 20 7946 0958"), "442079460958");
+  assert.equal(normalizePhone("011 44 20 7946 0958"), "442079460958");
+  assert.equal(normalizePhone("0044 20 7946 0958"), "442079460958");
+  assert.equal(normalizePhone("442079460958"), "442079460958");
+  assert.equal(normalizePhone(""), null);
+  assert.equal(normalizePhone("+"), null);
+  assert.equal(normalizePhone("+0 12345678"), null);
+  assert.equal(normalizePhone("+1 979-555-0102\nx12"), "9795550102");
+  assert.equal(normalizePhone("1 979 555 0102 99"), null);
+  assert.equal(normalizePhone("0123456789"), null);
+  assert.equal(normalizePhone("020 7946 0958"), null);
+  assert.equal(normalizePhone(" ".repeat(50000)), null);
+});
+
+test("legacyDigits preserves legacy digits while stripping leading 1 and rejecting noise", () => {
+  assert.equal(legacyDigits("+1 979-555-0102"), "9795550102");
+  assert.equal(legacyDigits("+44 20 7946 0958"), "442079460958");
+  assert.equal(legacyDigits("555-0102"), "5550102");
+  assert.equal(legacyDigits("#225"), null);
+  assert.equal(legacyDigits("123"), null);
+  assert.equal(legacyDigits(""), null);
+  assert.equal(legacyDigits("+++"), null);
 });
 
 test("loadContacts maps every number of a contact and drops noise", () => {

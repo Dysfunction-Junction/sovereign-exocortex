@@ -10,6 +10,7 @@ const TEST_ENROLL_TOKEN = "test-gateway-enroll-token-secure-456";
 
 process.env.GATEWAY_JWT_SECRET = TEST_SECRET;
 process.env.GATEWAY_ENROLL_TOKEN = TEST_ENROLL_TOKEN;
+process.env.DEVICE_REGISTRY_PATH = "none";
 process.env.NODE_ENV = "test";
 
 // Dynamically import server after env vars are set
