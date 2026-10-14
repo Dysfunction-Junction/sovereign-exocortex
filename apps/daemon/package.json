@@ -23,12 +23,12 @@
     "@exocortex/world-model": "workspace:*",
     "@pieces-android/allowlist": "workspace:*",
     "jsonwebtoken": "^9.0.3",
-    "sharp": "^0.35.5",
     "undici": "^8.10.0"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^26.1.1",
+    "sharp": "^0.35.5",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3"
   }

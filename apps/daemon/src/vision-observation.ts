@@ -42,13 +42,18 @@ export function recordTestScreenshotClassification(
   }
 
   defaultWorldModelHost.setShadowRecorder(recorder);
-  const evaluated = defaultWorldModelHost.ingestObservation({
-    invariantId: "inv_clean_test_suite",
-    observedState: result.status === "passed",
-    observedAt,
-    confidence: result.confidence,
-    metadata: { source: "local_vision" },
-  }, { allowAutoExecute: false });
+  let evaluated;
+  try {
+    evaluated = defaultWorldModelHost.ingestObservation({
+      invariantId: "inv_clean_test_suite",
+      observedState: result.status === "passed",
+      observedAt,
+      confidence: result.confidence,
+      metadata: { source: "local_vision" },
+    }, { allowAutoExecute: false });
+  } finally {
+    defaultWorldModelHost.setShadowRecorder(null);
+  }
 
   return {
     eventId,

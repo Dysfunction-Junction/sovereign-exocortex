@@ -16,9 +16,8 @@ export function recordCodeHealthObservation(
   const host = defaultWorldModelHost;
   const recorder = new ShadowRecorder(db, { shadow: true });
   recorder.ensureHostDevice();
-  host.setShadowRecorder(recorder);
 
-  const { event } = db.ingestEvent(HOST_DEVICE_ID, {
+  db.ingestEvent(HOST_DEVICE_ID, {
     event_id: eventId,
     kind: "observation",
     ts_device: observedAt,
@@ -34,13 +33,21 @@ export function recordCodeHealthObservation(
     },
   });
 
-  host.onEventAppended(event, db);
-  const result = host.ingestObservation({
-    invariantId: "inv_clean_test_suite",
-    observedState: passed,
-    observedAt,
-    confidence: 1,
-  });
+  host.setShadowRecorder(recorder);
+  let result;
+  try {
+    result = host.ingestObservation(
+      {
+        invariantId: "inv_clean_test_suite",
+        observedState: passed,
+        observedAt,
+        confidence: 1,
+      },
+      { allowAutoExecute: false },
+    );
+  } finally {
+    host.setShadowRecorder(null);
+  }
 
   return {
     eventId,
