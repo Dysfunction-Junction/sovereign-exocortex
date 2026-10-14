@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { getAllMemories, searchMemories } from "@exocortex/memory";
 
 const args = process.argv.slice(2);
@@ -23,6 +24,50 @@ async function daemonHealth(): Promise<boolean> {
     return result.ok === true;
   } catch {
     return false;
+  }
+}
+
+async function reportRepoTestResult(passed: boolean): Promise<void> {
+  const token = process.env.EXOCORTEX_OBSERVATION_TOKEN ?? process.env.EXOCORTEX_ADMIN_TOKEN;
+  if (!token) {
+    console.log("[exo test] Repo-health observation not sent (set EXOCORTEX_OBSERVATION_TOKEN with telemetry:write scope).");
+    return;
+  }
+
+  let deviceId: string;
+  try {
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")) as { sub?: unknown };
+    if (typeof payload.sub !== "string" || payload.sub.length === 0) throw new Error("missing device subject");
+    deviceId = payload.sub;
+  } catch {
+    console.warn("[exo test] Repo-health observation not sent (device token could not be decoded).");
+    return;
+  }
+
+  try {
+    const response = await fetch(`${daemonUrl}/v3/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        device_id: deviceId,
+        events: [{
+          event_id: `exo-test-${randomUUID()}`,
+          stream: "sovereign",
+          kind: "observation",
+          ts_device: Date.now(),
+          schema_ver: 1,
+          payload: { factor: "repo_health", observation: passed ? "tests_pass" : "tests_fail" },
+        }],
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`[exo test] Repo-health observation was not accepted (HTTP ${response.status}).`);
+      return;
+    }
+    console.log(`[exo test] Reported repo_health=${passed ? "tests_pass" : "tests_fail"}.`);
+  } catch (err) {
+    console.warn(`[exo test] Repo-health observation could not reach the daemon: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -112,6 +157,8 @@ async function main() {
         execSync("pnpm -r --stream test", { stdio: "inherit" });
       } catch (err) {
         testError = err;
+        const status = (err as { status?: unknown }).status;
+        process.exitCode = typeof status === "number" && status !== 0 ? status : 1;
       }
 
       try {
@@ -125,6 +172,8 @@ async function main() {
           err instanceof Error ? err.message : String(err),
         );
       }
+
+      await reportRepoTestResult(!testError);
 
       if (testError) throw testError;
       break;
@@ -143,7 +192,7 @@ Commands:
   world         Inspect the live daemon world-model state
   memory [q]    Search sovereign LocalLTM memories or inspect recent records
   gate          Run Autonomous Triad pre-commit gate in isolated worktree
-  test          Execute all unit & integration test suites across the monorepo
+  test          Execute all suites and report pass/fail to the daemon when configured
   help          Display this help message
 `);
       break;

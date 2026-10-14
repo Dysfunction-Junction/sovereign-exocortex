@@ -6,13 +6,31 @@ import { Preferences } from "@capacitor/preferences";
 // explicitly chose full detail over anonymized/aggregated tracking.
 
 const QUEUE_KEY = "pieces-android:usageQueue";
+const BRIDGE_STATE_KEY = "pieces-android:bridgeState";
 export const MAX_QUEUE_SIZE = 500; // backstop against unbounded growth if flush stays broken for a long time
+
+export type BridgeState = "connected" | "disconnected";
+
+export async function getBridgeState(): Promise<BridgeState | undefined> {
+  const { value } = await Preferences.get({ key: BRIDGE_STATE_KEY });
+  return value === "connected" || value === "disconnected" ? value : undefined;
+}
+
+export async function setBridgeState(state: BridgeState): Promise<void> {
+  await Preferences.set({ key: BRIDGE_STATE_KEY, value: state });
+}
 
 export type UsageEvent = (
   | { type: "ask"; screen: "ask"; query: string; result: "answered" | "unavailable" | "error"; timestamp: string }
   | { type: "search"; screen: "search"; query: string; resultCount: number; mode: "relevant" | "text" | "text-fallback"; timestamp: string }
   | { type: "screen_view"; screen: "setup" | "status" | "recent" | "ask"; timestamp: string }
   | { type: "setup_saved"; screen: "setup"; mode: "lan" | "remote"; timestamp: string }
+  | {
+      type: "health_observation";
+      factor: "link_health";
+      observation: "ping_fast" | "ping_slow" | "ws_dropped";
+      timestamp: string;
+    }
   | {
       type: "system_telemetry";
       screen: "background";

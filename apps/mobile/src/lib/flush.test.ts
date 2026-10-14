@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { usageEventToV3, flushUsageEvents } from "./flush";
+import { usageEventToV3, flushUsageEvents, resetBridgeStateForTest } from "./flush";
 import type { UsageEvent } from "./usage";
 import * as config from "./config";
 import * as usage from "./usage";
@@ -11,11 +11,15 @@ vi.mock("./config", () => ({
 vi.mock("./usage", () => ({
   peekQueue: vi.fn(),
   clearSentEvents: vi.fn(),
+  recordEvent: vi.fn(),
+  getBridgeState: vi.fn(async () => undefined),
+  setBridgeState: vi.fn(async () => {}),
 }));
 
 describe("flushUsageEvents & usageEventToV3", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetBridgeStateForTest();
   });
 
   afterEach(() => {
@@ -49,6 +53,17 @@ describe("flushUsageEvents & usageEventToV3", () => {
     const v3Sys = usageEventToV3(sysEvent);
     expect(v3Sys.kind).toBe("telemetry");
     expect(v3Sys.payload.package).toBe("com.whatsapp");
+
+    const healthEvent: UsageEvent = {
+      type: "health_observation",
+      factor: "link_health",
+      observation: "ws_dropped",
+      timestamp: "2026-10-09T10:02:00.000Z",
+      id: "evt_link_down",
+    };
+    const v3Health = usageEventToV3(healthEvent);
+    expect(v3Health.kind).toBe("observation");
+    expect(v3Health.payload).toMatchObject({ factor: "link_health", observation: "ws_dropped" });
   });
 
   it("posts batched events to POST /v3/events and clears sent items on success", async () => {
@@ -90,6 +105,78 @@ describe("flushUsageEvents & usageEventToV3", () => {
       })
     );
     expect(usage.clearSentEvents).toHaveBeenCalledWith(sampleEvents);
+    expect(usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "health_observation",
+      factor: "link_health",
+      observation: "ping_fast",
+    }));
+  });
+
+  it("queues a bridge-down observation after total network failure and reports recovery on the next upload", async () => {
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce([{
+      type: "screen_view",
+      screen: "status",
+      timestamp: "2026-10-09T10:05:00.000Z",
+      id: "evt_offline",
+    }]);
+    vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+      { baseUrl: "http://127.0.0.1:8788", token: "device-token", mode: "lan" },
+    ]);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new Error("network down")));
+
+    await flushUsageEvents();
+
+    expect(usage.clearSentEvents).not.toHaveBeenCalled();
+    expect(usage.recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "health_observation",
+      factor: "link_health",
+      observation: "ws_dropped",
+    }));
+
+    const queuedDownEvent: UsageEvent = {
+      type: "health_observation",
+      factor: "link_health",
+      observation: "ws_dropped",
+      timestamp: "2026-10-09T10:06:00.000Z",
+      id: "evt_link_down",
+    };
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce([queuedDownEvent]);
+    vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+      { baseUrl: "http://127.0.0.1:8788", token: "device-token", mode: "lan" },
+    ]);
+    const recoveredFetch = vi.fn().mockResolvedValueOnce({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", recoveredFetch);
+
+    await flushUsageEvents();
+
+    expect(JSON.parse(recoveredFetch.mock.calls[0][1].body)).toMatchObject({
+      events: [{ kind: "observation", payload: { factor: "link_health", observation: "ws_dropped" } }],
+    });
+    expect(usage.clearSentEvents).toHaveBeenCalledWith([queuedDownEvent]);
+    expect(usage.recordEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "health_observation",
+      factor: "link_health",
+      observation: "ping_fast",
+    }));
+  });
+
+  it("does not label the bridge down when the daemon responded before legacy fallback failed", async () => {
+    vi.mocked(usage.peekQueue).mockResolvedValueOnce([{
+      type: "screen_view",
+      screen: "status",
+      timestamp: "2026-10-09T10:05:00.000Z",
+      id: "evt_legacy_unavailable",
+    }]);
+    vi.mocked(config.getConnectionTargets).mockResolvedValueOnce([
+      { baseUrl: "http://127.0.0.1:8788", token: "device-token", mode: "lan" },
+    ]);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 403 })
+      .mockRejectedValueOnce(new Error("legacy route unavailable")));
+
+    await flushUsageEvents();
+
+    expect(usage.recordEvent).not.toHaveBeenCalled();
   });
 
   it("falls back to legacy /mobile/usage-report if /v3/events returns 404 or 403", async () => {

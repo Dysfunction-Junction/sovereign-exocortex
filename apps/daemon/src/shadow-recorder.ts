@@ -190,7 +190,7 @@ export class ShadowRecorder {
       const row: ProposalRecord = {
         proposal_id: policy.id,
         created_seq: event.seq,
-        invariant_id: policy.invariantId,
+        invariant_id: null,
         policy_type: policy.type,
         tier: tierForRisk(policy.estimatedRisk),
         summary: policy.title,

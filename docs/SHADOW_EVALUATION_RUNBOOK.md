@@ -5,9 +5,10 @@ Shadow calibration measures whether surfaced proposals are useful before any tie
 ## Collect representative data
 
 1. Start the daemon with `EXOCORTEX_SHADOW_RECORD=1` (the default) and `SHADOW=1`.
-2. Keep the phone and daemon connected during normal use. The event pipeline currently turns explicit `repo_health` observations (`tests_pass`, `tests_fail`, `clean_checkout`, `uncommitted_edits`) and `link_health` observations (`ping_fast`, `ws_dropped`) into gated proposals. Foreground-app telemetry alone does not create proposals.
-3. On each surfaced proposal, use the app's approve or dismiss action when the proposal is useful or unwanted. These are direct labels (`wanted` and `not_wanted`); inferred labels do not count toward precision.
-4. Collect across a representative 14-day period. Do not change the decision threshold to make a run pass.
+2. Use the phone and daemon normally. The mobile app queues `link_health` transition observations when event uploads first succeed, fail across every configured target, or recover; the daemon evaluates them after they reach `/v3/events`. A failed upload stays queued until recovery, so its down observation is delivered with a later successful batch. A test-runner or repository-health producer is still needed for `repo_health` observations (`tests_pass`, `tests_fail`, `clean_checkout`, `uncommitted_edits`). Foreground-app telemetry alone does not create proposals.
+3. To record the real test-suite result, set `EXOCORTEX_OBSERVATION_TOKEN` to an enrolled device JWT with `telemetry:write` and run `pnpm exo test`. Reporting is best-effort and does not alter the test result or exit code.
+4. On each surfaced proposal, use the app's approve or dismiss action when the proposal is useful or unwanted. These are direct labels (`wanted` and `not_wanted`); inferred labels do not count toward precision.
+5. Collect across a representative 14-day period. Do not change the decision threshold to make a run pass.
 
 ## Review metrics
 

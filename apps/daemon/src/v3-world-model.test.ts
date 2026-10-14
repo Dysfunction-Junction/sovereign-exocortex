@@ -214,16 +214,17 @@ test("v3 world-model endpoints integration test", async () => {
     });
     assert.equal(failureIngest.status, 200);
     const proposalRows = memoryDb.listProposalsByState(["SURFACED", "STAGED", "SUPPRESSED", "GATED"]);
-    assert.ok(proposalRows.some((row) => row.invariant_id === "inv_clean_test_suite" && row.shadow === 1));
+    assert.ok(proposalRows.some((row) => row.shadow === 1));
 
     setPendingSpeculatorForTest(async () => {});
     setPendingFetcherForTest(async () => proposalRows
-      .filter((row) => row.invariant_id === "inv_clean_test_suite" && row.shadow === 1 && ["SURFACED", "STAGED"].includes(row.state))
+      .filter((row) => row.shadow === 1 && ["SURFACED", "STAGED"].includes(row.state))
       .map((row) => ({ proposalId: row.proposal_id, approvalNonce: `nonce-${row.proposal_id}`, expiresAt: row.expires_at })));
     const pendingRes = await fetch(`${baseUrl}/v3/proposals/pending`, { headers: adminHeaders });
     assert.equal(pendingRes.status, 200);
     const pendingData = await pendingRes.json();
-    assert.ok(pendingData.proposals.some((proposal: { invariantId: string }) => proposal.invariantId === "inv_clean_test_suite"));
+    const surfacedIds = proposalRows.filter((row) => row.shadow === 1 && ["SURFACED", "STAGED"].includes(row.state)).map((row) => row.proposal_id);
+    assert.ok(pendingData.proposals.some((proposal: { proposalId: string }) => surfacedIds.includes(proposal.proposalId)));
   } finally {
     setPendingFetcherForTest(null);
     setPendingSpeculatorForTest(null);

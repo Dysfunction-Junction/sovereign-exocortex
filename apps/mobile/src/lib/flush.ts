@@ -1,5 +1,5 @@
 import { getConnectionTargets } from "./config";
-import { peekQueue, clearSentEvents, type UsageEvent } from "./usage";
+import { peekQueue, clearSentEvents, getBridgeState, setBridgeState, recordEvent, type BridgeState, type UsageEvent } from "./usage";
 import { extractDeviceIdFromToken } from "./jwtDisplay";
 
 // Best-effort batch flush of queued usage events into Architecture & Schema v3
@@ -15,6 +15,39 @@ import { extractDeviceIdFromToken } from "./jwtDisplay";
 //     order, move on for network error / timeout / 401 / 403 / 5xx.
 
 let isFlushing = false;
+let bridgeState: BridgeState | undefined;
+
+async function reportBridgeTransition(state: BridgeState, observation: "ping_fast" | "ping_slow" | "ws_dropped"): Promise<void> {
+  let previous = bridgeState;
+  if (previous === undefined) {
+    try {
+      previous = await getBridgeState();
+    } catch {
+      // A missing local status is equivalent to unknown; report the observed transition.
+    }
+  }
+  if (previous === state) {
+    bridgeState = state;
+    return;
+  }
+  try {
+    await recordEvent({
+      type: "health_observation",
+      factor: "link_health",
+      observation,
+      timestamp: new Date().toISOString(),
+    });
+    await setBridgeState(state);
+    bridgeState = state;
+  } catch {
+    // Link diagnostics are best-effort and must never interfere with event delivery.
+  }
+}
+
+/** Test-only reset for independent flush scenarios. */
+export function resetBridgeStateForTest(): void {
+  bridgeState = undefined;
+}
 
 export interface V3EventIn {
   event_id: string;
@@ -32,10 +65,13 @@ export function usageEventToV3(e: UsageEvent): V3EventIn {
     kind = "touch";
   } else if (e.type === "system_telemetry") {
     kind = "telemetry";
+  } else if (e.type === "health_observation") {
+    kind = "observation";
   }
   const ts = new Date(e.timestamp).getTime();
   const ts_device = Number.isSafeInteger(ts) && ts > 0 ? ts : Date.now();
-  const event_id = e.id || `evt_${ts_device}_${e.type}_${e.screen}`;
+  const screen = "screen" in e ? e.screen : undefined;
+  const event_id = e.id || `evt_${ts_device}_${e.type}_${screen ?? "system"}`;
 
   return {
     event_id,
@@ -44,10 +80,11 @@ export function usageEventToV3(e: UsageEvent): V3EventIn {
     schema_ver: 1,
     payload: {
       type: e.type,
-      screen: e.screen,
+      ...(screen ? { screen } : {}),
       ...(e.type === "ask" ? { query: e.query, result: e.result } : {}),
       ...(e.type === "search" ? { query: e.query, resultCount: e.resultCount, mode: e.mode } : {}),
       ...(e.type === "setup_saved" ? { mode: e.mode } : {}),
+      ...(e.type === "health_observation" ? { factor: e.factor, observation: e.observation } : {}),
       ...(e.type === "system_telemetry"
         ? {
             telemetry: e.telemetry,
@@ -83,6 +120,8 @@ export async function flushUsageEvents(): Promise<void> {
     const targets = await getConnectionTargets();
     if (targets.length === 0) return;
 
+    let networkFailures = 0;
+
     const v3Events = toSend.map(usageEventToV3);
 
     for (let i = 0; i < targets.length; i++) {
@@ -92,6 +131,7 @@ export async function flushUsageEvents(): Promise<void> {
       const deadline = Date.now() + timeoutMs;
       const getSignal = () => AbortSignal.timeout(Math.max(500, deadline - Date.now()));
       const deviceId = extractDeviceIdFromToken(target.token) || "device_phone_galaxy";
+      let targetReachedHttpServer = false;
 
       const post = async (batch: UsageEvent[], v3: V3EventIn[], signal: () => AbortSignal) => {
         const headers = { "Content-Type": "application/json", Authorization: `Bearer ${target.token}` };
@@ -101,6 +141,7 @@ export async function flushUsageEvents(): Promise<void> {
           body: JSON.stringify({ device_id: deviceId, events: v3 }),
           signal: signal(),
         });
+        targetReachedHttpServer = true;
         // Graceful fallback to legacy /mobile/usage-report if /v3/events is not supported (404) or scope forbidden (403)
         if (res.status === 404 || res.status === 403) {
           res = await fetch(`${target.baseUrl}/mobile/usage-report`, {
@@ -109,15 +150,19 @@ export async function flushUsageEvents(): Promise<void> {
             body: JSON.stringify({ events: batch }),
             signal: signal(),
           });
+          targetReachedHttpServer = true;
         }
         return res;
       };
 
       try {
+        const startedAt = Date.now();
         const res = await post(toSend, v3Events, getSignal);
 
         if (res.ok) {
           await clearSentEvents(toSend);
+          const observation = Date.now() - startedAt < 1500 ? "ping_fast" : "ping_slow";
+          await reportBridgeTransition("connected", observation);
           return;
         }
 
@@ -154,9 +199,13 @@ export async function flushUsageEvents(): Promise<void> {
         return;
       } catch {
         // Network error / timeout — try next target (e.g. Plan B gateway).
+        if (!targetReachedHttpServer) networkFailures++;
       }
     }
     // All targets failed: queue stays intact for next flush attempt.
+    if (networkFailures === targets.length) {
+      await reportBridgeTransition("disconnected", "ws_dropped");
+    }
   } catch {
     // Silently retry on next flush call.
   } finally {

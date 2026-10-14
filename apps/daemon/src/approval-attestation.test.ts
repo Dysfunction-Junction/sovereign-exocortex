@@ -159,7 +159,10 @@ test("approval key registration + /network/approve enforce the device-bound sign
     // 4. valid registration (fresh challenge; the failed attempt consumed ch2)
     const ch3 = (await (await fetch(`${base}/v3/devices/approval-key/challenge`, { method: "POST", headers: jwt })).json()).challenge;
     assert.equal((await reg(ENROLL, goodBody(ch3))).status, 200);
-    assert.equal(db.getDevice("dev_phone")?.key_attested, 1);
+    assert.equal(db.getDevice("dev_phone")?.key_attested, 0, "the dev escape hatch must not claim hardware attestation");
+    // Chain parsing has separate coverage. For the approval-route signature checks, represent
+    // the state after a trusted chain has verified this same key.
+    assert.equal(db.setDeviceApprovalKey("dev_phone", k.spki, true), true);
 
     // 5. approvals: fabricated / missing / wrong-key signatures are refused before anything is forwarded
     const fake = { method: "fingerprint", timestamp: new Date().toISOString(), signature: "attest_sig_prop_1_1" };

@@ -49,6 +49,7 @@ function systemObservationForEvent(
     "repo_health\u0000clean_checkout": { invariantId: "inv_zero_broken_commits", observedState: true },
     "repo_health\u0000uncommitted_edits": { invariantId: "inv_zero_broken_commits", observedState: false },
     "link_health\u0000ping_fast": { invariantId: "inv_bridge_connected", observedState: true },
+    "link_health\u0000ping_slow": { invariantId: "inv_bridge_connected", observedState: true },
     "link_health\u0000ws_dropped": { invariantId: "inv_bridge_connected", observedState: false },
   };
   const signal = invariantBySignal[`${extracted.factor}\u0000${extracted.obs}`];

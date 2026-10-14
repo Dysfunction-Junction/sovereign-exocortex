@@ -56,14 +56,18 @@ async function importNodes(linkMap) {
 async function importRelationships() {
   const rl = readline.createInterface({ input: fs.createReadStream(path.join(EXPORT_ROOT, "relationships.jsonl")) });
   const byType = new Map();
-  const total = { n: 0 };
+  const total = { n: 0, imported: 0 };
   const run = async (type) => {
     const rows = byType.get(type);
-    await flush(
-      `UNWIND $rows AS r MERGE (a:Doc {path: r.s}) MERGE (b:Doc {path: r.t}) MERGE (a)-[:${type}]->(b)`,
-      rows,
+    if (!rows.length) return;
+    const result = await session.run(
+      `UNWIND $rows AS r MATCH (a:Doc {path: r.s}) MATCH (b:Doc {path: r.t}) MERGE (a)-[:${type}]->(b) RETURN count(*) AS imported`,
+      { rows },
     );
+    total.imported += result.records[0].get("imported").toNumber();
+    rows.length = 0;
   };
+  await session.run("MATCH (n:Doc) WHERE n.hash IS NULL DETACH DELETE n");
   for await (const line of rl) {
     if (!line.trim()) continue;
     const { Source, Target, Relation } = JSON.parse(line);
@@ -74,7 +78,7 @@ async function importRelationships() {
     if (byType.get(type).length >= BATCH) await run(type);
   }
   for (const type of byType.keys()) await run(type);
-  console.log(`relationships: ${total.n}`);
+  console.log(`relationships: ${total.imported}/${total.n} rows imported; ${total.n - total.imported} skipped for missing endpoints`);
 }
 
 try {
