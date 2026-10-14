@@ -59,6 +59,60 @@ export interface InferencePolicy {
   actionPayload: Record<string, unknown>;
 }
 
+/**
+ * Default homeostatic invariants for sovereign personal computing. Exported so callers that
+ * persist proposals (e.g. ShadowRecorder) can seed the database's `invariants` table with the
+ * same ids the engine evaluates against -- `proposals.invariant_id` is a foreign key into that
+ * table, so a proposal referencing one of these ids fails to persist unless it's been seeded.
+ */
+export const DEFAULT_INVARIANTS: SystemInvariant[] = [
+  {
+    id: 'inv_clean_test_suite',
+    name: 'All Workspace Tests Passing',
+    targetEntityId: 'project_sovereign_exocortex',
+    preferredState: true,
+    priorProbability: 0.99,
+    toleranceThreshold: 0.01,
+    category: 'CODE_HEALTH',
+  },
+  {
+    id: 'inv_zero_broken_commits',
+    name: 'Zero Uncommitted Syntax or Type Errors',
+    targetEntityId: 'project_sovereign_exocortex',
+    preferredState: true,
+    priorProbability: 0.98,
+    toleranceThreshold: 0.02,
+    category: 'CODE_HEALTH',
+  },
+  {
+    id: 'inv_bridge_connected',
+    name: 'Mobile Sensorium WebSocket Connected',
+    targetEntityId: 'device_phone_galaxy_s26',
+    preferredState: true,
+    priorProbability: 0.95,
+    toleranceThreshold: 0.05,
+    category: 'HARDWARE_LINK',
+  },
+  {
+    id: 'inv_cafeteria_synced',
+    name: 'Oakridge 2nd Helpings Menu In Sync',
+    targetEntityId: 'project_cafeteria_menu',
+    preferredState: true,
+    priorProbability: 0.96,
+    toleranceThreshold: 0.05,
+    category: 'PROJECT_GOAL',
+  },
+  {
+    id: 'inv_bear_house_online',
+    name: 'Bear House Classic Edge & Postgres Healthy',
+    targetEntityId: 'project_bear_house_classic',
+    preferredState: true,
+    priorProbability: 0.99,
+    toleranceThreshold: 0.02,
+    category: 'FAMILY_HOME',
+  },
+];
+
 export class ActiveInferenceEngine {
   private invariants = new Map<string, SystemInvariant>();
   private lastObservations = new Map<string, SystemObservation>();
@@ -75,55 +129,7 @@ export class ActiveInferenceEngine {
    * Register default homeostatic invariants for sovereign personal computing.
    */
   private registerDefaultInvariants(): void {
-    const defaults: SystemInvariant[] = [
-      {
-        id: 'inv_clean_test_suite',
-        name: 'All Workspace Tests Passing',
-        targetEntityId: 'project_sovereign_exocortex',
-        preferredState: true,
-        priorProbability: 0.99,
-        toleranceThreshold: 0.01,
-        category: 'CODE_HEALTH',
-      },
-      {
-        id: 'inv_zero_broken_commits',
-        name: 'Zero Uncommitted Syntax or Type Errors',
-        targetEntityId: 'project_sovereign_exocortex',
-        preferredState: true,
-        priorProbability: 0.98,
-        toleranceThreshold: 0.02,
-        category: 'CODE_HEALTH',
-      },
-      {
-        id: 'inv_bridge_connected',
-        name: 'Mobile Sensorium WebSocket Connected',
-        targetEntityId: 'device_phone_galaxy_s26',
-        preferredState: true,
-        priorProbability: 0.95,
-        toleranceThreshold: 0.05,
-        category: 'HARDWARE_LINK',
-      },
-      {
-        id: 'inv_cafeteria_synced',
-        name: 'Oakridge 2nd Helpings Menu In Sync',
-        targetEntityId: 'project_cafeteria_menu',
-        preferredState: true,
-        priorProbability: 0.96,
-        toleranceThreshold: 0.05,
-        category: 'PROJECT_GOAL',
-      },
-      {
-        id: 'inv_bear_house_online',
-        name: 'Bear House Classic Edge & Postgres Healthy',
-        targetEntityId: 'project_bear_house_classic',
-        preferredState: true,
-        priorProbability: 0.99,
-        toleranceThreshold: 0.02,
-        category: 'FAMILY_HOME',
-      },
-    ];
-
-    for (const inv of defaults) {
+    for (const inv of DEFAULT_INVARIANTS) {
       this.invariants.set(inv.id, inv);
     }
   }
