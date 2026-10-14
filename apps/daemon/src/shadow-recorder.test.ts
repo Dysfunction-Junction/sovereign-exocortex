@@ -86,6 +86,10 @@ describe("ShadowRecorder", () => {
     dir = mkdtempSync(join(tmpdir(), "shadow-rec-"));
     dbPath = join(dir, "t.db");
     db = new ExocortexDatabase({ path: dbPath });
+    // proposals.invariant_id is a foreign key into invariants; policy()'s placeholder
+    // "inv_a" is a test fixture, not one of the engine's real DEFAULT_INVARIANTS, so it
+    // needs to be seeded here for record() to be able to persist a proposal against it.
+    db.registerInvariant({ invariant_id: "inv_a", name: "test invariant", category: "TEST", enabled: 1 });
     rec = new ShadowRecorder(db, { nowMs: () => NOW });
   });
 

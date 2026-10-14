@@ -39,14 +39,14 @@ function device(db: ExocortexDatabase, id: string, key: KP) {
 function proposal(
   db: ExocortexDatabase,
   id: string,
-  opts: { state?: "SURFACED" | "STAGED" | "SUPPRESSED" | "GATED"; expiresIn?: number; risk?: number; action?: string; invariant?: string | null } = {},
+  opts: { state?: "SURFACED" | "STAGED" | "SUPPRESSED" | "GATED"; expiresIn?: number; risk?: number; action?: string; invariant?: string | null; shadow?: 0 | 1 } = {},
 ) {
   const ev = db.ingestEvent("dev_a", { event_id: `evt_${id}`, kind: "observation", ts_device: Date.now(), schema_ver: 1, payload: {} });
   db.insertProposal({
     proposal_id: id, created_seq: ev.event.seq, invariant_id: opts.invariant ?? null, policy_type: "PRAGMATIC", tier: 1,
     summary: `summary ${id}`, action: opts.action ?? "{}", action_hash: new Uint8Array([1]), efe: 1,
     risk_term: opts.risk ?? 0.1, ambiguity_term: 0,
-    state: opts.state ?? "SURFACED", shadow: 1, expires_at: Date.now() + (opts.expiresIn ?? 3_600_000), updated_at: Date.now(),
+    state: opts.state ?? "SURFACED", shadow: opts.shadow ?? 1, expires_at: Date.now() + (opts.expiresIn ?? 3_600_000), updated_at: Date.now(),
   });
 }
 
@@ -148,9 +148,9 @@ test("a confirmed approve/reject advances the DB state, so the proposal leaves t
   const k = p256();
   device(db, "dev_a", k);
   setDatabase(db);
-  proposal(db, "pol_ok");
-  proposal(db, "pol_no");
-  proposal(db, "pol_refused");
+  proposal(db, "pol_ok", { shadow: 0 });
+  proposal(db, "pol_no", { shadow: 0 });
+  proposal(db, "pol_refused", { shadow: 0 });
   const reg = fakeRegistry();
   setPendingFetcherForTest(reg.fetcher);
   setPendingSpeculatorForTest(reg.speculator);
@@ -161,6 +161,7 @@ test("a confirmed approve/reject advances the DB state, so the proposal leaves t
     rs.writeHead(triadOk ? 200 : 409, { "Content-Type": "application/json" });
     rs.end(JSON.stringify({ ok: triadOk }));
   });
+
   await new Promise<void>((r) => triad.listen(0, "127.0.0.1", () => r()));
   process.env.TRIAD_UPSTREAM = `http://127.0.0.1:${(triad.address() as { port: number }).port}`;
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
@@ -211,6 +212,36 @@ test("a confirmed approve/reject advances the DB state, so the proposal leaves t
     else process.env.SHADOW = prevShadow;
     await new Promise<void>((r) => server.close(() => r()));
     await new Promise<void>((r) => triad.close(() => r()));
+    setDatabase(null);
+  }
+});
+
+test("a shadow proposal cannot be approved after live actuation is enabled", async () => {
+  const prevShadow = process.env.SHADOW;
+  process.env.SHADOW = "0";
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  device(db, "dev_a", p256());
+  proposal(db, "pol_shadow");
+  setDatabase(db);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  const base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+  try {
+    const res = await fetch(`${base}/network/approve`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + issueToken("dev_a", SECRET),
+      },
+      body: JSON.stringify({ proposal_id: "pol_shadow", action: "approve", nonce: "unused" }),
+    });
+    assert.equal(res.status, 423, await res.clone().text());
+    assert.match((await res.json()).error, /shadow proposal cannot be approved/);
+    assert.equal(db.getProposal("pol_shadow")?.state, "SURFACED");
+  } finally {
+    if (prevShadow === undefined) delete process.env.SHADOW;
+    else process.env.SHADOW = prevShadow;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     setDatabase(null);
   }
 });

@@ -1256,6 +1256,14 @@ export const server = createServer(async (req, res) => {
             });
             return;
           }
+          if (db.getProposal(proposalId)?.shadow === 1) {
+            sendJson(res, 423, {
+              ok: false,
+              error: "shadow proposal cannot be approved, even when live actuation is enabled",
+              shadow_mode: true,
+            });
+            return;
+          }
           if (process.env.SHADOW !== "0") {
             sendJson(res, 423, {
               ok: false,
@@ -1440,4 +1448,3 @@ async function warmUpHomeProxyConnection() {
   }
   console.warn("[warmup] gave up after 3 attempts - first real request may still pay the cold-start cost");
 }
-

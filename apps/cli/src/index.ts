@@ -107,7 +107,26 @@ async function main() {
 
     case "test": {
       console.log("[exo test] Running full multi-package test suites...");
-      execSync("pnpm -r --stream test", { stdio: "inherit" });
+      let testError: unknown;
+      try {
+        execSync("pnpm -r --stream test", { stdio: "inherit" });
+      } catch (err) {
+        testError = err;
+      }
+
+      try {
+        execSync(
+          `pnpm --filter @exocortex/daemon run record-test-observation -- ${testError ? "failed" : "passed"}`,
+          { stdio: "inherit" },
+        );
+      } catch (err) {
+        console.warn(
+          "[exo test] Could not record the test outcome in shadow mode:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+
+      if (testError) throw testError;
       break;
     }
 

@@ -16,7 +16,7 @@ import type {
   ProposalState,
   RiskTier,
 } from "@exocortex/core";
-import { isAutoExecuteAllowlisted } from "@exocortex/world-model";
+import { DEFAULT_INVARIANTS, isAutoExecuteAllowlisted } from "@exocortex/world-model";
 import type { GateAction, GateDecision, InferencePolicy, ProposalEnvelope } from "@exocortex/world-model";
 
 export const HOST_DEVICE_ID = "host:exocortexd";
@@ -91,6 +91,7 @@ export class ShadowRecorder {
   /** dedupe key -> last recorded ms. In-memory: a restart resets the cooldown. */
   private readonly lastRecorded = new Map<string, number>();
   private hostReady = false;
+  private invariantsReady = false;
 
   constructor(private readonly db: ExocortexDatabase, options: ShadowRecorderOptions = {}) {
     this.nowMs = options.nowMs ?? Date.now;
@@ -99,7 +100,7 @@ export class ShadowRecorder {
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
   }
 
-  private ensureHostDevice(): void {
+  public ensureHostDevice(): void {
     if (this.hostReady) return;
     if (!this.db.getDevice(HOST_DEVICE_ID)) {
       // The one-byte key is not a valid SPKI, so any signature check against this device fails closed.
@@ -120,6 +121,25 @@ export class ShadowRecorder {
       }
     }
     this.hostReady = true;
+  }
+
+  /**
+   * `proposals.invariant_id` is a foreign key into the `invariants` table. The engine's
+   * default invariants only ever lived in its in-memory map, so without this the first
+   * proposal referencing one would fail the foreign key. registerInvariant() is an
+   * idempotent upsert, so this is safe to run once per recorder lifetime.
+   */
+  public ensureInvariants(): void {
+    if (this.invariantsReady) return;
+    for (const inv of DEFAULT_INVARIANTS) {
+      this.db.registerInvariant({
+        invariant_id: inv.id,
+        name: inv.name,
+        category: inv.category,
+        enabled: 1,
+      });
+    }
+    this.invariantsReady = true;
   }
 
   /**
@@ -149,6 +169,7 @@ export class ShadowRecorder {
     if (last !== undefined && now - last < this.cooldownMs) return null;
 
     this.ensureHostDevice();
+    this.ensureInvariants();
     const { decision, state } = mapGateAction(gate.action);
 
     const stored = this.db.withTransaction(() => {
