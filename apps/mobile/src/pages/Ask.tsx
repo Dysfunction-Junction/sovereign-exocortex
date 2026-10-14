@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router";
 import { ask, ProxyNotConfiguredError, HomeNodeUnreachableError } from "../lib/api";
-import { recordEvent } from "../lib/usage";
+import { recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
 import { SparklesIcon, SendIcon, BotIcon, UserIcon, CopyIcon, CheckIcon, AlertIcon } from "../components/Icons";
 
@@ -48,8 +48,8 @@ export default function Ask() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    recordEvent({ type: "screen_view", screen: "ask", timestamp: new Date().toISOString() });
-    flushUsageEvents();
+    recordEventSafe({ type: "screen_view", screen: "ask", timestamp: new Date().toISOString() });
+    void flushUsageEvents();
   }, []);
 
   useEffect(() => {
@@ -92,7 +92,7 @@ export default function Ask() {
         setMessages((prev) => [...prev, assistantMsg]);
       }
 
-      recordEvent({
+      recordEventSafe({
         type: "ask",
         screen: "ask",
         query: trimmed,
@@ -104,15 +104,15 @@ export default function Ask() {
         setErrorBanner({ kind: "not-configured" });
       } else if (err instanceof HomeNodeUnreachableError) {
         setErrorBanner({ kind: "home-offline", message: err.message });
-        recordEvent({ type: "ask", screen: "ask", query: trimmed, result: "error", timestamp: new Date().toISOString() });
+        recordEventSafe({ type: "ask", screen: "ask", query: trimmed, result: "error", timestamp: new Date().toISOString() });
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         setErrorBanner({ kind: "error", message: msg });
-        recordEvent({ type: "ask", screen: "ask", query: trimmed, result: "error", timestamp: new Date().toISOString() });
+        recordEventSafe({ type: "ask", screen: "ask", query: trimmed, result: "error", timestamp: new Date().toISOString() });
       }
     } finally {
       setLoading(false);
-      flushUsageEvents();
+      void flushUsageEvents();
     }
   }
 

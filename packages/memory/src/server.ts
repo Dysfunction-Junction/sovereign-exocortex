@@ -31,6 +31,9 @@ import {
   RECENT_CAPTURE_QUERY,
 } from "./memories.js";
 import { localLTM } from "./local-ltm.js";
+import { ArchiveClient } from "./archive-client.js";
+import { GraphClient } from "./graph-client.js";
+import { Mem0Client } from "./mem0-client.js";
 
 function safeCompareTokens(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
@@ -58,6 +61,15 @@ export interface ServerConfig {
   gatewayToken?: string;
   memoryLogPath?: string;
   saveMemoriesToPieces?: boolean;
+  /**
+   * Databank client for archived memories. Omit to read DATABANK_URL / DATABANK_TOKEN on first use
+   * (null = archive search disabled; the response then has no `archive` field).
+   */
+  archiveClient?: ArchiveClient | null;
+  /** Neo4j knowledge-graph client. Omit to read NEO4J_* on first use (null = graph search disabled). */
+  graphClient?: GraphClient | null;
+  /** Mem0 recall via the Mem0 CLI. Omit to read MEM0_CLI on first use (null = Mem0 search disabled). */
+  mem0Client?: Mem0Client | null;
 }
 
 export interface AskRequestBody {
@@ -242,6 +254,24 @@ export function createGatewayApp(config: ServerConfig = {}) {
   const gatewayToken = config.gatewayToken !== undefined ? config.gatewayToken : (process.env.GATEWAY_TOKEN ?? process.env.PIECES_GATEWAY_TOKEN);
   const startTime = Date.now();
   let activeInferences = 0;
+  let envArchive: ArchiveClient | null | undefined;
+  const getArchive = (): ArchiveClient | null => {
+    if (config.archiveClient !== undefined) return config.archiveClient;
+    if (envArchive === undefined) envArchive = ArchiveClient.fromEnv();
+    return envArchive;
+  };
+  let envGraph: GraphClient | null | undefined;
+  const getGraph = (): GraphClient | null => {
+    if (config.graphClient !== undefined) return config.graphClient;
+    if (envGraph === undefined) envGraph = GraphClient.fromEnv();
+    return envGraph;
+  };
+  let envMem0: Mem0Client | null | undefined;
+  const getMem0 = (): Mem0Client | null => {
+    if (config.mem0Client !== undefined) return config.mem0Client;
+    if (envMem0 === undefined) envMem0 = Mem0Client.fromEnv();
+    return envMem0;
+  };
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const origin = req.headers.origin;
@@ -391,8 +421,20 @@ export function createGatewayApp(config: ServerConfig = {}) {
           const limit = typeof rawLimit === "number" && Number.isInteger(rawLimit)
             ? Math.min(Math.max(rawLimit, 1), 50)
             : 5;
-          const matches = await localLTM.searchMemories(query, limit);
+          const archive = getArchive();
+          // Local and archive searches run together; the archive can only add time up to its own timeout.
+          const graph = getGraph();
+          const mem0 = getMem0();
+          const [matches, archived, graphed, remembered] = await Promise.all([
+            localLTM.searchMemoriesHybrid(query, limit),
+            archive ? archive.search(query, limit) : Promise.resolve(null),
+            graph ? graph.search(query, limit) : Promise.resolve(null),
+            mem0 ? mem0.search(query, limit) : Promise.resolve(null),
+          ]);
           result.matches = matches;
+          if (archived) result.archive = archived;
+          if (graphed) result.graph = graphed;
+          if (remembered) result.mem0 = remembered;
           result.query = query;
           result.status = "searched";
         } else {
@@ -797,6 +839,8 @@ export function startGatewayServer(config: ServerConfig = {}): Promise<{ server:
           if (isReady) {
             pieces.checkHealth(1500).then((health) => {
               console.log(`[pieces-for-all] PiecesOS detected online at ${pieces.getBaseUrl()} (version: ${health.version ?? "unknown"})`);
+            }).catch((err) => {
+              console.warn(`[pieces-for-all] PiecesOS health check failed: ${err instanceof Error ? err.message : err}`);
             });
           } else {
             console.log(`[pieces-for-all] Notice: PiecesOS not detected at ${pieces.getBaseUrl()}. Gateway will operate in offline/degraded mode.`);

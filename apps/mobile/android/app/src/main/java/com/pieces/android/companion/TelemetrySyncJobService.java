@@ -24,6 +24,9 @@ public class TelemetrySyncJobService extends JobService {
         final int gen = currentGeneration.incrementAndGet();
         Log.d(TAG, "onStartJob triggered; gen=" + gen);
 
+        // Queue an app-usage summary for the window since the last run (no-op without Usage Access).
+        UsageSummary.queueIfDue(getApplicationContext());
+
         activeRunId = NativeTelemetrySync.flushJobAsync(getApplicationContext(), (success) -> {
             mainHandler.post(() -> {
                 if (currentGeneration.get() != gen) {

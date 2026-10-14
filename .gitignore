@@ -41,3 +41,6 @@ google-services.json
 *service-account*.json
 *firebase-adminsdk*.json
 apps/daemon/devices.json
+
+# Local semantic-embedding caches (rebuildable)
+*.vec.jsonl

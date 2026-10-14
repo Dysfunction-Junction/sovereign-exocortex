@@ -1,11 +1,30 @@
 #!/usr/bin/env node
-import { execSync } from "node:child_process";
-import { defaultDryRunCache, PreCognitiveEngine } from "@exocortex/core";
+import { execFileSync, execSync } from "node:child_process";
 import { getAllMemories, searchMemories } from "@exocortex/memory";
-import { LivingLifeGraph, CognitiveModeGate, ActiveInferenceEngine } from "@exocortex/world-model";
 
 const args = process.argv.slice(2);
 const command = args[0] || "help";
+const daemonUrl = (process.env.EXOCORTEX_DAEMON_URL ?? "http://127.0.0.1:8788").replace(/\/$/, "");
+
+async function daemonGet<T>(path: string, authenticated = true): Promise<T> {
+  const token = process.env.EXOCORTEX_ADMIN_TOKEN;
+  if (authenticated && !token) throw new Error("EXOCORTEX_ADMIN_TOKEN is not set");
+  const response = await fetch(new URL(path, `${daemonUrl}/`), {
+    headers: authenticated ? { Authorization: `Bearer ${token}` } : {},
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.json() as Promise<T>;
+}
+
+async function daemonHealth(): Promise<boolean> {
+  try {
+    const result = await daemonGet<{ ok?: boolean }>("/mobile/health", false);
+    return result.ok === true;
+  } catch {
+    return false;
+  }
+}
 
 async function main() {
   switch (command) {
@@ -14,11 +33,7 @@ async function main() {
       console.log("       SOVEREIGN SYMBIOTIC EXOCORTEX (exo CLI)");
       console.log("=======================================================\n");
 
-      // 1. Dry Run Cache status
-      const cacheStatus = defaultDryRunCache.status();
-      console.log(`[Dry-Run Cache] Active proposals: ${cacheStatus.size}/${cacheStatus.maxSize}`);
-
-      // 2. Sovereign LocalLTM status
+      // Local memory is independent of daemon health.
       try {
         const memories = await getAllMemories();
         console.log(`[Sovereign Memory] LocalLTM stored records: ${memories.length}`);
@@ -26,63 +41,39 @@ async function main() {
         console.log(`[Sovereign Memory] LocalLTM: initialized`);
       }
 
-      // 3. The Magic Piece (Living World Model)
-      const graph = new LivingLifeGraph();
-      graph.addEntity({ id: "person_michael", name: "Michael", type: "PERSON" });
-      graph.addEntity({ id: "project_sovereign_exocortex", name: "Sovereign Exocortex", type: "PROJECT" });
-      graph.addEntity({ id: "project_bear_house_classic", name: "Bear House Classic", type: "PROJECT" });
-      graph.addEntity({ id: "project_cafeteria_menu", name: "2nd Helpings Menu", type: "PROJECT" });
-
-      const gate = new CognitiveModeGate();
-      const inference = new ActiveInferenceEngine(graph);
-
-      console.log(`[Magic Piece: Life Graph] Entities: ${graph.entityCount} | Edges: ${graph.edgeCount}`);
-      console.log(`[Magic Piece: Cognitive Gate] Active Mode: ${gate.mode} (Flow-state protected)`);
-      console.log(`[Magic Piece: Active Inference] Homeostatic Invariants: ${inference.registeredInvariants.length}`);
-
-      // 4. Frontier 1: Pre-Cognitive Readiness
-      const precog = new PreCognitiveEngine(defaultDryRunCache);
-      console.log(`[Frontier 1: Pre-Cognitive Engine] Active (Pocket Pre-Staging + Neuromuscular Dwell)`);
-
-      // 5. Frontier 3: Morphogenetic Software
-      console.log(`[Frontier 3: Morphogenetic Code] Active (Darwinian Worktree Sandbox + Apoptosis)`);
-
-      // 6. Mesh & Host Gateway
-      console.log(`[Tailscale Mesh] Daemon Gateway: http://127.0.0.1:8787`);
-      console.log(`[Host Architecture] Single In-Process Monorepo Substrate`);
-      console.log("\nSystem status: HEALTHY (All internal systems operational)\n");
+      const health = await daemonHealth();
+      console.log(`[Daemon] ${health ? `UP (${daemonUrl})` : `DOWN (${daemonUrl})`}`);
+      try {
+        const [devices, proposals, verification] = await Promise.all([
+          daemonGet<{ devices: unknown[] }>("/v3/devices"),
+          daemonGet<{ proposals: unknown[] }>("/v3/proposals/pending"),
+          daemonGet<{ verification: { valid?: boolean } }>("/v3/events/verify"),
+        ]);
+        console.log(`[Devices] ${devices.devices?.length ?? 0}`);
+        console.log(`[Pending proposals] ${proposals.proposals?.length ?? 0}`);
+        console.log(`[Event chain] ${verification.verification?.valid ? "VERIFIED" : "CHECK FAILED"}`);
+        const healthy = health && verification.verification?.valid === true;
+        console.log(`\nSystem status: ${healthy ? "HEALTHY" : "DEGRADED"}\n`);
+        if (!healthy) process.exitCode = 1;
+      } catch (err) {
+        console.log(`[Daemon data] unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(`\nSystem status: ${health ? "DEGRADED" : "DOWN"}\n`);
+        process.exitCode = 1;
+      }
       break;
     }
 
     case "world": {
-      console.log("\n--- THE LIVING WORLD MODEL OF MICHAEL ---");
-      const graph = new LivingLifeGraph();
-      graph.addEntity({ id: "person_michael", name: "Michael", type: "PERSON" });
-      graph.addEntity({ id: "project_sovereign_exocortex", name: "Sovereign Exocortex Monorepo", type: "PROJECT" });
-      graph.addEntity({ id: "project_bear_house_classic", name: "Bear House Classic", type: "PROJECT" });
-      graph.addEntity({ id: "project_cafeteria_menu", name: "2nd Helpings Cafeteria Manager", type: "PROJECT" });
-      graph.addEdge("person_michael", "project_sovereign_exocortex", "WORKS_ON", 1.0);
-      graph.addEdge("person_michael", "project_bear_house_classic", "WORKS_ON", 0.95);
-      graph.addEdge("person_michael", "project_cafeteria_menu", "WORKS_ON", 0.9);
-
-      const gate = new CognitiveModeGate();
-      const currentMode = gate.classifyMode({
-        foregroundApp: "com.microsoft.VSCode",
-        windowTitle: "sovereign-exocortex",
-      });
-      const inference = new ActiveInferenceEngine(graph);
-
-      console.log(`Pillar 1: Living Life Graph - ${graph.entityCount} entities, ${graph.edgeCount} causal edges`);
-      console.log(`Pillar 2: Cognitive Mode Gate - Current Classified Mode: ${currentMode}`);
-      console.log(`Pillar 3: Active Inference Engine - ${inference.registeredInvariants.length} homeostatic invariants monitored`);
-      console.log("\nInvariants:");
-      for (const inv of inference.registeredInvariants) {
-        console.log(`  • [${inv.category}] ${inv.name} (Preferred: ${inv.preferredState}, Prior: ${inv.priorProbability})`);
+      console.log("\n--- LIVE WORLD MODEL ---");
+      try {
+        const result = await daemonGet<{ state: Record<string, unknown> }>("/world-model/state");
+        console.log(JSON.stringify(result.state, null, 2));
+      } catch (err) {
+        console.error(`World model unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        process.exitCode = 1;
       }
-      console.log();
       break;
     }
-
     case "memory": {
       const query = args.slice(1).join(" ").trim();
       if (!query) {
@@ -105,7 +96,8 @@ async function main() {
     case "gate": {
       console.log("[exo gate] Dispatching diff to Autonomous Triad Advisory Council...");
       try {
-        execSync("python -m triad.triad_engine gate --worktree", { stdio: "inherit" });
+        const python = process.env.MISHMASH_PYTHON || (process.platform === "win32" ? "python" : "python3");
+        execFileSync(python, ["-m", "triad.triad_engine", "gate", "--worktree"], { stdio: "inherit" });
       } catch (err: unknown) {
         console.error("Triad gate verification failed.");
         process.exit(1);
@@ -147,8 +139,8 @@ Usage:
   exo <command> [arguments]
 
 Commands:
-  status        Check health of host daemon, world model, memory banks, and speculative cache
-  world         Inspect the 3 Pillars of the Magic Piece (Living Life Graph, Cognitive Gate, Active Inference)
+  status        Check daemon health, registered devices, pending proposals, and event-chain integrity
+  world         Inspect the live daemon world-model state
   memory [q]    Search sovereign LocalLTM memories or inspect recent records
   gate          Run Autonomous Triad pre-commit gate in isolated worktree
   test          Execute all unit & integration test suites across the monorepo

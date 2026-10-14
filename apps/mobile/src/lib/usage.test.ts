@@ -126,3 +126,13 @@ describe("usage queue management", () => {
     expect(final.every((e) => !!e.id)).toBe(true);
   });
 });
+
+describe("recordEvent with a caller-supplied id", () => {
+  test("queues the same id once", async () => {
+    await Preferences.remove({ key: "pieces-android:usageQueue" });
+    const ev = { id: "sms-1-1-abc", type: "system_telemetry" as const, screen: "background" as const, telemetry: "SMS inbound X\nhi", timestamp: new Date().toISOString() };
+    await recordEvent(ev);
+    await recordEvent({ ...ev });
+    expect((await peekQueue()).length).toBe(1);
+  });
+});

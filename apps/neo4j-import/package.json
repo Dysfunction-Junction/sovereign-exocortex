@@ -1,0 +1,8 @@
+{
+  "name": "neo4j-import",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "import": "node src/import.js" },
+  "dependencies": { "neo4j-driver": "^5.28.0" }
+}

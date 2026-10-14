@@ -13,9 +13,11 @@ process.env.GATEWAY_JWT_SECRET = TEST_SECRET;
 process.env.GATEWAY_ENROLL_TOKEN = TEST_ENROLL_TOKEN;
 process.env.NODE_ENV = "test";
 
-const { server } = await import("./server.js");
+const { server, setPendingFetcherForTest, setPendingSpeculatorForTest } = await import("./server.js");
 
 test("v3 world-model endpoints integration test", async () => {
+  process.env.SHADOW = "1";
+  process.env.EXOCORTEX_SHADOW_RECORD = "1";
   // Use isolated in-memory SQLite for testing
   const memoryDb = new ExocortexDatabase({ path: ":memory:" });
   setDatabase(memoryDb);
@@ -194,7 +196,37 @@ test("v3 world-model endpoints integration test", async () => {
     // Verify replayed state matches beliefs before replay
     assert.equal(replayData.latestSnapshot.mode, beliefsData.latest.mode);
     assert.equal(replayData.latestSnapshot.q, beliefsData.latest.q);
+
+    // Explicit failing test observations from the ordinary event stream create shadow rows.
+    const failureIngest = await fetch(`${baseUrl}/v3/events`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        device_id: "dev_admin_node",
+        events: [{
+          event_id: "evt_obs_tests_fail",
+          stream: "sovereign",
+          kind: "observation",
+          payload: { factor: "repo_health", observation: "tests_fail" },
+          ts_device: Date.now() + 2,
+        }],
+      }),
+    });
+    assert.equal(failureIngest.status, 200);
+    const proposalRows = memoryDb.listProposalsByState(["SURFACED", "STAGED", "SUPPRESSED", "GATED"]);
+    assert.ok(proposalRows.some((row) => row.invariant_id === "inv_clean_test_suite" && row.shadow === 1));
+
+    setPendingSpeculatorForTest(async () => {});
+    setPendingFetcherForTest(async () => proposalRows
+      .filter((row) => row.invariant_id === "inv_clean_test_suite" && row.shadow === 1 && ["SURFACED", "STAGED"].includes(row.state))
+      .map((row) => ({ proposalId: row.proposal_id, approvalNonce: `nonce-${row.proposal_id}`, expiresAt: row.expires_at })));
+    const pendingRes = await fetch(`${baseUrl}/v3/proposals/pending`, { headers: adminHeaders });
+    assert.equal(pendingRes.status, 200);
+    const pendingData = await pendingRes.json();
+    assert.ok(pendingData.proposals.some((proposal: { invariantId: string }) => proposal.invariantId === "inv_clean_test_suite"));
   } finally {
+    setPendingFetcherForTest(null);
+    setPendingSpeculatorForTest(null);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

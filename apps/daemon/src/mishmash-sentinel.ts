@@ -71,6 +71,7 @@ export interface SentinelController {
   handle: MishmashHandle;
   stop: () => Promise<void>;
   checkHealth: () => Promise<NodeHealthStatus[]>;
+  restartNode: (id: string) => Promise<void>;
 }
 
 export async function startSentinel(options?: {
@@ -78,11 +79,82 @@ export async function startSentinel(options?: {
   ports?: Record<string, number>;
 }): Promise<SentinelController> {
   const handle = await startMishmash(options);
+  let stopped = false;
+  const attempts = new Map<string, number>();
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const restartInProgress = new Set<string>();
+  const restartPromises = new Map<string, Promise<void>>();
+  const watchChildExit = (id: string, index: number) => {
+    const child = handle.children[index];
+    if (!child) return;
+    const onExit = () => {
+      if (!restartInProgress.has(id)) scheduleRestart(id);
+    };
+    if (child.exitCode !== null || child.signalCode !== null) onExit();
+    else {
+      child.once("exit", onExit);
+      child.once("error", onExit);
+    }
+  };
+  const scheduleRestart = (id: string) => {
+    if (stopped || timers.has(id)) return;
+    const count = attempts.get(id) ?? 0;
+    if (count >= 5) {
+      console.error(`[Sentinel] ${id} restart limit reached; leaving other nodes running`);
+      return;
+    }
+    const delay = Math.min(30_000, 1000 * 2 ** count);
+    const timer = setTimeout(() => {
+      timers.delete(id);
+      attempts.set(id, count + 1);
+      void restartNode(id).catch((err) => {
+        console.error(`[Sentinel] ${id} restart failed:`, err);
+        scheduleRestart(id);
+      });
+    }, delay);
+    timer.unref();
+    timers.set(id, timer);
+  };
+  Object.keys(handle.upstreams).forEach((id, index) => {
+    watchChildExit(id, index);
+  });
+  const restartNode = async (id: string) => {
+    if (!handle.restartNode) throw new Error("node restart is unavailable");
+    const active = restartPromises.get(id);
+    if (active) return active;
+    restartInProgress.add(id);
+    const operation = handle.restartNode(id).finally(() => {
+      restartPromises.delete(id);
+      restartInProgress.delete(id);
+      const index = Object.keys(handle.upstreams).indexOf(id);
+      const child = handle.children[index];
+      if (child && (child.exitCode !== null || child.signalCode !== null)) scheduleRestart(id);
+    });
+    restartPromises.set(id, operation);
+    try {
+      await operation;
+      const index = Object.keys(handle.upstreams).indexOf(id);
+      watchChildExit(id, index);
+    } catch (err) {
+      throw err;
+    }
+  };
 
   return {
     handle,
-    checkHealth: () => checkAllNodesHealth(handle.upstreams),
-    stop: () => stopMishmash(handle),
+    checkHealth: async () => {
+      const statuses = await checkAllNodesHealth(handle.upstreams);
+      for (const status of statuses) if (status.healthy) attempts.delete(status.id);
+      return statuses;
+    },
+    restartNode,
+    stop: async () => {
+      stopped = true;
+      for (const timer of timers.values()) clearTimeout(timer);
+      timers.clear();
+      await Promise.allSettled(restartPromises.values());
+      await stopMishmash(handle);
+    },
   };
 }
 
@@ -93,13 +165,13 @@ const isDirectRun = Boolean(
 if (isDirectRun) {
   console.log("Starting Mishmash Ambient Sentinel daemon...");
   startSentinel()
-    .then(({ handle, checkHealth, stop }) => {
+    .then(({ handle, checkHealth, stop, restartNode }) => {
       console.log("Mishmash Ambient Sentinel active on 127.0.0.1 across nodes:");
       for (const [id, upstream] of Object.entries(handle.upstreams)) {
         console.log(`  [${id}] -> ${upstream}`);
       }
 
-      let consecutiveFailures = 0;
+      const consecutiveFailures = new Map<string, number>();
       let isShuttingDown = false;
 
       const shutdown = async (code = 0) => {
@@ -125,18 +197,18 @@ if (isDirectRun) {
             `[Sentinel Heartbeat] ${new Date().toISOString()} - ${healthyCount}/${healths.length} nodes healthy`
           );
 
-          if (unhealthy.length > 0) {
-            consecutiveFailures += 1;
-            console.warn(
-              `[Sentinel Warning] ${unhealthy.length} unhealthy nodes (sweep failure ${consecutiveFailures}/3):`,
-              unhealthy.map((u) => `${u.id}:${u.statusText}`).join(", ")
-            );
-            if (consecutiveFailures >= 3) {
-              console.error("[Sentinel Fatal] 3 consecutive failed sweeps. Triggering supervisor exit for auto-restart.");
-              void shutdown(1);
+          for (const node of healths) {
+            if (node.healthy) {
+              consecutiveFailures.delete(node.id);
+              continue;
             }
-          } else {
-            consecutiveFailures = 0;
+            const failures = (consecutiveFailures.get(node.id) ?? 0) + 1;
+            consecutiveFailures.set(node.id, failures);
+            console.warn(`[Sentinel Warning] ${node.id} unhealthy (${failures}/3): ${node.statusText}`);
+            if (failures >= 3) {
+              consecutiveFailures.set(node.id, 0);
+              void restartNode(node.id).catch((err) => console.error(`[Sentinel] ${node.id} restart failed:`, err));
+            }
           }
         } catch (sweepErr) {
           console.error("[Sentinel Sweep Error]", sweepErr);

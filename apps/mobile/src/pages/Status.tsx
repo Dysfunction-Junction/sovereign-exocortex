@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { getStatus, getCachedStatus, ProxyNotConfiguredError, HomeNodeUnreachableError } from "../lib/api";
 import { recordEvent } from "../lib/usage";
+import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
 import { isScreenContextEnabled } from "../lib/config";
 import { onPassiveCapture, getLastPassiveCapture, startPassiveCaptureListener } from "../lib/passiveCapture";
 import { withPlayCategoryFallback } from "../lib/playCategories";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Switch } from "../components/Switch";
+import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
 
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
@@ -89,8 +91,8 @@ export default function Status() {
   }
 
   useEffect(() => {
-    load();
-    isScreenContextEnabled().then(setContextEnabled);
+    fireAndForget(load(), "status.load");
+    isScreenContextEnabled().then(setContextEnabled).catch(logRejection("status.screenContext")); // default false = fail-closed
     if (Capacitor.isNativePlatform()) {
       AccessibilityScanner.isAccessibilityServiceEnabled()
         .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
@@ -101,9 +103,11 @@ export default function Status() {
     // the empty Set() default until the user opens the app picker at least
     // once this session, wrongly disabling Scan Screen Text / Passive mode
     // even when a real allowlist is already saved natively.
-    AccessibilityScanner.getAllowlist().then(({ packages }: { packages: string[] }) => setAllowlistState(new Set(packages)));
-    recordEvent({ type: "screen_view", screen: "status", timestamp: new Date().toISOString() });
-    flushUsageEvents();
+    AccessibilityScanner.getAllowlist()
+      .then(({ packages }: { packages: string[] }) => setAllowlistState(new Set(packages)))
+      .catch(() => {}); // plugin unavailable off-device: keep the initial allowlist state
+    recordEventSafe({ type: "screen_view", screen: "status", timestamp: new Date().toISOString() });
+    void flushUsageEvents();
 
     // The actual passive-capture listener is registered app-wide in
     // App.tsx (so it keeps running regardless of which screen is open) —
@@ -636,6 +640,8 @@ export default function Status() {
           )}
         </>
       )}
+
+      <PermissionsPanel />
     </div>
   );
 }

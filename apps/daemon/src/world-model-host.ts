@@ -11,6 +11,10 @@
  */
 
 import {
+  seedFromPastSessions,
+  seedFromComms,
+  type CommsSeedResult,
+  type PastSeedResult,
   LivingLifeGraph,
   CognitiveModeGate,
   ActiveInferenceEngine,
@@ -32,6 +36,25 @@ import type { ExocortexDatabase } from "@exocortex/core/db";
 const MAX_RECORDER_FAILURES = 5;
 
 const SCREEN_STATES = ["ON", "OFF", "UNLOCKED"];
+
+/** Convert only explicit, supported observations into homeostatic signals. */
+function systemObservationForEvent(
+  event: EventRecord,
+  extracted: { factor: string; obs: string },
+): SystemObservation | null {
+  if (event.kind !== "observation") return null;
+  const invariantBySignal: Record<string, { invariantId: string; observedState: boolean }> = {
+    "repo_health\u0000tests_pass": { invariantId: "inv_clean_test_suite", observedState: true },
+    "repo_health\u0000tests_fail": { invariantId: "inv_clean_test_suite", observedState: false },
+    "repo_health\u0000clean_checkout": { invariantId: "inv_zero_broken_commits", observedState: true },
+    "repo_health\u0000uncommitted_edits": { invariantId: "inv_zero_broken_commits", observedState: false },
+    "link_health\u0000ping_fast": { invariantId: "inv_bridge_connected", observedState: true },
+    "link_health\u0000ws_dropped": { invariantId: "inv_bridge_connected", observedState: false },
+  };
+  const signal = invariantBySignal[`${extracted.factor}\u0000${extracted.obs}`];
+  if (!signal) return null;
+  return { ...signal, observedAt: event.ts_device, confidence: 1 };
+}
 
 /** Validate untrusted telemetry signals before any state is mutated. Throws TypeError on bad input. */
 function validateSignals(signals: unknown): asserts signals is ContextualSignals {
@@ -163,6 +186,60 @@ export class WorldModelHost {
     this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95);
+  }
+
+  private pastSeeded = false;
+
+  /**
+   * Seed the life graph from past events (Pieces backfill, kind "past"). Runs at most once per process and never
+   * throws; past events are history, so this changes only entity activation and edge weights, not the event log.
+   */
+  public seedFromPastEvents(db: ExocortexDatabase): PastSeedResult | null {
+    if (this.pastSeeded) return null;
+    this.pastSeeded = true;
+    try {
+      const sessions = db.listEvents({ kind: "past" }).flatMap((e) => {
+        try {
+          const p = JSON.parse(String(e.payload)) as { origin?: unknown; tags?: unknown; persons?: unknown };
+          if (p.origin !== "pieces-backfill") return [];
+          const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+          return [{ ts: e.ts_device, tags: strs(p.tags), persons: strs(p.persons) }];
+        } catch {
+          return [];
+        }
+      });
+      return sessions.length > 0 ? seedFromPastSessions(this.lifeGraph, sessions) : null;
+    } catch (err) {
+      console.error("[life-graph] past seeding skipped:", err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+
+  private commsSeeded = false;
+
+  /**
+   * Seed real people into the life graph from past call/text events (kind "past", origin "comms-backfill").
+   * Runs at most once per process and never throws; only entity activation and edge weights change.
+   */
+  public seedCommsFromPastEvents(db: ExocortexDatabase): CommsSeedResult | null {
+    if (this.commsSeeded) return null;
+    this.commsSeeded = true;
+    try {
+      const events = db.listEvents({ kind: "past" }).flatMap((e) => {
+        try {
+          const p = JSON.parse(String(e.payload)) as { origin?: unknown; people?: unknown; labels?: unknown };
+          if (p.origin !== "comms-backfill" || !Array.isArray(p.people) || typeof p.people[0] !== "string") return [];
+          const labels = Array.isArray(p.labels) ? p.labels.filter((x): x is string => typeof x === "string") : [];
+          return [{ ts: e.ts_device, person: p.people[0] as string, labels }];
+        } catch {
+          return [];
+        }
+      });
+      return events.length > 0 ? seedFromComms(this.lifeGraph, events) : null;
+    } catch (err) {
+      console.error("[life-graph] comms seeding skipped:", err instanceof Error ? err.message : err);
+      return null;
+    }
   }
 
   /**
@@ -381,7 +458,13 @@ export class WorldModelHost {
       try {
         const extracted = eventToObservation(ev);
         if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
-          this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+          const systemObservation = systemObservationForEvent(ev, extracted);
+          if (systemObservation) {
+            // ingestObservation updates the same learned factor and also runs active inference.
+            this.ingestObservation(systemObservation);
+          } else {
+            this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+          }
           touchedFactors.add(extracted.factor);
           lastObsSeq = ev.seq;
           batchSnapshots.push(this.learnedEngine.createBeliefSnapshot(ev.seq));

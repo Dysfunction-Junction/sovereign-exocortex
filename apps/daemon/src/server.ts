@@ -8,8 +8,11 @@ import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
-import { ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
+import { defaultTriageHost } from "./triage-host.js";
+import { dropKnownTelemetry } from "./telemetry-dedupe.js";
+import { APPROVAL_TS_WINDOW_MS, ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
+import { getRevokedAttestationSerials } from "./attestation-status.js";
 import {
   buildPendingProposals,
   defaultPendingFetcher,
@@ -132,8 +135,13 @@ function sendJson(res: import("node:http").ServerResponse, status: number, body:
   res.end(payload);
 }
 
+function sendInternalError(res: import("node:http").ServerResponse, message: string, err: unknown) {
+  console.error(`[daemon] ${message}:`, err);
+  sendJson(res, 500, { error: message });
+}
+
 /**
- * Lazily attach the shadow recorder on first observation (no DB side effects at import time).
+ * Lazily attach the shadow recorder on first event or observation (no DB side effects at import time).
  * Env is read once at attach; changing SHADOW or EXOCORTEX_SHADOW_RECORD needs a restart.
  */
 function ensureShadowRecorder(): void {
@@ -142,6 +150,10 @@ function ensureShadowRecorder(): void {
     defaultWorldModelHost.setShadowRecorder(
       new ShadowRecorder(getDatabase(), { shadow: process.env.SHADOW !== "0" }),
     );
+    const people = defaultWorldModelHost.seedCommsFromPastEvents(getDatabase());
+    if (people) console.log(`[life-graph] seeded ${people.people} people from ${people.events} past calls and texts`);
+    const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
+    if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.topics} topics, ${seeded.persons} people, ${seeded.edges} edges`);
   } catch (err) {
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();
@@ -175,20 +187,26 @@ export function setPendingSpeculatorForTest(sp: Speculator | null): void {
   pendingSpeculator = sp;
 }
 
-/** A tap label needs a valid device-signed attestation; everything else is "inferred". */
+/** A tap label needs a valid, single-use device-signed attestation; everything else is "inferred". */
 function labelSource(
   db: ExocortexDatabase,
   deviceId: string,
   proposalId: string,
   label: string,
   attestation: unknown,
-  requested: unknown,
 ): "tap" | "inferred" {
-  if (requested === "inferred" || attestation === undefined || attestation === null) return "inferred";
+  if (attestation === undefined || attestation === null) return "inferred";
   const dev = db.getDevice(deviceId);
   if (!dev || dev.revoked_at) return "inferred";
   const v = verifyLabelAttestation(attestation, { deviceId, proposalId, label }, dev.pubkey_spki, Boolean(dev.key_attested));
-  return v.ok ? "tap" : "inferred";
+  if (!v.ok) return "inferred";
+  try {
+    if (!db.consumeLabelAttestationNonce(deviceId, v.nonce, v.ts + APPROVAL_TS_WINDOW_MS)) return "inferred";
+  } catch (err) {
+    console.warn("[shadow-label] could not consume label attestation nonce; recording as inferred:", err);
+    return "inferred";
+  }
+  return "tap";
 }
 
 function applyShadowLabel(
@@ -401,15 +419,16 @@ export const server = createServer(async (req, res) => {
 
       sendJson(res, 200, { ok: true, enrolled: dev.device_id });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to enroll device",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to enroll device", err);
     }
     return;
   }
 
-  const secret = JWT_SECRET ?? process.env.GATEWAY_JWT_SECRET ?? "dev-test-secret";
+  const secret = JWT_SECRET ?? process.env.GATEWAY_JWT_SECRET;
+  if (!secret) {
+    sendJson(res, 503, { error: "gateway authentication is not configured" });
+    return;
+  }
   const auth = verifyToken(req.headers.authorization, secret);
 
   if (!auth.ok) {
@@ -517,9 +536,18 @@ export const server = createServer(async (req, res) => {
       }
 
       const db = getDatabase();
-      const result = db.ingestBatch(reqObj);
+      // Telemetry the log already holds (the phone re-sends old SMS with fresh ids) is dropped, not re-stored.
+      const deduped = dropKnownTelemetry(db, reqObj);
+      const stored =
+        deduped.req.events.length > 0
+          ? db.ingestBatch(deduped.req)
+          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"] };
+      const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.events.length > 0) {
         try {
+          // Attach the shadow recorder to the normal append-only event pipeline. The host
+          // maps only explicitly supported observation signals into shadow proposals.
+          ensureShadowRecorder();
           defaultWorldModelHost.onEventsAppended(result.events, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
@@ -534,13 +562,20 @@ export const server = createServer(async (req, res) => {
           }
         }
 
+        // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
+        try {
+          defaultTriageHost.onEventsAppended(result.events, db);
+        } catch (triageErr) {
+          console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
+        }
+
         // Synchronize any shadow label events into shadow_labels table
         for (const ev of result.events) {
           if (ev.kind === "label") {
             try {
               const payload = JSON.parse(ev.payload);
               if (payload?.proposal_id && isShadowLabel(payload?.label)) {
-                const source = labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation, payload.source);
+                const source = labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation);
                 applyShadowLabel(db, auth.deviceId, {
                   proposalId: String(payload.proposal_id),
                   label: payload.label,
@@ -573,10 +608,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 409, { error: err.message });
         return;
       }
-      sendJson(res, 500, {
-        error: "failed to ingest events",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to ingest events", err);
     }
     return;
   }
@@ -618,10 +650,7 @@ export const server = createServer(async (req, res) => {
         events: events.map((e) => ExocortexDatabase.eventToJson(e)),
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to query events",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to query events", err);
     }
     return;
   }
@@ -641,10 +670,7 @@ export const server = createServer(async (req, res) => {
       const verification = db.verifyEventChain();
       sendJson(res, 200, { ok: true, verification });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to verify event chain",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to verify event chain", err);
     }
     return;
   }
@@ -671,10 +697,7 @@ export const server = createServer(async (req, res) => {
         devices: devices.map((d) => ExocortexDatabase.deviceToJson(d)),
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to list devices",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to list devices", err);
     }
     return;
   }
@@ -713,10 +736,7 @@ export const server = createServer(async (req, res) => {
         snapshots,
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to retrieve belief snapshots",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to retrieve belief snapshots", err);
     }
     return;
   }
@@ -752,10 +772,7 @@ export const server = createServer(async (req, res) => {
         params,
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to retrieve model parameters",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to retrieve model parameters", err);
     }
     return;
   }
@@ -822,10 +839,7 @@ export const server = createServer(async (req, res) => {
         latestSnapshot: replayResult.snapshots.length > 0 ? replayResult.snapshots[replayResult.snapshots.length - 1] : null,
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to replay world model events",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to replay world model events", err);
     }
     return;
   }
@@ -911,10 +925,7 @@ export const server = createServer(async (req, res) => {
         effective_shadow: process.env.SHADOW !== "0" || canonicalBreakerTripped,
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to compute shadow metrics",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to compute shadow metrics", err);
     }
     return;
   }
@@ -962,7 +973,7 @@ export const server = createServer(async (req, res) => {
       }
       const label = rawLabel;
 
-      const source = labelSource(db, auth.deviceId, proposalId, label, payloadObj.attestation, payloadObj.source);
+      const source = labelSource(db, auth.deviceId, proposalId, label, payloadObj.attestation);
 
       let latencyMs: number | null = null;
       if (payloadObj.latency_ms !== undefined) {
@@ -996,10 +1007,7 @@ export const server = createServer(async (req, res) => {
         recorded_at: result.recordedAt,
       });
     } catch (err) {
-      sendJson(res, 500, {
-        error: "failed to record shadow label",
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      sendInternalError(res, "failed to record shadow label", err);
     }
     return;
   }
@@ -1059,7 +1067,8 @@ export const server = createServer(async (req, res) => {
       // Hardware attestation: only the explicit dev escape hatch skips the chain checks (not proof of possession).
       const hatch = allowUnattestedKeys();
       if (!hatch) {
-        const chain = verifyKeyAttestationChain(body.attestation_chain, { pubkeySpki: spki, challenge });
+        const revokedSerials = process.env.NODE_ENV === "test" ? new Set<string>() : await getRevokedAttestationSerials();
+        const chain = verifyKeyAttestationChain(body.attestation_chain, { pubkeySpki: spki, challenge }, { revokedSerials });
         if (!chain.ok) {
           sendJson(res, 400, { error: `key attestation rejected: ${chain.reason}` });
           return;
@@ -1067,13 +1076,13 @@ export const server = createServer(async (req, res) => {
       } else {
         console.warn("[approval-key] EXOCORTEX_ALLOW_UNATTESTED_KEYS=1: key attestation chain NOT verified");
       }
-      if (!getDatabase().setDeviceApprovalKey(auth.deviceId, spki, true)) {
+      if (!getDatabase().setDeviceApprovalKey(auth.deviceId, spki, !hatch)) {
         sendJson(res, 404, { error: "device not enrolled or revoked" });
         return;
       }
-      sendJson(res, 200, { ok: true, device_id: auth.deviceId, attested: true, attestation_verified: !hatch });
+      sendJson(res, 200, { ok: true, device_id: auth.deviceId, attested: !hatch, attestation_verified: !hatch });
     } catch (err) {
-      sendJson(res, 500, { error: "failed to register approval key", reason: err instanceof Error ? err.message : String(err) });
+      sendInternalError(res, "failed to register approval key", err);
     }
     return;
   }
@@ -1107,7 +1116,7 @@ export const server = createServer(async (req, res) => {
       }
       sendJson(res, 200, { ok: true });
     } catch (err) {
-      sendJson(res, 500, { error: "failed to register push token", reason: err instanceof Error ? err.message : String(err) });
+      sendInternalError(res, "failed to register push token", err);
     }
     return;
   }
@@ -1120,13 +1129,13 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 403, { error: `caller device not enrolled or revoked: ${auth.deviceId}` });
         return;
       }
-      if (!dev.scopes.includes("approval:write") && !dev.scopes.includes("admin")) {
-        sendJson(res, 403, { error: "forbidden: requires approval:write or admin scope" });
+      if (!dev.scopes.includes("approval:write") && !dev.scopes.includes("admin") && !dev.scopes.includes("admin:read")) {
+        sendJson(res, 403, { error: "forbidden: requires approval:write or admin:read scope" });
         return;
       }
       sendJson(res, 200, { ok: true, proposals: await buildPendingProposals(db, pendingFetcher, Date.now(), pendingSpeculator) });
     } catch (err) {
-      sendJson(res, 500, { error: "failed to list pending proposals", reason: err instanceof Error ? err.message : String(err) });
+      sendInternalError(res, "failed to list pending proposals", err);
     }
     return;
   }
@@ -1315,7 +1324,7 @@ export const server = createServer(async (req, res) => {
       }
       sendJson(res, outcome.status, outcome.body);
     } catch (err) {
-      sendJson(res, 500, { error: "approval forward failed", reason: err instanceof Error ? err.message : String(err) });
+      sendInternalError(res, "approval forward failed", err);
     }
     return;
   }
@@ -1393,7 +1402,8 @@ if (process.env.NODE_ENV !== "test") {
     console.log(`forwarding to home proxy at ${HOME_PROXY_BASE_URL}`);
   });
   if (HOME_PROXY_BASE_URL) {
-    warmUpHomeProxyConnection();
+    // Retries and logs internally; the .catch is a backstop so a future edit can't crash startup.
+    warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();

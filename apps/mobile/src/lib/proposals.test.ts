@@ -13,7 +13,7 @@ vi.mock("./approvalKey", async () => {
   return { ...actual, signApproval: vi.fn(), signLabel: vi.fn() };
 });
 
-const LABEL_ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_001, sig: "bGFiZWw=" };
+const LABEL_ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_001, sig: "bGFiZWw=", nonce: "label_nonce_test" };
 const ATTESTATION = { v: 1 as const, method: "biometric" as const, ts: 1_700_000_000_000, sig: "c2ln" };
 
 describe("proposalManager", () => {

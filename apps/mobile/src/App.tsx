@@ -6,6 +6,7 @@ import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
 import { flushUsageEvents } from "./lib/flush";
+import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
 import { isScreenContextEnabled, isNotificationCaptureEnabled } from "./lib/config";
 import { startPassiveCaptureListener } from "./lib/passiveCapture";
@@ -54,9 +55,9 @@ export default function App() {
         }).then((handle) => {
           if (appStateDisposed) handle.remove();
           else removeAppStateListener = () => handle.remove();
-        });
+        }).catch(logRejection("app.appStateListener"));
       }
-    });
+    }).catch(logRejection("app.screenContextInit")); // failure leaves capture OFF (fail-closed)
 
     // Part 1: notification capture. Independent of screen-context — a user can
     // want the notification firehose without the accessibility screen scraper.
@@ -66,14 +67,27 @@ export default function App() {
       if (enabled && Capacitor.isNativePlatform()) {
         startNotificationCaptureListener();
       }
-    });
+    }).catch(logRejection("app.notificationCaptureInit")); // failure leaves capture OFF (fail-closed)
 
     // Part 2: SMS backfill. One-shot on foreground — catches texts that arrived
     // while the app was closed / phone was off. No-op if READ_SMS isn't granted
     // or the high-water mark is already caught up. Bounded per run (see
     // smsBackfill.ts MAX_PER_RUN); a huge first history resumes across runs.
+    // It used to run only here (cold start), so texts that arrived while the app sat in the background
+    // were never collected until the process was killed and reopened. Also run it on every return to the
+    // foreground; runSmsBackfill is single-flight and its event ids are stable, so this cannot double-queue.
+    let removeSmsListener: (() => void) | undefined;
+    let smsListenerDisposed = false;
     if (Capacitor.isNativePlatform()) {
       runSmsBackfill().catch(() => {});
+      CapacitorApp.addListener("appStateChange", ({ isActive }) => {
+        if (isActive) runSmsBackfill().catch(() => {});
+      })
+        .then((handle) => {
+          if (smsListenerDisposed) handle.remove();
+          else removeSmsListener = () => handle.remove();
+        })
+        .catch(logRejection("app.smsResumeListener"));
     }
 
     // Proposal delivery (P6): poll the daemon while foregrounded; an FCM data message just triggers an
@@ -110,6 +124,8 @@ export default function App() {
       void pushHandle?.remove();
       appStateDisposed = true;
       removeAppStateListener?.();
+      smsListenerDisposed = true;
+      removeSmsListener?.();
     };
   }, []);
 

@@ -7,7 +7,7 @@ import {
   HomeNodeUnreachableError,
   type WorkstreamSummary,
 } from "../lib/api";
-import { recordEvent } from "../lib/usage";
+import { fireAndForget, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
 import { RecentIcon, RefreshIcon, ChevronDownIcon, ChevronRightIcon, AlertIcon } from "../components/Icons";
 
@@ -45,9 +45,9 @@ export default function Recent() {
   }
 
   useEffect(() => {
-    load();
-    recordEvent({ type: "screen_view", screen: "recent", timestamp: new Date().toISOString() });
-    flushUsageEvents();
+    fireAndForget(load(), "recent.load");
+    recordEventSafe({ type: "screen_view", screen: "recent", timestamp: new Date().toISOString() });
+    void flushUsageEvents();
   }, []);
 
   return (

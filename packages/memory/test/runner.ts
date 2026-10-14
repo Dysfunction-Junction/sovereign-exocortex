@@ -20,7 +20,15 @@ const testFiles = [
   join(__dirname, "memories.test.ts"),
   join(__dirname, "server.test.ts"),
   join(__dirname, "local-ltm.test.ts"),
+  join(__dirname, "embeddings.test.ts"),
+  join(__dirname, "archive-client.test.ts"),
+  join(__dirname, "graph-client.test.ts"),
+  join(__dirname, "mem0-client.test.ts"),
 ];
+
+// Keep the suite hermetic: only embeddings.test.ts exercises embeddings (with a
+// fake fetch). Everything else must not depend on a running Ollama.
+process.env.EXOCORTEX_EMBEDDINGS ??= "0";
 
 const testStream = run({
   files: testFiles,

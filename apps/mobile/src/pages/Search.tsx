@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { semanticSearch, type SearchHit, type SearchSortMode } from "../lib/semanticSearch";
-import { recordEvent } from "../lib/usage";
+import { recordEventSafe } from "../lib/fireAndForget";
 import { SearchIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from "../components/Icons";
 
 type State =
@@ -50,7 +50,7 @@ export default function Search() {
         fallback: result.mode === "text-fallback",
       });
       setExpanded(null);
-      recordEvent({
+      recordEventSafe({
         type: "search",
         screen: "search",
         query: trimmed,
@@ -68,7 +68,7 @@ export default function Search() {
     setSortMode(next);
     clearTimeout(timer.current);
     if (query.trim()) {
-      run(query, next);
+      void run(query, next);
     }
   }
 
@@ -90,7 +90,7 @@ export default function Search() {
   function onSubmit() {
     clearTimeout(timer.current);
     if (query.trim()) {
-      run(query);
+      void run(query);
     }
   }
 

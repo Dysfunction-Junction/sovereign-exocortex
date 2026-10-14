@@ -25,14 +25,14 @@ beforeEach(() => {
 });
 
 describe("signLabel (K1)", () => {
-  it("signs exo-label-v1\\n{deviceId}\\n{proposalId}\\n{label}\\n{ts} behind a 'Confirm dismiss' biometric prompt", async () => {
+  it("signs a nonce-bound exo-label-v2 message behind a 'Confirm dismiss' biometric prompt", async () => {
     const before = Date.now();
     const att = await signLabel({ proposalId: "prop-9", label: "not_wanted" });
-    expect(att).toEqual({ v: 1, method: "biometric", ts: expect.any(Number), sig: "c2ln" });
+    expect(att).toEqual({ v: 1, method: "biometric", ts: expect.any(Number), sig: "c2ln", nonce: expect.stringMatching(/^[a-f0-9]{48}$/) });
     expect(att.ts).toBeGreaterThanOrEqual(before);
     const arg = native.sign.mock.calls[0][0] as { message: string; title: string };
-    expect(arg.message).toBe(`exo-label-v1\ndev-1\nprop-9\nnot_wanted\n${att.ts}`);
-    expect(arg.message).toBe(labelMessage({ deviceId: "dev-1", proposalId: "prop-9", label: "not_wanted" }, att.ts));
+    expect(arg.message).toBe(`exo-label-v2\ndev-1\nprop-9\nnot_wanted\n${att.nonce}\n${att.ts}`);
+    expect(arg.message).toBe(labelMessage({ deviceId: "dev-1", proposalId: "prop-9", label: "not_wanted", nonce: att.nonce }, att.ts));
     expect(arg.title).toBe("Confirm dismiss");
   });
 

@@ -59,7 +59,7 @@ describe("api contracts", () => {
 
   it("submitShadowLabel includes the attestation when given", async () => {
     fetchMock.mockResolvedValue(json({ ok: true }));
-    const attestation = { v: 1 as const, method: "biometric" as const, ts: 1, sig: "s" };
+    const attestation = { v: 1 as const, method: "biometric" as const, ts: 1, sig: "s", nonce: "a".repeat(48) };
     await submitShadowLabel("p1", "not_wanted", { source: "tap", attestation });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body).toMatchObject({ proposal_id: "p1", label: "not_wanted", source: "tap", attestation });

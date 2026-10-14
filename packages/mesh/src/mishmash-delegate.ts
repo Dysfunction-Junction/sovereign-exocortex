@@ -497,8 +497,15 @@ export function startMeshDelegate(port: number) {
       send(res, 400, { error: err instanceof Error ? err.message : "bad body" });
     }
   });
-  return new Promise<ReturnType<typeof createServer>>((resolve) => {
-    server.listen(port, "127.0.0.1", () => resolve(server));
+  // listen() reports EADDRINUSE/EACCES as an 'error' event, not a thrown
+  // exception, so without this the promise never rejects and the caller's
+  // .catch can't fire.
+  return new Promise<ReturnType<typeof createServer>>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server);
+    });
   });
 }
 
@@ -510,5 +517,8 @@ if (invoked) {
   const port = Number(process.env.MISHMASH_PORT || 39401);
   startMeshDelegate(port).then(() => {
     console.log(`agent-mesh-mcp mishmash on 127.0.0.1:${port}`);
+  }).catch((err) => {
+    console.error(`agent-mesh-mcp mishmash failed to start:`, err);
+    process.exitCode = 1;
   });
 }

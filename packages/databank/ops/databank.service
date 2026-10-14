@@ -1,0 +1,25 @@
+[Unit]
+Description=Sovereign Exocortex databank (encrypted archive search API)
+# Started by databank-unlock, not at boot: the vault is locked after every reboot.
+ConditionPathExists=/mnt/databank/.vault-id
+RequiresMountsFor=/mnt/databank
+After=network-online.target
+
+[Service]
+User=michael
+EnvironmentFile=/etc/databank.env
+ExecStart=/usr/local/bin/node /opt/databank/databank.mjs serve
+Restart=on-failure
+RestartSec=5
+# Hardening: it only needs the vault, the key file and loopback networking.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/mnt/databank
+ProtectKernelModules=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

@@ -163,7 +163,10 @@ test("POST /v3/devices/approval-key: chain required, key_attested only after ver
 
     process.env.EXOCORTEX_ALLOW_UNATTESTED_KEYS = "1";
     ch = await challenge();
-    assert.equal((await register(key2, undefined, ch)).status, 200, "hatch skips chain");
+    const hatchResult = await register(key2, undefined, ch);
+    assert.equal(hatchResult.status, 200, "hatch skips chain");
+    assert.equal((await hatchResult.json()).attested, false, "hatch key is recorded as unattested");
+    assert.equal(db.getDevice("dev_att")?.key_attested, 0);
     ch = await challenge();
     assert.equal((await register(key2, undefined, ch, dk())).status, 400, "hatch must not skip proof of possession");
   } finally {

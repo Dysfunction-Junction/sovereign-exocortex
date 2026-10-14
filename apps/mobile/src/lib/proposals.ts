@@ -1,4 +1,4 @@
-import { ApprovalUnavailableError, signApproval, signLabel, type ApprovalAttestation } from "./approvalKey";
+import { ApprovalUnavailableError, signApproval, signLabel, type ApprovalAttestation, type LabelAttestation } from "./approvalKey";
 import { submitProposalApproval, submitShadowLabel, type ProposalApprovalResult } from "./api";
 
 export interface IncomingProposal {
@@ -144,7 +144,7 @@ class ProposalManager {
     // A dismiss counts as a human "tap" label only if signed with a fresh biometric. If the user cancels
     // (or the key is unavailable) the reject still proceeds and its label is sent unsigned, which the
     // daemon stores as "inferred".
-    let labelAttestation: ApprovalAttestation | undefined;
+    let labelAttestation: LabelAttestation | undefined;
     try {
       labelAttestation = await signLabel({ proposalId: item.proposalId, label: "not_wanted" });
     } catch {

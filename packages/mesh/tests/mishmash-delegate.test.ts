@@ -473,6 +473,16 @@ describe("mishmash delegate", () => {
       expect(local.status).toBe(200);
     });
   });
+
+  it("rejects (instead of hanging) when the port is already in use", async () => {
+    const first = await startMeshDelegate(0);
+    const taken = (first.address() as AddressInfo).port;
+    try {
+      await expect(startMeshDelegate(taken)).rejects.toMatchObject({ code: "EADDRINUSE" });
+    } finally {
+      await new Promise<void>((r) => first.close(() => r()));
+    }
+  });
 });
 
 

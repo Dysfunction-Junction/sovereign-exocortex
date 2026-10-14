@@ -406,8 +406,8 @@ export interface SubmitShadowLabelOptions {
   source?: "tap" | "inferred";
   latencyMs?: number;
   actual?: unknown;
-  /** Biometric signature over the label (see signLabel). Without it the server stores the label as "inferred". */
-  attestation?: { v: 1; method: "biometric"; ts: number; sig: string };
+  /** Single-use biometric signature over the label (see signLabel). Without it the server stores the label as "inferred". */
+  attestation?: { v: 1; method: "biometric"; ts: number; sig: string; nonce: string };
 }
 
 export async function submitShadowLabel(

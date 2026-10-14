@@ -22,6 +22,9 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import android.util.Base64;
+import org.json.JSONArray;
+import java.time.Instant;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -953,6 +956,90 @@ public class NativeTelemetrySync {
         return batch;
     }
 
+    /** Usage summaries carry no raw screen or message text, so they are safe to put in the append-only event log. */
+    private static final String USAGE_PACKAGE = "android.usage";
+
+    /** Device id inside a gateway JWT ("deviceId"); the LAN token is opaque, so fall back like flush.ts does. */
+    static String deviceIdFromToken(String token) {
+        try {
+            String[] parts = token.split("\\.");
+            if (parts.length != 3) return "device_phone_galaxy";
+            byte[] json = Base64.decode(parts[1], Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+            String id = new JSONObject(new String(json, StandardCharsets.UTF_8)).optString("deviceId", "");
+            return id.isEmpty() ? "device_phone_galaxy" : id;
+        } catch (Exception e) {
+            return "device_phone_galaxy";
+        }
+    }
+
+    /**
+     * Builds a /v3/events body (same shape as usageEventToV3 in flush.ts) from the usage-summary entries in a batch,
+     * or null if the batch has none. Everything else stays on the legacy route only.
+     */
+    static String buildUsageV3Body(List<String> serializedEntries, String token) {
+        try {
+            JSONArray out = new JSONArray();
+            for (String entry : serializedEntries) {
+                JSONObject e = new JSONObject(entry);
+                if (!USAGE_PACKAGE.equals(e.optString("package"))) continue;
+                long ts;
+                try {
+                    ts = Instant.parse(e.optString("timestamp")).toEpochMilli();
+                } catch (Exception ignored) {
+                    ts = System.currentTimeMillis();
+                }
+                JSONObject payload = new JSONObject();
+                payload.put("type", "system_telemetry");
+                payload.put("screen", "background");
+                payload.put("telemetry", e.optString("telemetry"));
+                payload.put("package", USAGE_PACKAGE);
+                payload.put("app_label", e.optString("app_label"));
+                payload.put("triaged", false);
+                JSONObject ev = new JSONObject();
+                ev.put("event_id", e.optString("id"));
+                ev.put("kind", "telemetry");
+                ev.put("ts_device", ts);
+                ev.put("schema_ver", 1);
+                ev.put("payload", payload);
+                out.put(ev);
+            }
+            if (out.length() == 0) return null;
+            JSONObject body = new JSONObject();
+            body.put("device_id", deviceIdFromToken(token));
+            body.put("events", out);
+            return body.toString();
+        } catch (Exception e) {
+            Log.w(TAG, "Could not build /v3/events body", e);
+            return null;
+        }
+    }
+
+    /** POSTs a /v3/events body. Returns the HTTP status, or -1 on a network error/timeout/cancel. */
+    private static int postV3(Target target, FlushRun run, int timeoutMs, String body) {
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(target.baseUrl + "/v3/events").openConnection();
+            run.activeConnection = conn;
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(timeoutMs);
+            conn.setReadTimeout(timeoutMs);
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Authorization", "Bearer " + target.token);
+            conn.setRequestProperty("User-Agent", "Pieces-Android-NativeSync/1.0");
+            conn.setDoOutput(true);
+            try (OutputStream os = conn.getOutputStream()) {
+                os.write(body.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            }
+            return conn.getResponseCode();
+        } catch (Exception e) {
+            return -1;
+        } finally {
+            run.activeConnection = null;
+            if (conn != null) conn.disconnect();
+        }
+    }
+
     private static FlushOutcome flushInternal(Context context, FlushRun run) {
         List<Target> targets = getConnectionTargets(context);
         if (targets.isEmpty()) {
@@ -1009,6 +1096,16 @@ public class NativeTelemetrySync {
                 Target target = targets.get(i);
                 boolean isProbe = targets.size() > 1 && i == 0 && "lan".equals(target.mode);
                 int timeoutMs = isProbe ? 3000 : 8000;
+                // Usage summaries also go to the exocortex event log. Transient failures try the next target
+                // with nothing cleared; 404/403 (route or scope unsupported) and 400/409 fall through to the legacy post.
+                final String v3Body = buildUsageV3Body(batch.serializedEntries, target.token);
+                if (v3Body != null) {
+                    int v3Code = postV3(target, run, timeoutMs, v3Body);
+                    if (v3Code == -1 || v3Code == 401 || v3Code == 429 || v3Code >= 500) {
+                        continue;
+                    }
+                }
+
                 HttpURLConnection conn = null;
 
                 try {

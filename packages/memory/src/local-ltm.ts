@@ -2,6 +2,7 @@ import { readFile, appendFile, mkdir, open } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { OllamaEmbedder, VectorCache, cosine } from "./embeddings.js";
 
 export interface MemoryEntry {
   title: string;
@@ -42,11 +43,50 @@ function computeSimilarity(queryTokens: Set<string>, docTokens: Set<string>): nu
   return matches / Math.sqrt(queryTokens.size * docTokens.size);
 }
 
-export class LocalLTM {
-  private filePath: string;
+// Semantic weight in the hybrid score. Calibrated against nomic-embed-text:
+// related pairs score ~0.54-0.66 cosine but unrelated ones reach ~0.59, so
+// similarity ranks results rather than gating them; the floor only drops
+// clearly unrelated text that also has zero keyword overlap.
+const SEMANTIC_WEIGHT = 0.7;
+const MIN_COSINE = Number(process.env.EXOCORTEX_EMBED_MIN_COSINE ?? "0.5");
 
-  constructor(filePath?: string) {
-    this.filePath = filePath ?? getDefaultLtmFile();
+export interface LocalLTMOptions {
+  /** Optional semantic embedder. Omit (or null) for pure token-overlap search. */
+  embedder?: OllamaEmbedder | null;
+  /**
+   * Resolved on first use instead of at construction, so settings loaded from a .env file after
+   * this module is imported (EXOCORTEX_EMBEDDINGS, OLLAMA_URL, ...) still take effect.
+   * Ignored when `embedder` is given.
+   */
+  embedderFactory?: () => OllamaEmbedder | null;
+}
+
+export class LocalLTM {
+  private explicitPath: string | undefined;
+  private resolvedPath: string | undefined;
+  private options: LocalLTMOptions;
+  private resolvedEmbed: { embedder: OllamaEmbedder | null; vectors: VectorCache | null } | undefined;
+
+  constructor(filePath?: string, options: LocalLTMOptions = {}) {
+    this.explicitPath = filePath;
+    this.options = options;
+  }
+
+  /** Memory file; the env-derived default is read on first use, not at import. */
+  private get filePath(): string {
+    this.resolvedPath ??= this.explicitPath ?? getDefaultLtmFile();
+    return this.resolvedPath;
+  }
+
+  private get embed(): { embedder: OllamaEmbedder | null; vectors: VectorCache | null } {
+    if (!this.resolvedEmbed) {
+      const embedder = this.options.embedder ?? this.options.embedderFactory?.() ?? null;
+      this.resolvedEmbed = {
+        embedder,
+        vectors: embedder ? new VectorCache(`${this.filePath}.vec.jsonl`, embedder.model) : null,
+      };
+    }
+    return this.resolvedEmbed;
   }
 
   public async addMemory(entry: {
@@ -166,9 +206,60 @@ export class LocalLTM {
 
     return scored.slice(0, Math.min(Math.max(limit, 1), 50)).map(({ _rawScore, ...rest }) => rest);
   }
+
+  /**
+   * Semantic + keyword search. Falls back to plain token-overlap search whenever
+   * no embedder is configured or Ollama can't embed the query, so callers never
+   * need to handle embedding failure.
+   */
+  public async searchMemoriesHybrid(query: string, limit = 5): Promise<MemorySearchResult[]> {
+    const { embedder, vectors } = this.embed;
+    if (!embedder || !vectors) return this.searchMemories(query, limit);
+    if (query.trim().length === 0) return [];
+
+    const queryVec = await embedder.embedQuery(query);
+    if (!queryVec) return this.searchMemories(query, limit);
+
+    const memories = await this.getAllMemories();
+    if (memories.length === 0) return [];
+
+    const cache = await vectors.load();
+    const texts = memories.map((m) => `${m.title}\n${m.body}\n${(m.tags || []).join(" ")}`);
+    const keys = texts.map((t) => vectors.keyFor(t));
+
+    const missing: number[] = [];
+    keys.forEach((k, i) => {
+      if (!cache.has(k)) missing.push(i);
+    });
+    if (missing.length > 0) {
+      const fresh = await embedder.embedDocuments(missing.map((i) => texts[i]));
+      const toStore: Array<{ k: string; v: number[] }> = [];
+      fresh.forEach((v, n) => {
+        if (v) toStore.push({ k: keys[missing[n]], v });
+      });
+      await vectors.put(toStore);
+    }
+
+    const queryTokens = tokenize(query);
+    const scored: Array<MemorySearchResult & { _raw: number }> = [];
+    memories.forEach((mem, i) => {
+      const vec = cache.get(keys[i]);
+      const cos = vec ? Math.max(0, cosine(queryVec, vec)) : 0;
+      const lex = computeSimilarity(queryTokens, tokenize(texts[i].replace(/\n/g, " ")));
+      if (lex === 0 && cos < MIN_COSINE) return;
+      const raw = vec ? SEMANTIC_WEIGHT * cos + (1 - SEMANTIC_WEIGHT) * lex : lex;
+      scored.push({ ...mem, score: Math.round(raw * 100) / 100, untrusted: true, _raw: raw });
+    });
+
+    scored.sort((a, b) => (b._raw !== a._raw ? b._raw - a._raw : b.createdAt.localeCompare(a.createdAt)));
+    return scored.slice(0, Math.min(Math.max(limit, 1), 50)).map(({ _raw, ...rest }) => rest);
+  }
 }
 
-export const localLTM = new LocalLTM();
+export const localLTM = new LocalLTM(undefined, {
+  embedderFactory: () => ((process.env.EXOCORTEX_EMBEDDINGS ?? "1") !== "0" ? new OllamaEmbedder() : null),
+});
 export const getAllMemories = () => localLTM.getAllMemories();
 export const searchMemories = (query: string, limit = 5) => localLTM.searchMemories(query, limit);
+export const searchMemoriesHybrid = (query: string, limit = 5) => localLTM.searchMemoriesHybrid(query, limit);
 export const addMemory = (entry: { title: string; body: string; source?: string; tags?: string[] }) => localLTM.addMemory(entry);

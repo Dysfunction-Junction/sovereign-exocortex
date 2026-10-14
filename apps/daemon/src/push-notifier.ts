@@ -37,7 +37,7 @@ export class PushNotifier {
   private readonly readFile: (p: string) => string;
   private readonly now: () => number;
   private readonly log: (m: string) => void;
-  private readonly seen = new Set<string>();
+  private readonly inFlight = new Set<string>();
   private warned = false;
   private account: ServiceAccount | null | undefined;
   private cached: { token: string; expiresAt: number } | null = null;
@@ -97,8 +97,7 @@ export class PushNotifier {
 
   /** Send the data push for one proposal to every registered, non-revoked device. Never throws. */
   async notifyProposalSurfaced(proposalId: string): Promise<{ sent: number; skipped?: string }> {
-    if (this.seen.has(proposalId)) return { sent: 0, skipped: "already notified" };
-    this.seen.add(proposalId);
+    if (this.inFlight.has(proposalId)) return { sent: 0, skipped: "notification in progress" };
     const acct = this.loadAccount();
     if (!acct) {
       if (!this.warned) {
@@ -107,9 +106,20 @@ export class PushNotifier {
       }
       return { sent: 0, skipped: "not configured" };
     }
-    let sent = 0;
+    let db: ExocortexDatabase;
     try {
-      const db = this.opts.getDb();
+      db = this.opts.getDb();
+      if (!db.listUnnotifiedSurfacedProposalIds(this.now()).includes(proposalId)) {
+        return { sent: 0, skipped: "already notified or proposal is not surfaced" };
+      }
+    } catch (err) {
+      this.log(`[push-notifier] could not check proposal ${proposalId}: ${err instanceof Error ? err.message : String(err)}`);
+      return { sent: 0, skipped: "database unavailable" };
+    }
+    let sent = 0;
+    let allDelivered = true;
+    this.inFlight.add(proposalId);
+    try {
       const tokens = db.listActivePushTokens();
       if (tokens.length === 0) return { sent: 0, skipped: "no registered tokens" };
       const access = await this.accessToken(acct);
@@ -134,25 +144,33 @@ export class PushNotifier {
         else if (res.status === 404 || res.status === 400) {
           const text = await res.text().catch(() => "");
           if (/UNREGISTERED|NOT_FOUND|INVALID_ARGUMENT/.test(text)) db.deleteDevicePushToken(t.device_id);
+          else allDelivered = false;
         } else {
+          allDelivered = false;
           this.log(`[push-notifier] FCM HTTP ${res.status} for device ${t.device_id}`);
         }
       }
     } catch (err) {
+      allDelivered = false;
       this.log(`[push-notifier] send failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.inFlight.delete(proposalId);
+    }
+    if (sent > 0 && allDelivered) {
+      try {
+        db.markProposalNotified(proposalId, this.now());
+      } catch (err) {
+        this.log(`[push-notifier] could not mark proposal ${proposalId} notified: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     return { sent };
   }
 
-  /** Notify any SURFACED, unexpired proposal not yet seen. */
+  /** Notify any SURFACED, unexpired proposal not yet marked notified in SQLite. */
   async pollOnce(): Promise<number> {
     let fresh: string[] = [];
     try {
-      fresh = this.opts
-        .getDb()
-        .listProposalsByState(["SURFACED"], this.now())
-        .map((p) => p.proposal_id)
-        .filter((id) => !this.seen.has(id));
+      fresh = this.opts.getDb().listUnnotifiedSurfacedProposalIds(this.now());
     } catch {
       return 0;
     }
@@ -160,14 +178,9 @@ export class PushNotifier {
     return fresh.length;
   }
 
-  /** Prime with proposals that are already SURFACED (no push storm on restart), then poll. */
+  /** Poll surfaced proposals, including any created while the daemon was offline. */
   start(intervalMs = 5000): void {
     if (this.timer) return;
-    try {
-      for (const p of this.opts.getDb().listProposalsByState(["SURFACED"])) this.seen.add(p.proposal_id);
-    } catch {
-      /* db not ready: first poll will treat existing rows as new */
-    }
     this.timer = setInterval(() => void this.pollOnce(), intervalMs);
     this.timer.unref();
   }

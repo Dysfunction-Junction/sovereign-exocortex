@@ -12,6 +12,7 @@ import {
 } from "../lib/config";
 import { checkProxyHealth, getStatus, HomeNodeUnreachableError } from "../lib/api";
 import { recordEvent, classifyMode } from "../lib/usage";
+import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
 import { registerApprovalKey } from "../lib/approvalKey";
 import { parseConnectionQrPayload } from "../lib/connectionQr";
@@ -73,12 +74,14 @@ export default function Setup() {
       if (savedRemoteUrl) setRemoteUrl(savedRemoteUrl);
       if (savedRemoteToken) setRemoteToken(savedRemoteToken);
       setScreenContext(contextEnabled);
-    })();
-    AccessibilityScanner.isAccessibilityServiceEnabled().then((r: any) => setAccessibilityGranted(r.enabled));
-    refreshNotifState();
-    refreshSmsState();
-    recordEvent({ type: "screen_view", screen: "setup", timestamp: new Date().toISOString() });
-    flushUsageEvents();
+    })().catch(logRejection("setup.loadConfig"));
+    AccessibilityScanner.isAccessibilityServiceEnabled()
+      .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
+      .catch(() => {});
+    fireAndForget(refreshNotifState(), "setup.refreshNotifState");
+    fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+    recordEventSafe({ type: "screen_view", screen: "setup", timestamp: new Date().toISOString() });
+    void flushUsageEvents();
 
     let lastResume = 0;
     const onResume = () => {
@@ -86,10 +89,10 @@ export default function Setup() {
       if (now - lastResume < 500) return;
       lastResume = now;
       AccessibilityScanner.isAccessibilityServiceEnabled()
-        .then((r: any) => setAccessibilityGranted(r.enabled))
+        .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
         .catch(() => {});
-      refreshNotifState();
-      refreshSmsState();
+      fireAndForget(refreshNotifState(), "setup.refreshNotifState");
+      fireAndForget(refreshSmsState(), "setup.refreshSmsState");
     };
 
     let disposed = false;
@@ -193,7 +196,7 @@ export default function Setup() {
           ? `Done — ${ingested} messages from allowlisted contacts queued for PiecesOS.`
           : `${ingested} queued so far — run again to continue (large history is paced across runs).`
       );
-      flushUsageEvents();
+      void flushUsageEvents();
     } catch (e) {
       setSmsError(e instanceof Error ? e.message : String(e));
     }
@@ -279,7 +282,7 @@ export default function Setup() {
           mode: classifyMode(scannedUrl),
           timestamp: new Date().toISOString(),
         });
-        flushUsageEvents();
+        void flushUsageEvents();
         AccessibilityScanner.flushOutbox().catch(() => {});
       } finally {
         setChecking(false);
@@ -323,7 +326,7 @@ export default function Setup() {
       mode: classifyMode(planA ? baseUrl : remoteUrl),
       timestamp: new Date().toISOString(),
     });
-    flushUsageEvents();
+    void flushUsageEvents();
   }
 
   async function handleRegisterApprovalKey() {

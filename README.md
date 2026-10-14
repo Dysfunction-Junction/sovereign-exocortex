@@ -62,6 +62,8 @@ pnpm exo status     # system status
 pnpm exo help       # list CLI commands
 ```
 
+`exo status` and `exo world` read live daemon state. Set `EXOCORTEX_ADMIN_TOKEN` to a valid device JWT whose device has the `admin:read` scope; the daemon URL defaults to `http://127.0.0.1:8788` and can be overridden with `EXOCORTEX_DAEMON_URL`.
+
 Run the host (needs secrets; copy values into `apps/daemon/.env`, which is gitignored and loaded automatically):
 
 ```powershell
@@ -87,9 +89,11 @@ The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To ex
 Shadow calibration is four sub-projects:
 
 1. Shadow metrics evaluator (`packages/core/src/shadow-report-cli.ts`). Shipped.
-2. Daemon records shadow proposals and gate decisions (`apps/daemon/src/shadow-recorder.ts`). `exo test` now appends the actual local test-suite result as a host observation; a failing suite generates shadow-only proposals, while a passing suite records the observation without proposing a repair. This does not execute repairs or leave shadow mode.
+2. Daemon records shadow proposals and gate decisions (`apps/daemon/src/shadow-recorder.ts`). Explicit test-suite, clean-checkout, and bridge-health observations on the normal `POST /v3/events` stream feed the existing gated inference loop. Arbitrary telemetry is not treated as an invariant. `exo test` now appends the actual local test-suite result as a host observation; a failing suite generates shadow-only proposals, while a passing suite records the observation without proposing a repair. This does not execute repairs or leave shadow mode. Clean-checkout and bridge-health still have no automatic producer, so real-data collection for those two depends on something sending them.
 3. Label capture from taps (`POST /v3/shadow/labels`, approve/dismiss in the app). Shipped and verified on hardware with test proposals. The inferred labels (`already_did`, `ignored`) are not built.
-4. Precision@surface calibration (target >= 0.90, at least 50 tapped labels) before any tier leaves shadow mode. Waiting on real proposals.
+4. Precision@surface calibration (target >= 0.90 over 14 days, at least 50 direct tap labels, plus a positive baseline gap) before any tier leaves shadow mode. Waiting for live collection; see [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md).
+
+5. Graph storage decision: benchmark representative three-hop queries against the current in-memory adjacency graph before introducing Neo4j. Run `node apps/neo4j-import/src/graph-benchmark.mjs`; a live Neo4j comparison requires a separately configured local/server instance.
 
 Alongside these, a **next-action prediction log** records guesses about what you will do next, scores them against the event log (misses keep the real action), and reports log loss, Brier score and calibration against a frequency baseline. It does not feed Precision@surface. See [`docs/superpowers/specs/2026-10-10-next-action-prediction-design.md`](docs/superpowers/specs/2026-10-10-next-action-prediction-design.md).
 
