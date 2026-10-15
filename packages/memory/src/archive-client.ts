@@ -8,6 +8,8 @@
  * Hits are data from an archive, so they are flagged `untrusted` like every other recalled memory.
  */
 
+import { copyFile, readFile, rename, writeFile } from "node:fs/promises";
+
 export interface ArchiveHit {
   itemId: string;
   score: number;
@@ -23,6 +25,34 @@ export interface ArchiveHit {
 export type ArchiveResult =
   | { available: true; hits: ArchiveHit[] }
   | { available: false; reason: "locked-or-unreachable" | "unauthorized" | "error" };
+
+export type ArchiveHealthResult =
+  | { available: true; items: number; chunks: number; blobs: number }
+  | { available: false; reason: "locked-or-unreachable" | "unauthorized" | "error" };
+
+export interface ArchiveIngestInput {
+  source: string;
+  kind: "memory" | "document" | "photo" | "video" | "audio" | "text" | "other";
+  title: string;
+  text: string;
+  path?: string;
+  ts?: number;
+  meta?: Record<string, unknown>;
+}
+
+export type ArchiveIngestResult =
+  | { ok: true; itemId: string; existed: boolean; chunks: number; vectors: number; blobId: string | null }
+  | { ok: false; reason: "locked-or-unreachable" | "unauthorized" | "error" };
+
+export interface RemoteArchiveResult {
+  scanned: number;
+  archived: number;
+  alreadyArchived: number;
+  kept: number;
+  pruned: boolean;
+  backup?: string;
+  failed: number;
+}
 
 export interface ArchiveClientOptions {
   baseUrl: string;
@@ -92,4 +122,111 @@ export class ArchiveClient {
       return { available: false, reason: "locked-or-unreachable" };
     }
   }
+
+  async health(): Promise<ArchiveHealthResult> {
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/health`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${this.token}` },
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (res.status === 401 || res.status === 403) return { available: false, reason: "unauthorized" };
+      if (!res.ok) return { available: false, reason: "error" };
+      const body = (await res.json()) as { ok?: boolean; items?: number; chunks?: number; blobs?: number };
+      if (body?.ok !== true || typeof body?.items !== "number") return { available: false, reason: "error" };
+      return {
+        available: true,
+        items: body.items,
+        chunks: typeof body.chunks === "number" ? body.chunks : 0,
+        blobs: typeof body.blobs === "number" ? body.blobs : 0,
+      };
+    } catch {
+      return { available: false, reason: "locked-or-unreachable" };
+    }
+  }
+
+  async ingestText(input: ArchiveIngestInput): Promise<ArchiveIngestResult> {
+    try {
+      const res = await this.fetchImpl(`${this.baseUrl}/ingest/text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.token}` },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(this.timeoutMs * 2),
+      });
+      if (res.status === 401 || res.status === 403) return { ok: false, reason: "unauthorized" };
+      if (!res.ok) return { ok: false, reason: "error" };
+      const body = (await res.json()) as { itemId?: string; existed?: boolean; chunks?: number; vectors?: number; blobId?: string | null };
+      if (typeof body?.itemId !== "string") return { ok: false, reason: "error" };
+      return {
+        ok: true,
+        itemId: body.itemId,
+        existed: Boolean(body.existed),
+        chunks: typeof body.chunks === "number" ? body.chunks : 0,
+        vectors: typeof body.vectors === "number" ? body.vectors : 0,
+        blobId: typeof body.blobId === "string" ? body.blobId : null,
+      };
+    } catch {
+      return { ok: false, reason: "locked-or-unreachable" };
+    }
+  }
 }
+
+export async function archiveLocalMemoriesToRemote(
+  client: ArchiveClient,
+  file: string,
+  opts: { olderThanDays: number; prune?: boolean; now?: number },
+): Promise<RemoteArchiveResult> {
+  const now = opts.now ?? Date.now();
+  const cutoff = now - opts.olderThanDays * 86_400_000;
+  const raw = await readFile(file, "utf8");
+  const lines = raw.split("\n");
+  const keep: string[] = [];
+  const res: RemoteArchiveResult = { scanned: 0, archived: 0, alreadyArchived: 0, kept: 0, pruned: false, failed: 0 };
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    let entry: Record<string, unknown> | null = null;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      keep.push(line);
+      continue;
+    }
+    res.scanned++;
+    const created = typeof entry.createdAt === "string" ? Date.parse(entry.createdAt) : NaN;
+    if (typeof entry.body !== "string" || !Number.isFinite(created) || created > cutoff) {
+      keep.push(line);
+      continue;
+    }
+    const title = typeof entry.title === "string" ? entry.title : "memory";
+    const r = await client.ingestText({
+      source: typeof entry.source === "string" ? entry.source : "ltm",
+      kind: "memory",
+      title,
+      text: `${title}\n\n${entry.body}`,
+      path: `ltm/${entry.createdAt as string}`,
+      ts: created,
+      meta: { tags: Array.isArray(entry.tags) ? entry.tags : [] },
+    });
+    if (r.ok) {
+      if (r.existed) res.alreadyArchived++;
+      else res.archived++;
+    } else {
+      res.failed++;
+      keep.push(line);
+    }
+  }
+  res.kept = keep.length;
+
+  if (opts.prune && res.failed === 0 && (res.archived > 0 || res.alreadyArchived > 0)) {
+    const backup = `${file}.pre-prune-${new Date(now).toISOString().replace(/[:.]/g, "-")}`;
+    await copyFile(file, backup);
+    const tmp = `${file}.tmp-${process.pid}`;
+    await writeFile(tmp, keep.length ? keep.join("\n") + "\n" : "");
+    await rename(tmp, file);
+    res.pruned = true;
+    res.backup = backup;
+  }
+  return res;
+}
+

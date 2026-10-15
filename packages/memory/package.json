@@ -9,7 +9,8 @@
     ".": "./src/local-ltm.ts",
     "./client": "./src/pieces.ts",
     "./server": "./src/server.ts",
-    "./embeddings": "./src/embeddings.ts"
+    "./embeddings": "./src/embeddings.ts",
+    "./archive-client": "./src/archive-client.ts"
   },
   "scripts": {
     "build": "tsc",
