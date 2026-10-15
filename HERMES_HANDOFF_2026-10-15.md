@@ -53,3 +53,34 @@ Completed the 3 high-priority calibration and linkage objectives for the Soverei
 - **World-Model Unit Tests:** `pnpm --filter @exocortex/world-model test` passed 13 test files / 90 tests (100%).
 - **Monorepo Integration Suite:** `pnpm -r test` passed all test files (>1,200 tests).
 - **Triad Advisory Review:** Pre-commit diffs reviewed and validated by `advisor.py`. All blockers and edge cases resolved.
+
+---
+
+## 4. Live Daemon Integration (`exocortexd`)
+
+### Commit: `f1c660b` — `feat(daemon): wire living graph event linker and precognitive readiness host`
+- Remote: Synced and pushed to `origin/main` (`53573c4..f1c660b`).
+
+### Implemented Capabilities:
+1. **Living Life Graph Event Linking:**
+   - Wired `linkEventToGraph` into `WorldModelHost.onEventsAppended` with soft entity cap (20,000 entities) preventing graph saturation.
+   - Per-device bounded LRU context cache (`lastGraphContextByDevice`, max 100 entries) preventing cross-device telemetry leaks.
+   - HTTP Endpoints:
+     - `GET /v3/world-model/graph`: returns entity/edge counts and active context state. Gated on `admin` / `admin:read` scopes.
+     - `GET /v3/world-model/graph/context`: returns the calling device's latest graph context (subgraph, matched entities, activated entities, next-state predictions, recommendations). Gated on `admin:read`.
+2. **PreCognitive Host & Dynamic Wake Quantiles:**
+   - `PreCognitiveHost`: singleton lifecycle host maintaining per-device `PreCognitiveEngine` instances with bounded LRU eviction (256 max engines).
+   - Dynamic empirical wake quantile calibration from SQLite past wake events using windowed per-device partitioning (`ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY ts_server DESC) <= 500`), safe `json_valid` `CASE` guards, and 30-day lookback filtering.
+   - Dual-clock recency gating (`now - ev.ts_device in [-5000, 60000]`) ensuring offline backfilled events never trigger false live `HIGH_URGENCY`.
+   - Real-time anticipation: handles `wake` notifications and `vibration`, `SCREEN_ON` wake latency measurement, `SCREEN_OFF` pocket pre-staging, and touch hesitation scoring from normalized `dwell_ms` / `touch_duration_ms`.
+   - Live readiness TTL decay (decays to `CASUAL` with 0 hesitation after 60s without events).
+   - In-memory per-device future clock skew counters.
+   - HTTP Endpoints:
+     - `GET /v3/precognitive/status`: returns per-device readiness state, active wake threshold, calibration status, and threshold source (`"device" | "global" | "default"`).
+     - `POST /v3/precognitive/calibrate`: triggers dynamic quantile calibration across SQLite wake events with configurable `min_samples`. Gated on `admin:write`. Returns generic 500 on database error.
+     - `POST /v3/precognitive/telemetry`: ephemeral real-time probe endpoint with strict timestamp skew validation (`[-5000, 60000]`) and dwell bounds (`[0, 60000]`). Gated on `telemetry:write`.
+3. **Verification:**
+   - Full monorepo typecheck: `pnpm -r typecheck` passed (0 errors across 11 packages).
+   - Full monorepo test suite: `pnpm -r test` passed 100% (161 daemon tests across 9 suites, 128 mobile tests, all core/mesh/triad tests).
+   - Triad Advisory Review: Two rounds of deep critique with Claude/Codex Triad Advisor (`advisor.py`), resolving all blockers, SQL window functions, LRU eviction, and state consistency.
+
