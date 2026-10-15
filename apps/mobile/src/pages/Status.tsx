@@ -8,6 +8,7 @@ import { isScreenContextEnabled } from "../lib/config";
 import { onPassiveCapture, getLastPassiveCapture, startPassiveCaptureListener } from "../lib/passiveCapture";
 import { withPlayCategoryFallback } from "../lib/playCategories";
 import { Capacitor, registerPlugin } from "@capacitor/core";
+import { App } from "@capacitor/app";
 import { Switch } from "../components/Switch";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
@@ -92,28 +93,48 @@ export default function Status() {
   }
 
   useEffect(() => {
+    function refreshA11y() {
+      if (Capacitor.isNativePlatform()) {
+        AccessibilityScanner.isAccessibilityServiceEnabled()
+          .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
+          .catch(() => {});
+      }
+    }
+
     fireAndForget(load(), "status.load");
     isScreenContextEnabled().then(setContextEnabled).catch(logRejection("status.screenContext")); // default false = fail-closed
-    if (Capacitor.isNativePlatform()) {
-      AccessibilityScanner.isAccessibilityServiceEnabled()
-        .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
-        .catch(() => {});
-    }
-    AccessibilityScanner.getPassiveModeEnabled().then((r: any) => setPassiveMode(r.enabled));
-    // Load the real saved allowlist on mount — without this, allowlist stays
-    // the empty Set() default until the user opens the app picker at least
-    // once this session, wrongly disabling Scan Screen Text / Passive mode
-    // even when a real allowlist is already saved natively.
+    refreshA11y();
+    AccessibilityScanner.getPassiveModeEnabled()
+      .then((r: any) => setPassiveMode(r.enabled))
+      .catch(() => {});
+    // Load the saved allowlist on mount to avoid stale empty default
     AccessibilityScanner.getAllowlist()
       .then(({ packages }: { packages: string[] }) => setAllowlistState(new Set(packages)))
-      .catch(() => {}); // plugin unavailable off-device: keep the initial allowlist state
+      .catch(() => {});
     recordEventSafe({ type: "screen_view", screen: "status", timestamp: new Date().toISOString() });
     void flushUsageEvents();
 
-    // The actual passive-capture listener is registered app-wide in
-    // App.tsx (so it keeps running regardless of which screen is open) —
-    // this just subscribes to it for the "Last passive capture" display.
-    return onPassiveCapture((capture) => setLastPassiveCapture(capture));
+    // In web/desktop mode, re-poll on tab visibility; in native Capacitor, appStateChange handles resume
+    const handleVisibility = () => {
+      if (!Capacitor.isNativePlatform() && typeof document !== "undefined" && document.visibilityState === "visible") {
+        refreshA11y();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    // On native Android, re-poll a11y service state when user returns from Accessibility Settings
+    const appStatePromise = App.addListener("appStateChange", ({ isActive }) => {
+      if (isActive) refreshA11y();
+    });
+
+    // App-wide passive capture listener subscription for the status view
+    const unsubscribePassive = onPassiveCapture((capture) => setLastPassiveCapture(capture));
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      appStatePromise.then((handle) => handle.remove()).catch(() => {});
+      unsubscribePassive();
+    };
   }, []);
 
   async function handleTogglePassiveMode(next: boolean) {

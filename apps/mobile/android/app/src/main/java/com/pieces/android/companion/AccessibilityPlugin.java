@@ -3,13 +3,18 @@ package com.pieces.android.companion;
 import android.app.AppOpsManager;
 import android.app.usage.UsageStats;
 import android.app.usage.UsageStatsManager;
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
+import android.view.accessibility.AccessibilityManager;
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Process;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.util.Log;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -28,6 +33,7 @@ import java.util.concurrent.TimeUnit;
 @CapacitorPlugin(name = "AccessibilityScanner")
 public class AccessibilityPlugin extends Plugin {
 
+    private static final String TAG = "AccessibilityPlugin";
     static final String PREFS_NAME = "pieces_accessibility_prefs";
     static final String ALLOWLIST_KEY = "captured_package_allowlist";
     static final String PASSIVE_MODE_KEY = "passive_mode_enabled";
@@ -507,14 +513,58 @@ public class AccessibilityPlugin extends Plugin {
         call.resolve();
     }
 
+    private boolean isOurService(String flat) {
+        if (TextUtils.isEmpty(flat)) return false;
+        ComponentName cn = ComponentName.unflattenFromString(flat);
+        return cn != null && cn.equals(new ComponentName(getContext(), PiecesAccessibilityService.class));
+    }
+
     @PluginMethod
     public void isAccessibilityServiceEnabled(PluginCall call) {
-        String enabledServices = Settings.Secure.getString(
-            getContext().getContentResolver(),
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        );
-        String target = getContext().getPackageName() + "/" + PiecesAccessibilityService.class.getName();
-        boolean enabled = !TextUtils.isEmpty(enabledServices) && enabledServices.contains(target);
+        boolean enabled = false;
+
+        try {
+            AccessibilityManager am = (AccessibilityManager) getContext().getSystemService(Context.ACCESSIBILITY_SERVICE);
+            if (am != null) {
+                List<AccessibilityServiceInfo> list = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+                if (list != null) {
+                    for (AccessibilityServiceInfo info : list) {
+                        if (info != null && isOurService(info.getId())) {
+                            enabled = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "a11y manager query failed", e);
+        }
+
+        if (!enabled) {
+            try {
+                String s = Settings.Secure.getString(
+                    getContext().getContentResolver(),
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                );
+                if (!TextUtils.isEmpty(s)) {
+                    TextUtils.SimpleStringSplitter sp = new TextUtils.SimpleStringSplitter(':');
+                    sp.setString(s);
+                    while (sp.hasNext()) {
+                        if (isOurService(sp.next())) {
+                            enabled = true;
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "secure settings query failed", e);
+            }
+        }
+
+        // Last resort fallback to in-process flag (now accurately reset on unbind/destroy)
+        if (!enabled) {
+            enabled = PiecesAccessibilityService.isRunning;
+        }
 
         JSObject ret = new JSObject();
         ret.put("enabled", enabled);

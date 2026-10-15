@@ -19,6 +19,8 @@ import java.util.Set;
 
 public class PiecesAccessibilityService extends AccessibilityService {
 
+    public static volatile boolean isRunning = false;
+
     // A static buffer to hold the most recently extracted text blocks across the OS
     public static List<String> lastCapturedText = new ArrayList<>();
     public static String lastCapturedPackage = "";
@@ -245,13 +247,21 @@ public class PiecesAccessibilityService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        isRunning = true;
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
         syncHandler.postDelayed(periodicSyncRunnable, PERIODIC_SYNC_INTERVAL_MS);
     }
 
     @Override
+    public boolean onUnbind(android.content.Intent intent) {
+        isRunning = false;
+        return super.onUnbind(intent);
+    }
+
+    @Override
     public void onDestroy() {
+        isRunning = false;
         syncHandler.removeCallbacks(periodicSyncRunnable);
         super.onDestroy();
     }
