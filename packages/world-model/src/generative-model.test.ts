@@ -79,6 +79,7 @@ describe("shared validated observations", () => {
 
   it("skips poison invariant metadata and prototype keys without aborting replay or mutating learned state", () => {
     const poisonedPayloads = [
+      { tests: { toString: null } },
       { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "tests_pass" } },
       { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "invented" } },
       { invariantId: "inv_clean_test_suite", observedState: false, metadata: { action: "run_diagnostics" } },

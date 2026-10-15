@@ -207,7 +207,8 @@ export function eventToObservation(event: EventRecord, support?: ObservationSupp
 
   if (payload.invariant === "clean_suite" || payload.tests !== undefined) {
     if (payload.state !== undefined && typeof payload.state !== "boolean") return null;
-    if (payload.tests !== undefined && !["passed", "ok", "failed", "fail"].includes(String(payload.tests))) return null;
+    if (payload.tests !== undefined && (typeof payload.tests !== "string"
+      || !["passed", "ok", "failed", "fail"].includes(payload.tests))) return null;
     if (payload.state === undefined && payload.tests === undefined) return null;
     if (typeof payload.state === "boolean" && payload.tests !== undefined
       && payload.state !== (payload.tests === "passed" || payload.tests === "ok")) return null;
@@ -859,14 +860,13 @@ export class LearnedActiveInferenceEngine {
 
     for (const event of events) {
       count++;
-      const extracted = eventToObservation(event, (name) => this.factors.get(name));
-      if (extracted && this.factors.has(extracted.factor)) {
-        try {
+      try {
+        const extracted = eventToObservation(event, (name) => this.factors.get(name));
+        if (extracted && this.factors.has(extracted.factor)) {
           this.processObservation(extracted.factor, extracted.obs, extracted.action);
-        } catch {
-          // A poison event (unknown observation/action name for a known factor) must not
-          // abort replay of the entire append-only log; skip it deterministically.
         }
+      } catch {
+        // Malformed payloads and unsupported signals must not abort the append-only log.
       }
       snapshots.push(this.createBeliefSnapshot(event.seq));
     }
