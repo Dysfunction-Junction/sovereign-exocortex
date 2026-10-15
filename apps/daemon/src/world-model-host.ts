@@ -134,6 +134,10 @@ export class WorldModelHost {
     return WorldModelHost.instance;
   }
 
+  public static createIsolatedForTest(): WorldModelHost {
+    return new WorldModelHost();
+  }
+
   /** Attach (or detach with null) the actuator invoked for SILENT_AUTO_EXECUTE decisions that pass `mayActuateAutoExecute`. */
   public setAutoExecutor(fn: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null): void {
     this.autoExecutor = fn;

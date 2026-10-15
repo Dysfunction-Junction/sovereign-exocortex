@@ -21,6 +21,7 @@ import {
   type Speculator,
 } from "./pending-proposals.js";
 import { defaultPushNotifier } from "./push-notifier.js";
+import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -1392,6 +1393,11 @@ export const server = createServer(async (req, res) => {
   }
 });
 
+server.on("close", () => {
+  defaultPushNotifier.stop();
+  defaultRepoHealthWatcher.stop();
+});
+
 // 0.0.0.0, not 127.0.0.1: this runs inside a Docker container reached by
 // Caddy over the compose network, not on bare metal. It is still not
 // internet-facing - only exposed (not published) in docker-compose.yml, so
@@ -1407,6 +1413,9 @@ if (process.env.NODE_ENV !== "test") {
   }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
+  if (process.env.EXOCORTEX_REPO_WATCH !== "0") {
+    defaultRepoHealthWatcher.start();
+  }
 }
 
 
