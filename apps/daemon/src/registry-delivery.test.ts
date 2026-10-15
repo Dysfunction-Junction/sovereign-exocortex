@@ -7,11 +7,16 @@ import { setDatabase } from "./db-host.js";
 import { ExocortexDatabase } from "@exocortex/core/db";
 import { approvalMessage } from "./approval-attestation.js";
 import {
+  ActiveInferenceEngine, LearnedActiveInferenceEngine, LivingLifeGraph, rankInferencePolicies,
+} from "@exocortex/world-model";
+import { ShadowRecorder } from "./shadow-recorder.js";
+import {
   buildPendingProposals,
   type PendingFetcher,
   type RegistryPending,
   type SpeculateRequest,
   type Speculator,
+  type PendingProposal,
 } from "./pending-proposals.js";
 
 const SECRET = "registry-delivery-jwt-secret";
@@ -39,9 +44,12 @@ function device(db: ExocortexDatabase, id: string, key: KP) {
 function proposal(
   db: ExocortexDatabase,
   id: string,
-  opts: { state?: "SURFACED" | "STAGED" | "SUPPRESSED" | "GATED"; expiresIn?: number; risk?: number; action?: string; invariant?: string | null; shadow?: 0 | 1 } = {},
+  opts: { state?: "SURFACED" | "STAGED" | "SUPPRESSED" | "GATED"; expiresIn?: number; risk?: number; action?: string; invariant?: string | null; shadow?: 0 | 1; ranking?: unknown } = {},
 ) {
-  const ev = db.ingestEvent("dev_a", { event_id: `evt_${id}`, kind: "observation", ts_device: Date.now(), schema_ver: 1, payload: {} });
+  const ev = db.ingestEvent("dev_a", {
+    event_id: `evt_${id}`, kind: opts.ranking ? "proposal" : "observation", ts_device: Date.now(), schema_ver: 1,
+    payload: opts.ranking ? { proposal_id: id, invariant_id: opts.invariant ?? null, policy_type: "PRAGMATIC", ranking: opts.ranking } : {},
+  });
   db.insertProposal({
     proposal_id: id, created_seq: ev.event.seq, invariant_id: opts.invariant ?? null, policy_type: "PRAGMATIC", tier: 1,
     summary: `summary ${id}`, action: opts.action ?? "{}", action_hash: new Uint8Array([1]), efe: 1,
@@ -72,6 +80,108 @@ function fakeRegistry() {
   const fetcher: PendingFetcher = async () => Array.from(live.values());
   return { live, calls, speculator, fetcher };
 }
+
+function recordedLearnedBatch(db: ExocortexDatabase, prefix: string, invalidPositions = false) {
+  const graph = new LivingLifeGraph();
+  graph.addEntity({ id: "project_sovereign_exocortex", name: "Project", type: "PROJECT" });
+  const active = new ActiveInferenceEngine(graph);
+  const candidates = active.generatePolicies([active.evaluateObservation({
+    invariantId: "inv_clean_test_suite", observedState: false, observedAt: Date.now(), confidence: 1,
+  })]).map((policy) => ({ ...policy, id: `${prefix}:${policy.id}` }));
+  const policies = rankInferencePolicies(
+    candidates, new LearnedActiveInferenceEngine(), graph,
+    new Map([["inv_clean_test_suite:EPISTEMIC", { wanted: 4, notWanted: 0 }]]), Date.now(), Date.now(),
+  );
+  const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+  // Persist opposite to rank order to exercise ordering before speculation as well as after fetching.
+  for (const policy of [...policies].reverse()) {
+    if (invalidPositions) policy.ranking!.position = 0;
+    const envelope = active.policyToProposal(policy);
+    recorder.record(policy, envelope, {
+      action: "ALLOW_PROMPT", mode: "HIGH_VELOCITY_EXECUTION", reason: "test",
+      targetDelivery: "GLASS_MODAL", confidence: envelope.confidence, evaluatedAt: Date.now(),
+    });
+  }
+  return policies;
+}
+
+test("pending endpoint preserves learned batch rank despite reversed registry order without changing approval material", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  device(db, "dev_a", p256());
+  proposal(db, "legacy_before");
+  const ranked = recordedLearnedBatch(db, "ranked-delivery");
+  assert.equal(ranked[0].type, "EPISTEMIC");
+  proposal(db, "legacy_after");
+  const registry = fakeRegistry();
+  const registryOrder = ["legacy_after", ...ranked.map((p) => p.id).reverse(), "legacy_before"];
+  setDatabase(db);
+  setPendingFetcherForTest(async () => registryOrder.map((id) => registry.live.get(id)!).filter(Boolean));
+  setPendingSpeculatorForTest(registry.speculator);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as { port: number };
+  const url = `http://127.0.0.1:${address.port}/v3/proposals/pending`;
+  try {
+    const before = ranked.map((p) => db.getProposal(p.id));
+    const poll = async () => {
+      const response = await fetch(url, { headers: { Authorization: "Bearer " + issueToken("dev_a", SECRET) } });
+      assert.equal(response.status, 200);
+      return (await response.json()) as { proposals: PendingProposal[] };
+    };
+    const first = (await poll()).proposals;
+    assert.deepEqual(first.map((p) => p.proposalId), ["legacy_after", ...ranked.map((p) => p.id), "legacy_before"]);
+    const second = (await poll()).proposals;
+    assert.deepEqual(second.map((p) => p.proposalId), first.map((p) => p.proposalId));
+    for (const delivered of first) {
+      const original = registry.live.get(delivered.proposalId)!;
+      assert.equal(delivered.approvalNonce, original.approvalNonce);
+      assert.equal(delivered.riskLevel, original.riskLevel);
+      assert.deepEqual(delivered.actionPayload, original.actionPayload);
+      assert.equal(delivered.requiresBiometric, true);
+      assert.equal(second.find((p) => p.proposalId === delivered.proposalId)!.approvalNonce, delivered.approvalNonce);
+    }
+    assert.deepEqual(ranked.map((p) => db.getProposal(p.id)), before);
+    const calls = registry.calls.map((call) => call.proposalId);
+    assert.ok(calls.indexOf(ranked[0].id) < calls.indexOf(ranked[1].id));
+  } finally {
+    setPendingFetcherForTest(null);
+    setPendingSpeculatorForTest(null);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    setDatabase(null);
+  }
+});
+
+test("batch ranking applies before the speculation cap", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    device(db, "dev_a", p256());
+    for (let i = 0; i < 19; i++) proposal(db, `older_${i}`);
+    const ranked = recordedLearnedBatch(db, "cap");
+    const registry = fakeRegistry();
+    await buildPendingProposals(db, registry.fetcher, Date.now(), registry.speculator);
+    assert.equal(registry.calls.length, 20);
+    assert.equal(registry.calls[19].proposalId, ranked[0].id);
+    assert.equal(registry.live.has(ranked[1].id), false);
+  } finally {
+    db.close();
+  }
+});
+
+test("invalid host batch positions and client-supplied ranking retain original pending order", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    device(db, "dev_a", p256());
+    const ranked = recordedLearnedBatch(db, "duplicate-position", true);
+    proposal(db, "client_first", { ranking: { version: 1, batchId: "client_first", position: 0 } });
+    proposal(db, "client_second", { ranking: { version: 1, batchId: "client_first", position: 1 } });
+    const ids = ["client_second", ranked[1].id, "client_first", ranked[0].id];
+    const delivered = await buildPendingProposals(db, async () => ids.map((proposalId) => ({
+      proposalId, approvalNonce: `nonce:${proposalId}`, expiresAt: Date.now() + 60_000,
+    })));
+    assert.deepEqual(delivered.map((p) => p.proposalId), ids);
+  } finally {
+    db.close();
+  }
+});
 
 test("pending list speculates our live SURFACED/STAGED proposals, keyed by our id, and nothing else", async () => {
   const db = new ExocortexDatabase({ path: ":memory:" });

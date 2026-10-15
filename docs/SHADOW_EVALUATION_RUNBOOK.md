@@ -35,6 +35,7 @@ The release gate is at least 50 direct tap labels, Precision@surface at least 0.
 `GET /world-model/state` also returns `state.preferenceMetrics`. These cumulative diagnostics evaluate proposal-time wanted probabilities against later verified direct tap labels on shadow proposals:
 
 - `evaluated`: eligible labels with valid pre-feedback predictions.
+- `eligibleLabels` and `predictionCoverage`: eligible tap count and the fraction with usable predictions.
 - `excluded`: eligible labels whose prediction metadata is missing or unusable, including older proposals.
 - `brier` and `logLoss`: average prediction losses; lower is better.
 - `baselineBrier` and `baselineLogLoss`: losses on the same samples for the explicitly named `fixed-0.5` predictor.

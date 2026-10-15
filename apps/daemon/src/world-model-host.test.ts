@@ -15,7 +15,7 @@ test("WorldModelHost: singleton initialization and seeded ecosystem graph", () =
   assert.equal(status.registeredInvariantsCount >= 5, true);
 });
 
-test("WorldModelHost: custom scalar observations remain valid and only explicit supported mappings learn", () => {
+test("WorldModelHost: unmapped invariant metadata retains baseline and inconsistent known mappings reject before mutation", () => {
   const host = WorldModelHost.createIsolatedForTest();
   host.activeInference.registerInvariant({
     id: "inv_custom", name: "Custom mode", targetEntityId: "project_sovereign_exocortex",
@@ -25,13 +25,29 @@ test("WorldModelHost: custom scalar observations remain valid and only explicit 
   const before = host.learnedEngine.exportModelParams(0);
   assert.equal(host.ingestObservation(observation).isAnomaly, false);
   assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
-  host.ingestObservation({ ...observation, metadata: { factor: "repo_health", observation: "tests_pass" } });
-  assert.notDeepEqual(host.learnedEngine.exportModelParams(0), before);
-  const after = host.learnedEngine.exportModelParams(0);
+  const custom = host.ingestObservation({
+    ...observation, observedState: "blocked", metadata: { factor: "repo_health", observation: "tests_fail" },
+  });
+  assert.equal(custom.generatedPoliciesCount, 2);
+  assert.deepEqual(custom.proposals.map((p) => p.category), ["PRAGMATIC", "EPISTEMIC"]);
+  const unmappedDefault = host.ingestObservation({
+    invariantId: "inv_cafeteria_synced", observedState: false, observedAt: 100, confidence: 1,
+    metadata: { factor: "repo_health", observation: "tests_fail" },
+  });
+  assert.equal(unmappedDefault.generatedPoliciesCount, 2);
+  assert.deepEqual(unmappedDefault.proposals.map((p) => p.category), ["PRAGMATIC", "EPISTEMIC"]);
+  assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
   assert.throws(() => host.ingestObservation({
     ...observation, metadata: { factor: "repo_health", observation: "invented" },
   }), /unsupported/);
-  assert.deepEqual(host.learnedEngine.exportModelParams(0), after);
+  assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
+  const graphBefore = structuredClone(host.lifeGraph.getEntity("project_sovereign_exocortex"));
+  assert.throws(() => host.ingestObservation({
+    invariantId: "inv_clean_test_suite", observedState: false, observedAt: 100, confidence: 1,
+    metadata: { factor: "repo_health", observation: "tests_pass" },
+  }), /inconsistent invariant mapping/);
+  assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
+  assert.deepEqual(host.lifeGraph.getEntity("project_sovereign_exocortex"), graphBefore);
 });
 
 test("WorldModelHost: explicit event actions, timestamps and confidence survive the shared live/replay mapping", () => {
@@ -78,6 +94,46 @@ test("WorldModelHost: explicit event actions, timestamps and confidence survive 
     }), /unsupported/);
     assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
     assert.equal(db.listEvents({ kind: "proposal" }).length, policiesBefore);
+  } finally {
+    db.close();
+  }
+});
+
+test("WorldModelHost: top-level factor overrides cannot train unmapped or nonboolean invariants in live or replay paths", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const live = WorldModelHost.createIsolatedForTest();
+    const direct = WorldModelHost.createIsolatedForTest();
+    const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+    recorder.ensureHostDevice();
+    live.setShadowRecorder(recorder);
+    const before = live.learnedEngine.exportModelParams(0);
+    for (const [index, signal] of [
+      { invariantId: "inv_cafeteria_synced", observedState: false },
+      { invariantId: "inv_clean_test_suite", observedState: "false" },
+    ].entries()) {
+      const observation = {
+        ...signal, observedAt: 100, confidence: 1,
+        metadata: { factor: "repo_health", observation: "tests_fail" },
+      };
+      const directResult = direct.ingestObservation(observation);
+      assert.equal(directResult.generatedPoliciesCount, 2);
+      const event = db.ingestEvent(HOST_DEVICE_ID, {
+        event_id: `baseline-parity:${index}`, kind: "observation", ts_device: 100, schema_ver: 1,
+        payload: { ...signal, observedAt: 100, confidence: 1, factor: "repo_health", observation: "tests_fail" },
+      }).event;
+      assert.equal(eventToObservation(event), null);
+      assert.deepEqual(systemObservationFromEvent(event, null), observation);
+      live.onEventAppended(event, db);
+      assert.equal(db.listEvents({ kind: "proposal" }).length, (index + 1) * 2);
+      assert.deepEqual(live.learnedEngine.exportModelParams(0), before);
+      assert.deepEqual(direct.learnedEngine.exportModelParams(0), before);
+      const replay = new LearnedActiveInferenceEngine();
+      replay.replayEventStream(db.listEvents());
+      assert.deepEqual(replay.exportModelParams(0), before);
+      assert.deepEqual(live.learnedEngine.createBeliefSnapshot(0), replay.createBeliefSnapshot(0));
+      assert.deepEqual(direct.learnedEngine.createBeliefSnapshot(0), replay.createBeliefSnapshot(0));
+    }
   } finally {
     db.close();
   }

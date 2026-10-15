@@ -23,7 +23,11 @@ describe("shared validated observations", () => {
     for (const payload of [
       { factor: "repo_health", observation: "invented" },
       { factor: "constructor", observation: "tests_fail" },
+      { factor: "__proto__", observation: "tests_fail" },
+      { factor: "toString", observation: "tests_fail" },
       { invariantId: "constructor", observedState: false },
+      { invariantId: "__proto__", observedState: false },
+      { invariantId: "toString", observedState: false },
       { factor: "repo_health", observation: "tests_fail", action: "self_heal_restore" },
       { invariantId: "inv_clean_test_suite", observedState: "false" },
       { invariantId: "inv_clean_test_suite", observedState: true, factor: "repo_health", observation: "tests_fail" },
@@ -71,6 +75,40 @@ describe("shared validated observations", () => {
     replay.replayEventStream(events);
     expect(replay.exportModelParams(0)).toEqual(live.exportModelParams(0));
     expect(replay.createBeliefSnapshot(0)).toEqual(live.createBeliefSnapshot(0));
+  });
+
+  it("skips poison invariant metadata and prototype keys without aborting replay or mutating learned state", () => {
+    const poisonedPayloads = [
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "tests_pass" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "invented" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { action: "run_diagnostics" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: [] },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: "malformed" },
+      { invariantId: "inv_clean_test_suite", observedState: false, factor: "repo_health", observation: "tests_fail", metadata: "malformed" },
+      ...["__proto__", "toString", "constructor"].flatMap((key) => [
+        { factor: key, observation: "tests_fail" },
+        { invariantId: key, observedState: false },
+        { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: key, observation: "tests_fail" } },
+      ]),
+    ];
+    const replay = new LearnedActiveInferenceEngine();
+    const before = replay.exportModelParams(0);
+    for (const payload of poisonedPayloads) {
+      expect(eventToObservation(event(payload))).toBeNull();
+      replay.replayEventStream([event(payload)]);
+      expect(replay.exportModelParams(0)).toEqual(before);
+    }
+    const events = [
+      ...poisonedPayloads.map((payload) => event(payload)),
+      event({ factor: "repo_health", observation: "tests_pass", action: "run_diagnostics" }),
+    ].map((e, i) => ({ ...e, seq: i + 1 }));
+    const result = replay.replayEventStream(events);
+    expect(result.replayedCount).toBe(events.length);
+    expect(result.snapshots).toHaveLength(events.length);
+    const expected = new LearnedActiveInferenceEngine();
+    expected.processObservation("repo_health", "tests_pass", "run_diagnostics");
+    expect(replay.exportModelParams(0)).toEqual(expected.exportModelParams(0));
+    expect(replay.createBeliefSnapshot(0)).toEqual(expected.createBeliefSnapshot(0));
   });
 });
 

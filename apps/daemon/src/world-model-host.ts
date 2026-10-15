@@ -464,17 +464,17 @@ export class WorldModelHost {
     for (const ev of events) {
       try {
         const extracted = eventToObservation(ev, (name) => this.learnedEngine.getFactor(name));
+        const systemObservation = systemObservationFromEvent(ev, extracted, (name) => this.learnedEngine.getFactor(name));
+        if (systemObservation) {
+          // Unmapped/scalar invariants retain baseline proposals without updating a learned factor.
+          this.ingestObservation(systemObservation, {
+            ...(targetDb ? { db: targetDb } : {}),
+            allowAutoExecute: systemObservation.metadata?.source !== "local_vision",
+          });
+        } else if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
+          this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+        }
         if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
-          const systemObservation = systemObservationFromEvent(ev, extracted);
-          if (systemObservation) {
-            // ingestObservation updates the same learned factor and also runs active inference.
-            this.ingestObservation(systemObservation, {
-              ...(targetDb ? { db: targetDb } : {}),
-              allowAutoExecute: systemObservation.metadata?.source !== "local_vision",
-            });
-          } else {
-            this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
-          }
           touchedFactors.add(extracted.factor);
           lastObsSeq = ev.seq;
           batchSnapshots.push(this.learnedEngine.createBeliefSnapshot(ev.seq));

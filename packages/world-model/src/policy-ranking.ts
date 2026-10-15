@@ -92,5 +92,8 @@ export function rankInferencePolicies(
       return score(a) - score(b) || a.index - b.index;
     });
   }
-  return ranked.map((r) => r.policy);
+  const batchId = ranked[0]?.policy.id;
+  return ranked.map((r, position) => ({
+    ...r.policy, ranking: { ...r.policy.ranking, batchId, position },
+  }));
 }

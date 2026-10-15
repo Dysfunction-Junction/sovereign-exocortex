@@ -59,6 +59,8 @@ export interface PolicyRankingMetadata {
   riskTerm?: number;
   ambiguityTerm?: number;
   associations: Array<{ entityId: string; activation: number }>;
+  batchId?: string;
+  position?: number;
 }
 
 export interface InferencePolicy {
