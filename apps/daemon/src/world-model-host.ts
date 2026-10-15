@@ -24,6 +24,8 @@ import {
   foregroundObservation,
   invariantObservation,
   rankInferencePolicies,
+  linkEventToGraph,
+  type EventGraphContext,
   type CognitiveMode,
   type ProposalEnvelope,
   type ContextualSignals,
@@ -87,6 +89,7 @@ export class WorldModelHost {
   private recorderDisabled = false;
   private autoExecutor: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null = null;
   private preferenceDb: ExocortexDatabase | null = null;
+  private lastGraphContextByDevice = new Map<string, EventGraphContext>();
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
@@ -463,6 +466,29 @@ export class WorldModelHost {
 
     for (const ev of events) {
       try {
+        const autoCreate = this.lifeGraph.entityCount < 20000;
+        const linkCtx = linkEventToGraph(
+          {
+            event_id: ev.event_id,
+            kind: ev.kind,
+            ts_device: ev.ts_device,
+            ts_server: ev.ts_server,
+            payload: ev.payload,
+          },
+          this.lifeGraph,
+          { autoCreate, createMissingTopics: autoCreate },
+        );
+        this.lastGraphContextByDevice.delete(ev.device_id);
+        this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
+        if (this.lastGraphContextByDevice.size > 100) {
+          const firstKey = this.lastGraphContextByDevice.keys().next().value;
+          if (firstKey !== undefined) this.lastGraphContextByDevice.delete(firstKey);
+        }
+      } catch (graphErr) {
+        console.warn(`[world-model-host] graph link error for seq ${ev.seq}:`, graphErr);
+      }
+
+      try {
         const extracted = eventToObservation(ev, (name) => this.learnedEngine.getFactor(name));
         const systemObservation = systemObservationFromEvent(ev, extracted, (name) => this.learnedEngine.getFactor(name));
         if (systemObservation) {
@@ -511,6 +537,14 @@ export class WorldModelHost {
    */
   public onEventAppended(event: EventRecord, db?: ExocortexDatabase): BeliefSnapshotRecord | null {
     return this.onEventsAppended([event], db);
+  }
+
+  /**
+   * Return the latest EventGraphContext produced by linkEventToGraph strictly scoped to a deviceId.
+   */
+  public getLastGraphContext(deviceId: string): EventGraphContext | null {
+    if (!deviceId) return null;
+    return this.lastGraphContextByDevice.get(deviceId) ?? null;
   }
 
   /**

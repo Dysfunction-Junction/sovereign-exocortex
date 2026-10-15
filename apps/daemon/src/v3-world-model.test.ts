@@ -225,6 +225,104 @@ test("v3 world-model endpoints integration test", async () => {
     const pendingData = await pendingRes.json();
     const surfacedIds = proposalRows.filter((row) => row.shadow === 1 && ["SURFACED", "STAGED"].includes(row.state)).map((row) => row.proposal_id);
     assert.ok(pendingData.proposals.some((proposal: { proposalId: string }) => surfacedIds.includes(proposal.proposalId)));
+
+    // 6. Test /v3/world-model/graph and /v3/world-model/graph/context
+    // Non-admin device is rejected from graph summary (403 Forbidden)
+    const unauthGraphRes = await fetch(`${baseUrl}/v3/world-model/graph`, {
+      method: "GET",
+      headers: userHeaders,
+    });
+    assert.equal(unauthGraphRes.status, 403);
+
+    const graphRes = await fetch(`${baseUrl}/v3/world-model/graph`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    assert.equal(graphRes.status, 200);
+    const graphData = await graphRes.json();
+    assert.equal(graphData.ok, true);
+    assert.ok(graphData.entity_count > 0);
+    assert.ok(typeof graphData.edge_count === "number");
+
+    // Non-admin device is rejected from graph context (403 Forbidden)
+    const userContextRes = await fetch(`${baseUrl}/v3/world-model/graph/context`, {
+      method: "GET",
+      headers: userHeaders,
+    });
+    assert.equal(userContextRes.status, 403);
+
+    // Register a second admin device to test multi-device context isolation
+    const { publicKey: admin2Pub } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+    const admin2Der = admin2Pub.export({ format: "der", type: "spki" });
+    memoryDb.registerDevice({
+      device_id: "dev_admin_node_2",
+      name: "Second Admin Node",
+      platform: "android",
+      pubkey_spki: Buffer.from(admin2Der),
+      key_attested: 1,
+      scopes: ["telemetry:write", "admin:read"],
+      enrolled_at: Date.now(),
+    });
+    const admin2Token = issueToken("dev_admin_node_2", TEST_SECRET);
+    const admin2Headers = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${admin2Token}`,
+    };
+
+    // Before dev_admin_node_2 has ingested any events, its context must be null
+    const admin2ContextBefore = await fetch(`${baseUrl}/v3/world-model/graph/context`, {
+      method: "GET",
+      headers: admin2Headers,
+    });
+    assert.equal(admin2ContextBefore.status, 200);
+    const admin2ContextBeforeData = await admin2ContextBefore.json();
+    assert.equal(admin2ContextBeforeData.ok, true);
+    assert.equal(admin2ContextBeforeData.context, null);
+
+    // Ingest event with tags and doc identifier for dev_admin_node
+    const linkEventRes = await fetch(`${baseUrl}/v3/events`, {
+      method: "POST",
+      headers: adminHeaders,
+      body: JSON.stringify({
+        device_id: "dev_admin_node",
+        events: [{
+          event_id: "evt_graph_doc_test",
+          stream: "sovereign",
+          kind: "telemetry",
+          payload: {
+            summary_id: "sum_doc_test_123",
+            name: "Test Living Graph Doc",
+            tags: ["sovereign", "exocortex"],
+            persons: ["michael"],
+          },
+          ts_device: Date.now() + 5,
+        }],
+      }),
+    });
+    assert.equal(linkEventRes.status, 200);
+
+    // dev_admin_node receives its own context
+    const contextRes = await fetch(`${baseUrl}/v3/world-model/graph/context`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    assert.equal(contextRes.status, 200);
+    const contextData = await contextRes.json();
+    assert.equal(contextData.ok, true);
+    assert.ok(contextData.context);
+    assert.equal(contextData.context.eventId, "evt_graph_doc_test");
+    assert.ok(contextData.context.matchedEntities.length > 0);
+    assert.ok(Array.isArray(contextData.context.activatedEntities));
+
+    // dev_admin_node_2 STILL receives null (proves cross-device leak is completely closed)
+    const admin2ContextAfter = await fetch(`${baseUrl}/v3/world-model/graph/context`, {
+      method: "GET",
+      headers: admin2Headers,
+    });
+    assert.equal(admin2ContextAfter.status, 200);
+    const admin2ContextAfterData = await admin2ContextAfter.json();
+    assert.equal(admin2ContextAfterData.ok, true);
+    assert.equal(admin2ContextAfterData.context, null);
   } finally {
     setPendingFetcherForTest(null);
     setPendingSpeculatorForTest(null);

@@ -9,6 +9,7 @@ import { getDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
+import { defaultPreCognitiveHost, isValidDwell } from "./precognitive-host.js";
 import { dropKnownTelemetry } from "./telemetry-dedupe.js";
 import { APPROVAL_TS_WINDOW_MS, ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
@@ -141,6 +142,12 @@ function sendJson(res: import("node:http").ServerResponse, status: number, body:
 function sendInternalError(res: import("node:http").ServerResponse, message: string, err: unknown) {
   console.error(`[daemon] ${message}:`, err);
   sendJson(res, 500, { error: message });
+}
+
+function deviceHasScope(db: ExocortexDatabase, deviceId: string, ...allowedScopes: string[]): boolean {
+  const dev = db.getDevice(deviceId);
+  if (!dev || dev.revoked_at !== null || !Array.isArray(dev.scopes)) return false;
+  return allowedScopes.some((scope) => dev.scopes.includes(scope));
 }
 
 /**
@@ -492,6 +499,13 @@ export const server = createServer(async (req, res) => {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
         }
 
+        // Frontier 1: PreCognitive neuromotor readiness & dynamic wake threshold tracking
+        try {
+          defaultPreCognitiveHost.onEventsAppended(result.events, db);
+        } catch (precogErr) {
+          console.error("[precognitive-host] event batch hook error:", precogErr instanceof Error ? precogErr.message : precogErr);
+        }
+
         // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
         if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
           try {
@@ -781,6 +795,191 @@ export const server = createServer(async (req, res) => {
       });
     } catch (err) {
       sendInternalError(res, "failed to replay world model events", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/graph") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph inspection requires admin:read scope" });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        entity_count: defaultWorldModelHost.lifeGraph.entityCount,
+        edge_count: defaultWorldModelHost.lifeGraph.edgeCount,
+        has_context: defaultWorldModelHost.getLastGraphContext(auth.deviceId) !== null,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query world model graph", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/graph/context") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph context requires admin:read scope" });
+        return;
+      }
+
+      const lastContext = defaultWorldModelHost.getLastGraphContext(auth.deviceId);
+      if (!lastContext) {
+        sendJson(res, 200, { ok: true, context: null });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        context: {
+          eventId: lastContext.eventId,
+          timestamp: lastContext.timestamp,
+          matchedEntities: lastContext.matchedEntities.slice(0, 50),
+          activatedEntities: lastContext.activatedEntities.slice(0, 50),
+          subgraph: {
+            entities: lastContext.subgraph.entities.slice(0, 100),
+            edges: lastContext.subgraph.edges.slice(0, 200),
+          },
+          neighbors: Object.fromEntries(
+            [...lastContext.neighbors.entries()].slice(0, 50).map(([k, v]) => [k, v.slice(0, 20)])
+          ),
+          predictedNextStates: lastContext.predictedNextStates.slice(0, 20),
+          recommendedActions: lastContext.recommendedActions.slice(0, 10),
+        },
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query graph context", err);
+    }
+    return;
+  }
+
+  // --- Frontier 1: PreCognitive Telemetry, Calibration, and Readiness Endpoints ---
+
+  if (method === "GET" && url.pathname === "/v3/precognitive/status") {
+    try {
+      sendJson(res, 200, {
+        ok: true,
+        status: defaultPreCognitiveHost.getStatus(auth.deviceId),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to get precognitive status", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/precognitive/calibrate") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: calibrate requires admin write scope" });
+        return;
+      }
+
+      const raw = await readBody(req, 16 * 1024);
+      let minSamples = 10;
+      if (raw.length > 0) {
+        try {
+          const body = JSON.parse(raw);
+          if (!body || typeof body !== "object" || Array.isArray(body)) {
+            sendJson(res, 400, { error: "calibrate body must be a plain JSON object" });
+            return;
+          }
+          if (body.min_samples !== undefined) {
+            if (
+              typeof body.min_samples !== "number" ||
+              !Number.isInteger(body.min_samples) ||
+              body.min_samples < 5 ||
+              body.min_samples > 5000
+            ) {
+              sendJson(res, 400, { error: "min_samples must be an integer between 5 and 5000" });
+              return;
+            }
+            minSamples = body.min_samples;
+          }
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+      }
+      const result = defaultPreCognitiveHost.calibrateFromDatabase(db, minSamples);
+      if (result.error) {
+        console.error("[precognitive-host] calibration error:", result.error);
+        sendJson(res, 500, {
+          ok: false,
+          error: "calibration failed",
+        });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        result,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to calibrate precognitive engine", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/precognitive/telemetry") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "telemetry:write", "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: telemetry requires telemetry:write scope" });
+        return;
+      }
+
+      const raw = await readBody(req, 16 * 1024);
+      let body: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          sendJson(res, 400, { error: "telemetry body must be a JSON object" });
+          return;
+        }
+        body = parsed as Record<string, unknown>;
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON" });
+        return;
+      }
+
+      const now = Date.now();
+      let ts = now;
+      if (body.timestamp !== undefined) {
+        if (typeof body.timestamp !== "number" || !Number.isFinite(body.timestamp)) {
+          sendJson(res, 400, { error: "timestamp must be a finite number" });
+          return;
+        }
+        const age = now - body.timestamp;
+        if (age < -5000 || age > 60000) {
+          sendJson(res, 400, { error: "timestamp out of recency window (-5s to 60s)" });
+          return;
+        }
+        ts = body.timestamp;
+      }
+
+      if (body.screen_state === "SCREEN_ON" || body.screen_state === "SCREEN_OFF") {
+        defaultPreCognitiveHost.recordScreenState(auth.deviceId, body.screen_state, ts);
+      }
+      if (body.vibration === true) {
+        defaultPreCognitiveHost.recordVibration(auth.deviceId, ts);
+      }
+      const rawTouch = body.dwell_ms ?? body.touch_duration_ms;
+      if (rawTouch !== undefined) {
+        if (!isValidDwell(rawTouch)) {
+          sendJson(res, 400, { error: "dwell_ms / touch_duration_ms must be a finite number between 0 and 60000" });
+          return;
+        }
+        defaultPreCognitiveHost.recordTouch(auth.deviceId, rawTouch);
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        status: defaultPreCognitiveHost.getStatus(auth.deviceId),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to ingest precognitive telemetry", err);
     }
     return;
   }
@@ -1422,6 +1621,14 @@ if (process.env.NODE_ENV !== "test") {
   }
   if (process.env.EXOCORTEX_INFER_SCHEDULE !== "0") {
     defaultInferredOutcomeScheduler.start();
+  }
+  try {
+    const precogCal = defaultPreCognitiveHost.calibrateFromDatabase(getDatabase());
+    if (precogCal.calibrated) {
+      console.log(`[precognitive-host] startup calibrated wake threshold: ${precogCal.wakeThresholdMs}ms (${precogCal.sampleCount} samples)`);
+    }
+  } catch (err) {
+    console.warn("[precognitive-host] startup calibration skipped:", err instanceof Error ? err.message : err);
   }
 }
 
