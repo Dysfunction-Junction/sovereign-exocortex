@@ -4,7 +4,7 @@ vi.mock("./config", () => ({
   getConnectionTargets: vi.fn().mockResolvedValue([{ baseUrl: "http://pc:1", token: "t", mode: "lan" }]),
 }));
 
-import { getPendingProposals, postPushToken, submitShadowLabel, postApprovalKey } from "./api";
+import { getPendingProposals, getPendingShadowProposals, postPushToken, submitShadowLabel, postApprovalKey } from "./api";
 
 const fetchMock = vi.fn();
 beforeEach(() => {
@@ -73,5 +73,33 @@ describe("api contracts", () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse(init.body).attestation_chain).toEqual(["x"]);
     expect(init.headers["X-Enroll-Token"]).toBe("enroll");
+  });
+
+  it("getPendingProposals({ includeShadow: true }) appends include_shadow=1 and marks shadow proposals", async () => {
+    fetchMock.mockResolvedValue(
+      json({
+        ok: true,
+        proposals: [
+          { proposalId: "sh_1", candidateId: "c", summary: "s", riskLevel: "low", requiresBiometric: true, approvalNonce: "n", expiresAt: 5, shadow: true },
+        ],
+      })
+    );
+    const out = await getPendingProposals({ includeShadow: true });
+    expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/proposals/pending?include_shadow=1");
+    expect(out[0].shadow).toBe(true);
+  });
+
+  it("getPendingShadowProposals calls /v3/shadow/pending and marks shadow: true", async () => {
+    fetchMock.mockResolvedValue(
+      json({
+        ok: true,
+        proposals: [
+          { proposalId: "sh_2", candidateId: "c", summary: "s", riskLevel: "low", requiresBiometric: true, approvalNonce: "n", expiresAt: 5 },
+        ],
+      })
+    );
+    const out = await getPendingShadowProposals();
+    expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/shadow/pending");
+    expect(out[0].shadow).toBe(true);
   });
 });

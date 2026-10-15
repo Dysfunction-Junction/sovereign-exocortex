@@ -346,6 +346,7 @@ export interface PendingProposal {
   approvalNonce: string;
   expiresAt: number;
   actionPayload?: Record<string, unknown>;
+  shadow?: boolean;
 }
 
 function isPendingProposal(p: unknown): p is PendingProposal {
@@ -361,8 +362,9 @@ function isPendingProposal(p: unknown): p is PendingProposal {
 }
 
 /** Proposals the daemon surfaced to this device that are still awaiting approval. */
-export async function getPendingProposals(): Promise<PendingProposal[]> {
-  const res = await authedFetch("/v3/proposals/pending");
+export async function getPendingProposals(options?: { includeShadow?: boolean }): Promise<PendingProposal[]> {
+  const url = options?.includeShadow ? "/v3/proposals/pending?include_shadow=1" : "/v3/proposals/pending";
+  const res = await authedFetch(url);
   if (!res.ok) throw new Error(`Pending proposals fetch failed: HTTP ${res.status}`);
   const body = await res.json().catch(() => null);
   if (!Array.isArray(body?.proposals)) return [];
@@ -370,6 +372,21 @@ export async function getPendingProposals(): Promise<PendingProposal[]> {
     ...p,
     summary: typeof p.summary === "string" ? p.summary : "",
     requiresBiometric: p.requiresBiometric === true,
+    shadow: p.shadow === true,
+  }));
+}
+
+/** Dedicated fetcher for un-labeled shadow proposals from SQLite. */
+export async function getPendingShadowProposals(): Promise<PendingProposal[]> {
+  const res = await authedFetch("/v3/shadow/pending");
+  if (!res.ok) throw new Error(`Pending shadow proposals fetch failed: HTTP ${res.status}`);
+  const body = await res.json().catch(() => null);
+  if (!Array.isArray(body?.proposals)) return [];
+  return body.proposals.filter(isPendingProposal).map((p: PendingProposal) => ({
+    ...p,
+    summary: typeof p.summary === "string" ? p.summary : "",
+    requiresBiometric: p.requiresBiometric === true,
+    shadow: true,
   }));
 }
 

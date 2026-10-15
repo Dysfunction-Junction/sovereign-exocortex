@@ -257,6 +257,118 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
     assert.equal(approveAttempt.ok, false);
     assert.equal(approveAttempt.automated_verdict, "BREAKER_TRIPPED_PRECISION_LOW");
     assert.equal(approveAttempt.breaker_tripped, true);
+
+    // 9. Test GET /v3/shadow/pending and auto-advance on shadow label ingestion
+    memoryDb.insertProposal({
+      proposal_id: "prop_shadow_pending_test",
+      created_seq: eventRes.event.seq,
+      invariant_id: null,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "Shadow candidate for mobile quick-labeling",
+      action: JSON.stringify({ target: "cache_clean" }),
+      action_hash: new Uint8Array([4, 5, 6]),
+      efe: 0.8,
+      risk_term: 0.2,
+      ambiguity_term: 0.05,
+      state: "SURFACED",
+      shadow: 1,
+      expires_at: Date.now() + 3600000,
+      updated_at: Date.now(),
+    });
+
+    // Verify /v3/shadow/pending requires approval:write or admin scope
+    const unprivilegedRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(unprivilegedRes.status, 403);
+
+    memoryDb.grantDeviceScope("dev_phone_user", "approval:write");
+    const pendingShadowRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(pendingShadowRes.status, 200);
+    const pendingShadowData = await pendingShadowRes.json();
+    assert.equal(pendingShadowData.ok, true);
+    const foundShadow = pendingShadowData.proposals.find((p: any) => p.proposalId === "prop_shadow_pending_test");
+    assert.ok(foundShadow, "expected prop_shadow_pending_test in /v3/shadow/pending");
+    assert.equal(foundShadow.shadow, true);
+    assert.equal(foundShadow.riskLevel, "low");
+
+    // Also test GET /v3/proposals/pending?include_shadow=1 (requires approval:write scope)
+    memoryDb.grantDeviceScope("dev_phone_user", "approval:write");
+    const pendingMergedRes = await fetch(`${baseUrl}/v3/proposals/pending?include_shadow=1`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(pendingMergedRes.status, 200);
+    const pendingMergedData = await pendingMergedRes.json();
+    assert.ok(pendingMergedData.proposals.some((p: any) => p.proposalId === "prop_shadow_pending_test"));
+
+    // Labeling it wanted should advance state to APPROVED and remove from pending
+    const labelShadowRes = await fetch(`${baseUrl}/v3/shadow/labels`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        proposal_id: "prop_shadow_pending_test",
+        label: "wanted",
+        source: "tap",
+        latency_ms: 450,
+      }),
+    });
+    assert.equal(labelShadowRes.status, 200);
+    assert.equal(memoryDb.getProposal("prop_shadow_pending_test")?.state, "APPROVED");
+
+    // Must no longer appear in /v3/shadow/pending
+    const pendingAfterLabelRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    const pendingAfterLabelData = await pendingAfterLabelRes.json();
+    assert.ok(!pendingAfterLabelData.proposals.some((p: any) => p.proposalId === "prop_shadow_pending_test"));
+
+    // Verify non-shadow proposal (shadow: 0) is never leaked in shadow pending endpoints,
+    // and labeling a non-shadow row does not advance its state.
+    memoryDb.insertProposal({
+      proposal_id: "prop_live_control",
+      created_seq: eventRes.event.seq,
+      invariant_id: null,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "Live control proposal",
+      action: JSON.stringify({ cmd: "restart" }),
+      action_hash: new Uint8Array([99]),
+      efe: 1.0,
+      risk_term: 0.1,
+      ambiguity_term: 0.05,
+      state: "SURFACED",
+      shadow: 0,
+      expires_at: now + 3600000,
+      updated_at: now,
+    });
+
+    const pendingShadowCheck = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    const pendingShadowCheckData = await pendingShadowCheck.json();
+    assert.ok(!pendingShadowCheckData.proposals.some((p: any) => p.proposalId === "prop_live_control"));
+
+    const labelLiveRes = await fetch(`${baseUrl}/v3/shadow/labels`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        proposal_id: "prop_live_control",
+        label: "wanted",
+        source: "tap",
+        latency_ms: 100,
+      }),
+    });
+    assert.equal(labelLiveRes.status, 200);
+    // Non-shadow proposal state MUST remain SURFACED (never advanced via shadow labels)
+    assert.equal(memoryDb.getProposal("prop_live_control")?.state, "SURFACED");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

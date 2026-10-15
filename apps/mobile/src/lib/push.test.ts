@@ -1,3 +1,10 @@
+vi.mock("./proposals", () => ({
+  proposalManager: {
+    get: vi.fn(),
+    labelWanted: vi.fn(),
+    labelNotWanted: vi.fn(),
+  },
+}));
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Handler = (arg: any) => void;
@@ -88,5 +95,26 @@ describe("push (P6b)", () => {
     expect(isProposalPush({ type: "proposal" })).toBe(true);
     expect(isProposalPush({ type: "x" })).toBe(false);
     expect(isProposalPush(undefined)).toBe(false);
+  });
+
+  it("triggers labelWanted or labelNotWanted on notification quick action", async () => {
+    const { proposalManager } = await import("./proposals");
+    const onProposal = vi.fn();
+    await registerPush(onProposal);
+
+    handlers.pushNotificationActionPerformed({
+      actionId: "wanted",
+      notification: { data: { type: "proposal", proposal_id: "p_quick_1" } },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(proposalManager.labelWanted).toHaveBeenCalledWith("p_quick_1");
+    expect(onProposal).toHaveBeenCalled();
+
+    handlers.pushNotificationActionPerformed({
+      actionId: "not_wanted",
+      notification: { data: { type: "proposal", proposal_id: "p_quick_2" } },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(proposalManager.labelNotWanted).toHaveBeenCalledWith("p_quick_2", expect.any(String));
   });
 });

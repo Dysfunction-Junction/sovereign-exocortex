@@ -116,10 +116,11 @@ export interface PendingProposal {
   candidateId: string;
   summary: string;
   riskLevel: "low" | "medium" | "high";
-  requiresBiometric: true;
+  requiresBiometric: boolean;
   approvalNonce: string;
   expiresAt: number;
   actionPayload?: Record<string, unknown>;
+  shadow?: boolean;
 }
 
 export async function buildPendingProposals(

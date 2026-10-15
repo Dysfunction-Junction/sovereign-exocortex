@@ -111,13 +111,24 @@ export async function signApproval(p: {
  * Prompts for a strong biometric and signs (deviceId, proposalId, label, nonce, ts) so the daemon can count the
  * label as a single-use human tap. Throws on any failure (the caller decides whether to fall back to an unsigned label).
  */
-export async function signLabel(p: { proposalId: string; label: string }): Promise<LabelAttestation> {
+export async function signLabel(
+  p: { proposalId: string; label: string },
+  options?: { title?: string; subtitle?: string }
+): Promise<LabelAttestation> {
   const deviceId = await getDeviceId();
   const ts = Date.now();
   const nonce = createLabelNonce();
   const message = labelMessage({ deviceId, ...p, nonce }, ts);
+  const defaultTitle = p.label === "wanted" ? "Confirm Wanted" : "Confirm dismiss";
+  const defaultSubtitle = p.label === "wanted"
+    ? "Authenticate to confirm positive label"
+    : "Authenticate to confirm this choice";
   const { signatureB64 } = await callNative(() =>
-    ApprovalKey.sign({ message, title: "Confirm dismiss", subtitle: "Authenticate to confirm this choice" })
+    ApprovalKey.sign({
+      message,
+      title: options?.title ?? defaultTitle,
+      subtitle: options?.subtitle ?? defaultSubtitle,
+    })
   );
   return { v: 1, method: "biometric", ts, sig: signatureB64, nonce };
 }

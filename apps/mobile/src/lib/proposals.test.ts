@@ -209,10 +209,14 @@ describe("proposalManager", () => {
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
     expect(proposalManager.getPending().length).toBe(0);
     expect(approvalKey.signLabel).toHaveBeenCalledWith({ proposalId: baseProposal.proposalId, label: "not_wanted" });
-    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", {
-      source: "tap",
-      attestation: LABEL_ATTESTATION,
-    });
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "not_wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+      })
+    );
   });
 
   it("still rejects but sends the label unsigned (inferred) when the dismiss biometric is cancelled", async () => {
@@ -225,10 +229,14 @@ describe("proposalManager", () => {
     const result = await proposalManager.reject(baseProposal.proposalId);
     expect(result.ok).toBe(true);
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
-    expect(api.submitShadowLabel).toHaveBeenCalledWith(baseProposal.proposalId, "not_wanted", {
-      source: "inferred",
-      attestation: undefined,
-    });
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "not_wanted",
+      expect.objectContaining({
+        source: "inferred",
+        attestation: undefined,
+      })
+    );
   });
   it("locks the proposal in flight during reject so a concurrent approve cannot submit the same nonce", async () => {
     let resolveApi!: (val: any) => void;
@@ -270,5 +278,119 @@ describe("proposalManager", () => {
 
     await expect(proposalManager.reject(baseProposal.proposalId)).rejects.toThrow("network down");
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
+  });
+
+  it("labelWanted submits signed wanted label with biometric attestation", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelWanted(baseProposal.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("approved");
+    expect(approvalKey.signLabel).toHaveBeenCalledWith({ proposalId: baseProposal.proposalId, label: "wanted" });
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+        latencyMs: expect.any(Number),
+      })
+    );
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("approved");
+  });
+
+  it("labelWanted cancels cleanly when biometric prompt is cancelled", async () => {
+    vi.mocked(approvalKey.signLabel).mockRejectedValueOnce(
+      new approvalKey.ApprovalUnavailableError("user cancelled", "CANCELLED")
+    );
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelWanted(baseProposal.proposalId);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("cancelled");
+    expect(api.submitShadowLabel).not.toHaveBeenCalled();
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("pending");
+  });
+
+  it("labelWanted falls back to inferred when biometric key is not registered", async () => {
+    vi.mocked(approvalKey.signLabel).mockRejectedValueOnce(
+      new approvalKey.ApprovalUnavailableError("No approval key registered", "NO_KEY")
+    );
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelWanted(baseProposal.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "wanted",
+      expect.objectContaining({
+        source: "inferred",
+        attestation: undefined,
+      })
+    );
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("approved");
+  });
+
+  it("labelNotWanted submits signed not_wanted label directly without network/approve", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelNotWanted(baseProposal.proposalId, "Not needed");
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "not_wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+        latencyMs: expect.any(Number),
+      })
+    );
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
+  });
+
+  it("approve() automatically delegates to labelWanted when proposal has shadow: true", async () => {
+    const shadowProp: IncomingProposal = {
+      ...baseProposal,
+      proposalId: "prop_shadow_123",
+      shadow: true,
+    };
+    proposalManager.ingestProposal(shadowProp);
+    const result = await proposalManager.approve(shadowProp.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("approved");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      shadowProp.proposalId,
+      "wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+      })
+    );
+  });
+
+  it("reject() automatically delegates to labelNotWanted when proposal has shadow: true", async () => {
+    const shadowProp: IncomingProposal = {
+      ...baseProposal,
+      proposalId: "prop_shadow_456",
+      shadow: true,
+    };
+    proposalManager.ingestProposal(shadowProp);
+    const result = await proposalManager.reject(shadowProp.proposalId, "Irrelevant suggestion");
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      shadowProp.proposalId,
+      "not_wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+      })
+    );
   });
 });

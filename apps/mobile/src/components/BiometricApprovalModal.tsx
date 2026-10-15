@@ -60,7 +60,8 @@ export default function BiometricApprovalModal() {
     }
   };
 
-  const isHighRisk = active.riskLevel === "high" || active.requiresBiometric;
+  const isShadow = Boolean(active.shadow);
+  const isHighRisk = !isShadow && (active.riskLevel === "high" || active.requiresBiometric);
 
   return (
     <div
@@ -81,7 +82,7 @@ export default function BiometricApprovalModal() {
           width: "100%",
           maxWidth: "400px",
           background: "linear-gradient(145deg, #181920 0%, #101116 100%)",
-          border: isHighRisk ? "1px solid rgba(239, 68, 68, 0.4)" : "1px solid rgba(147, 51, 234, 0.4)",
+          border: isShadow ? "1px solid rgba(168, 85, 247, 0.5)" : isHighRisk ? "1px solid rgba(239, 68, 68, 0.4)" : "1px solid rgba(59, 130, 246, 0.4)",
           borderRadius: "16px",
           boxShadow: isHighRisk
             ? "0 20px 40px rgba(239, 68, 68, 0.2)"
@@ -98,12 +99,12 @@ export default function BiometricApprovalModal() {
               textTransform: "uppercase",
               padding: "4px 8px",
               borderRadius: "6px",
-              background: isHighRisk ? "rgba(239, 68, 68, 0.2)" : "rgba(59, 130, 246, 0.2)",
-              color: isHighRisk ? "#f87171" : "#60a5fa",
+              background: isShadow ? "rgba(168, 85, 247, 0.2)" : isHighRisk ? "rgba(239, 68, 68, 0.2)" : "rgba(59, 130, 246, 0.2)",
+              color: isShadow ? "#c084fc" : isHighRisk ? "#f87171" : "#60a5fa",
               letterSpacing: "0.05em",
             }}
           >
-            {isHighRisk ? "🔒 Biometric Required" : "⚡ Speculative Action"}
+            {isShadow ? "🧪 Shadow Calibration" : isHighRisk ? "🔒 Biometric Required" : "⚡ Speculative Action"}
           </span>
           <span style={{ fontSize: "12px", color: remainingSec < 15 ? "#ef4444" : "#9ca3af", fontVariantNumeric: "tabular-nums" }}>
             ⏱ {remainingSec}s TTL
@@ -171,7 +172,7 @@ export default function BiometricApprovalModal() {
               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
             }}
           >
-            {submitting ? "Verifying…" : isHighRisk ? "Authorize (1-Tap)" : "Execute Now"}
+            {submitting ? "Verifying…" : isShadow ? "Wanted (1-Tap)" : isHighRisk ? "Authorize (1-Tap)" : "Execute Now"}
           </button>
         </div>
       </div>

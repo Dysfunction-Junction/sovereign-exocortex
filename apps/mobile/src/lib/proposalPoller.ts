@@ -91,7 +91,7 @@ let shared: ProposalPoller | null = null;
 /** App-wide poller wired to the real API and proposal manager. */
 export function getProposalPoller(): ProposalPoller {
   shared ??= createProposalPoller({
-    fetchPending: getPendingProposals,
+    fetchPending: () => getPendingProposals({ includeShadow: true }),
     ingest: (p) => {
       proposalManager.ingestProposal(p);
     },

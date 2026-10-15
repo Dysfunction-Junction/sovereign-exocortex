@@ -49,8 +49,28 @@ export async function registerPush(onProposal: () => void): Promise<void> {
         if (isProposalPush(n?.data)) onProposal();
       });
       // Tapping a background notification opens the app; the resume handler polls, but poll here too.
-      await PushNotifications.addListener("pushNotificationActionPerformed", (a) => {
-        if (isProposalPush(a?.notification?.data)) onProposal();
+      await PushNotifications.addListener("pushNotificationActionPerformed", async (a) => {
+        if (!isProposalPush(a?.notification?.data)) return;
+        const data = a?.notification?.data as Record<string, unknown> | undefined;
+        const rawProposalId = data?.proposal_id;
+        const proposalId = typeof rawProposalId === "string" ? rawProposalId.trim() : "";
+        if (proposalId && (a?.actionId === "wanted" || a?.actionId === "not_wanted")) {
+          try {
+            const { proposalManager } = await import("./proposals");
+            if (typeof proposalManager.get === "function" && !proposalManager.get(proposalId)) {
+              // Cold-start / not yet ingested: poll first so the proposal is tracked
+              await Promise.resolve(onProposal());
+            }
+            if (a.actionId === "wanted") {
+              await proposalManager.labelWanted(proposalId);
+            } else {
+              await proposalManager.labelNotWanted(proposalId, "Rejected via notification quick action");
+            }
+          } catch (err) {
+            console.warn("[push] failed to handle notification quick label:", err);
+          }
+        }
+        onProposal();
       });
     }
 
@@ -61,6 +81,24 @@ export async function registerPush(onProposal: () => void): Promise<void> {
       perm = await PushNotifications.requestPermissions();
     }
     if (perm.receive !== "granted") return;
+    const pushPlugin = PushNotifications as unknown as { registerActionTypes?: (options: unknown) => Promise<void> };
+    if (typeof pushPlugin.registerActionTypes === "function") {
+      try {
+        await pushPlugin.registerActionTypes({
+          types: [
+            {
+              id: "PROPOSAL_ACTIONS",
+              actions: [
+                { id: "wanted", title: "Wanted", foreground: true },
+                { id: "not_wanted", title: "Not Wanted", destructive: true, foreground: true },
+              ],
+            },
+          ],
+        });
+      } catch {
+        // Soft-fail on platforms/mock environments without registerActionTypes
+      }
+    }
     await PushNotifications.register();
   } catch {
     // never let push setup break the app

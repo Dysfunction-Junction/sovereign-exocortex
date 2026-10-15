@@ -18,6 +18,7 @@ import {
   defaultPendingFetcher,
   defaultSpeculator,
   type PendingFetcher,
+  type PendingProposal,
   type Speculator,
 } from "./pending-proposals.js";
 import { defaultPushNotifier } from "./push-notifier.js";
@@ -940,6 +941,14 @@ export const server = createServer(async (req, res) => {
         latencyMs,
       });
 
+      if (proposal.shadow === 1 && (proposal.state === "SURFACED" || proposal.state === "STAGED")) {
+        try {
+          db.updateProposalState(proposalId, label === "wanted" ? "APPROVED" : "REJECTED");
+        } catch (stateErr) {
+          console.warn(`[shadow-label] could not advance proposal state for ${proposalId}:`, stateErr);
+        }
+      }
+
       sendJson(res, 200, {
         ok: true,
         proposal_id: result.proposalId,
@@ -1063,6 +1072,50 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): PendingProposal[] {
+  const rows = db.listProposalsByState(["SURFACED", "STAGED"], now);
+  return rows
+    .filter((r) => r.shadow === 1 && r.expires_at > now && db.getShadowLabels(r.proposal_id).length === 0)
+    .map((r) => {
+      let actionPayload: Record<string, unknown> = {};
+      try {
+        const p = JSON.parse(r.action);
+        if (p && typeof p === "object" && !Array.isArray(p)) actionPayload = p;
+      } catch {}
+      return {
+        proposalId: r.proposal_id,
+        candidateId: r.invariant_id ?? r.policy_type,
+        summary: r.summary,
+        riskLevel: r.risk_term < 0.33 ? "low" : r.risk_term < 0.66 ? "medium" : "high",
+        requiresBiometric: false,
+        approvalNonce: "shadow-" + r.proposal_id,
+        expiresAt: r.expires_at,
+        actionPayload,
+        shadow: true,
+      };
+    });
+}
+
+  if (method === "GET" && (url.pathname === "/v3/shadow/pending" || url.pathname === "/v3/shadow/proposals")) {
+    try {
+      const db = getDatabase();
+      const dev = db.getDevice(auth.deviceId);
+      if (!dev || dev.revoked_at) {
+        sendJson(res, 403, { error: `caller device not enrolled or revoked: ${auth.deviceId}` });
+        return;
+      }
+      if (!dev.scopes.includes("approval:write") && !dev.scopes.includes("admin") && !dev.scopes.includes("admin:read")) {
+        sendJson(res, 403, { error: "forbidden: requires approval:write or admin:read scope" });
+        return;
+      }
+      const proposals = getUnlabeledShadowProposals(db, Date.now());
+      sendJson(res, 200, { ok: true, proposals });
+    } catch (err) {
+      sendInternalError(res, "failed to list shadow proposals", err);
+    }
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v3/proposals/pending") {
     try {
       const db = getDatabase();
@@ -1075,7 +1128,16 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 403, { error: "forbidden: requires approval:write or admin:read scope" });
         return;
       }
-      sendJson(res, 200, { ok: true, proposals: await buildPendingProposals(db, pendingFetcher, Date.now(), pendingSpeculator) });
+      const live = await buildPendingProposals(db, pendingFetcher, Date.now(), pendingSpeculator);
+      const includeShadow = url.searchParams.get("include_shadow") === "1" || url.searchParams.get("shadow") === "1";
+      if (!includeShadow) {
+        sendJson(res, 200, { ok: true, proposals: live });
+        return;
+      }
+      const shadowProposals = getUnlabeledShadowProposals(db, Date.now());
+      const liveIds = new Set(live.map((p) => p.proposalId));
+      const combined = [...live, ...shadowProposals.filter((sp) => !liveIds.has(sp.proposalId))];
+      sendJson(res, 200, { ok: true, proposals: combined });
     } catch (err) {
       sendInternalError(res, "failed to list pending proposals", err);
     }
