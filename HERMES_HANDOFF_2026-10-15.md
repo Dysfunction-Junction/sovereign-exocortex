@@ -84,3 +84,34 @@ Completed the 3 high-priority calibration and linkage objectives for the Soverei
    - Full monorepo test suite: `pnpm -r test` passed 100% (161 daemon tests across 9 suites, 128 mobile tests, all core/mesh/triad tests).
    - Triad Advisory Review: Two rounds of deep critique with Claude/Codex Triad Advisor (`advisor.py`), resolving all blockers, SQL window functions, LRU eviction, and state consistency.
 
+---
+
+## 5. Mobile Obsidian Glass Live Dynamic Wake Integration
+
+### Commit: `681c757` — `feat(mobile): integrate live dynamic wake anticipation ring in obsidian glass`
+- Remote: Synced and pushed to `origin/main` (`9112f9e..681c757`).
+
+### Implemented Capabilities:
+1. **PreCognitive API Client SDK (`apps/mobile/src/lib/api.ts`):**
+   - Added typed interfaces: `PreCognitiveStatus`, `PreCognitiveTelemetryPayload`, `PreCognitiveCalibrateResult`.
+   - Client functions: `getPrecognitiveStatus()`, `sendPrecognitiveTelemetry()`, `calibratePrecognitive()`.
+   - Strictly routed under `/v3/` prefix to the remote exocortex gateway, preventing Plan A LAN proxy 404s.
+   - Comprehensive unit test coverage in `apps/mobile/src/lib/api.test.ts`.
+
+2. **Obsidian Glass Anticipation Ring (`apps/mobile/src/components/AnticipationRing.tsx`):**
+   - SVG circle gauge (`r=70`, circumference `439.82`) with animated stroke dashoffset visualizing live readiness (`CASUAL` in emerald breath pulse, `PREPARED` in cyan/blue active pulse, `HIGH_URGENCY` in amber/violet hyper-pulse).
+   - Live dynamic wake quantile (`p20`) latency display and source attribution (`device`, `global`, `default`).
+   - Hesitation score tracking and readiness percentage gauge.
+   - Live touch dwell probe target (`.dwell-probe-target`) with `touch-action: none` and gesture discrimination: `pointerup` commits dwell duration; `pointercancel` (scroll gestures) and `pointerleave` cleanly discard without polluting quantile calibration data.
+   - Quick action controls: Probe Pulse (sending `synthetic: true` marker to avoid polluting empirical quantiles) and Calibrate button with auto-refresh.
+   - Monotonic request-sequence tracking (`reqIdRef`) preventing stale background poll responses from overwriting newer telemetry.
+   - Visibility-aware polling (paused when backgrounded) and separate poll vs action error handling.
+   - Mounted seamlessly on the mobile Status page (`apps/mobile/src/pages/Status.tsx`) below the hero connection card.
+
+3. **Verification & Testing:**
+   - Monorepo TypeScript check: `pnpm -r typecheck` passed (0 errors across 11 packages).
+   - Mobile Unit Tests: 18 test files / 143 unit tests passing (100%), including 11 tests in `AnticipationRing.test.tsx` and 12 tests in `api.test.ts`.
+   - Monorepo Test Suite: `pnpm -r test` passed 100% across all 11 workspace packages.
+   - Triad Advisory Review: Diff reviewed and optimized via `advisor.py` (resolving SVG transforms, touch-action none, monotonic seq IDs, and gesture cancellations).
+
+
