@@ -573,3 +573,62 @@ export async function calibratePrecognitive(minSamples?: number): Promise<PreCog
   if (!body.result) throw new Error("Malformed precognitive calibration response");
   return body.result;
 }
+
+export interface LivingGraphEntity {
+  id: string;
+  name: string;
+  type: string;
+  activation?: number;
+}
+
+export interface LivingGraphContextData {
+  eventId: string;
+  timestamp: number;
+  matchedEntities: LivingGraphEntity[];
+  activatedEntities: LivingGraphEntity[];
+  subgraph?: {
+    entities: LivingGraphEntity[];
+    edges: Array<{ source: string; target: string; type: string; weight: number }>;
+  };
+  predictedNextStates: string[];
+  recommendedActions: string[];
+}
+
+export interface LivingGraphStatus {
+  cognitiveMode: string;
+  entityCount: number;
+  edgeCount: number;
+  context: LivingGraphContextData | null;
+  scopeRequired?: string;
+}
+
+export async function getLivingGraphContext(): Promise<LivingGraphStatus> {
+  const res = await authedFetch("/v3/world-model/graph/context");
+  if (res.status === 403) {
+    return {
+      cognitiveMode: "UNKNOWN",
+      entityCount: 0,
+      edgeCount: 0,
+      context: null,
+      scopeRequired: "admin:read",
+    };
+  }
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Graph context failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as {
+    ok?: boolean;
+    cognitiveMode?: string;
+    entityCount?: number;
+    edgeCount?: number;
+    context?: LivingGraphContextData | null;
+  };
+  return {
+    cognitiveMode: body.cognitiveMode ?? "NORMAL",
+    entityCount: body.entityCount ?? 0,
+    edgeCount: body.edgeCount ?? 0,
+    context: body.context ?? null,
+  };
+}
+

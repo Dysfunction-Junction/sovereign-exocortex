@@ -252,4 +252,94 @@ describe("AnticipationRing component", () => {
       vi.useRealTimers();
     }
   });
+
+  it("handles guided 5-step calibration flow and auto-triggers calibration on 5th step", async () => {
+    let mockTime = 1_000_000;
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => mockTime);
+
+    try {
+      mockSendPrecognitiveTelemetry.mockResolvedValue(SAMPLE_STATUS);
+      mockCalibratePrecognitive.mockResolvedValue({
+        wakeThresholdMs: 330,
+        sampleCount: 5,
+        calibrated: true,
+        minSamples: 5,
+      });
+
+      render(<AnticipationRing initialStatus={SAMPLE_STATUS} autoPoll={false} />);
+
+      const guidedBtn = screen.getByTestId("guided-calibrate-btn");
+      expect(guidedBtn.textContent).toBe("Guided Calibrate (5x)");
+
+      fireEvent.click(guidedBtn);
+      expect(screen.getByTestId("guided-calibrate-btn").textContent).toBe("Cancel Guided (0/5)");
+      expect(screen.getByText("Guided Calibration: Sample 1 of 5 (Hold target ~250ms)")).toBeTruthy();
+
+      const probeTarget = screen.getByTestId("dwell-probe-target");
+
+      // Perform 4 valid dwells (~250ms each)
+      for (let i = 0; i < 4; i++) {
+        mockTime += 100;
+        fireEvent.pointerDown(probeTarget);
+        mockTime += 250;
+        fireEvent.pointerUp(probeTarget);
+        await waitFor(() => {
+          expect(mockSendPrecognitiveTelemetry).toHaveBeenCalledTimes(i + 1);
+        });
+      }
+
+      expect(screen.getByText("Guided Calibration: Sample 5 of 5 (Hold target ~250ms)")).toBeTruthy();
+      expect(screen.getByTestId("guided-calibrate-btn").textContent).toBe("Cancel Guided (4/5)");
+
+      // 5th dwell triggers calibration
+      mockTime += 100;
+      fireEvent.pointerDown(probeTarget);
+      mockTime += 250;
+      fireEvent.pointerUp(probeTarget);
+
+      await waitFor(() => {
+        expect(mockSendPrecognitiveTelemetry).toHaveBeenCalledTimes(5);
+        expect(mockCalibratePrecognitive).toHaveBeenCalledWith(5);
+        expect(screen.getByText(/Calibration complete: 330ms/)).toBeTruthy();
+        expect(screen.getByTestId("guided-calibrate-btn").textContent).toBe("Guided Calibrate (5x)");
+      });
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it("guided mode validates dwell duration window (<80ms too brief, >800ms too long)", async () => {
+    let mockTime = 2_000_000;
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => mockTime);
+
+    try {
+      render(<AnticipationRing initialStatus={SAMPLE_STATUS} autoPoll={false} />);
+
+      const guidedBtn = screen.getByTestId("guided-calibrate-btn");
+      fireEvent.click(guidedBtn);
+
+      const probeTarget = screen.getByTestId("dwell-probe-target");
+
+      // 1. Touch too brief (50ms < 80ms)
+      mockTime += 100;
+      fireEvent.pointerDown(probeTarget);
+      mockTime += 50;
+      fireEvent.pointerUp(probeTarget);
+
+      expect(mockSendPrecognitiveTelemetry).not.toHaveBeenCalled();
+      expect(screen.getByText("Touch too brief (50ms). Aim for ~250ms and try again.")).toBeTruthy();
+
+      // 2. Touch held too long (950ms > 800ms)
+      mockTime += 100;
+      fireEvent.pointerDown(probeTarget);
+      mockTime += 950;
+      fireEvent.pointerUp(probeTarget);
+
+      expect(mockSendPrecognitiveTelemetry).not.toHaveBeenCalled();
+      expect(screen.getByText("Touch held too long (950ms). Aim for ~250ms and try again.")).toBeTruthy();
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
 });
+

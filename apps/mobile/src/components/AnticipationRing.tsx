@@ -31,6 +31,9 @@ export function AnticipationRing({
   const [probing, setProbing] = useState(false);
   const [calibrating, setCalibrating] = useState(false);
   const [calibrationMsg, setCalibrationMsg] = useState<string | null>(null);
+  const [guidedMode, setGuidedMode] = useState<boolean>(false);
+  const [guidedStep, setGuidedStep] = useState<number>(0);
+  const guidedRef = useRef({ on: false, step: 0 });
 
   const holdStartRef = useRef<number | null>(null);
   const holdTimerRef = useRef<number | null>(null);
@@ -127,6 +130,18 @@ export function AnticipationRing({
     const dwellMs = Math.max(1, Date.now() - start);
     setLastDwellReported(dwellMs);
 
+    // If in guided mode, enforce valid calibration dwell window
+    if (guidedRef.current.on) {
+      if (dwellMs < 80) {
+        setCalibrationMsg(`Touch too brief (${dwellMs}ms). Aim for ~250ms and try again.`);
+        return;
+      }
+      if (dwellMs > 800) {
+        setCalibrationMsg(`Touch held too long (${dwellMs}ms). Aim for ~250ms and try again.`);
+        return;
+      }
+    }
+
     try {
       setActionError(null);
       const updated = await sendPrecognitiveTelemetry({
@@ -138,6 +153,39 @@ export function AnticipationRing({
       if (isMountedRef.current) {
         setStatus(updated);
         onChangeRef.current?.(updated);
+
+        if (guidedRef.current.on) {
+          const nextStep = ++guidedRef.current.step;
+          if (nextStep >= 5) {
+            guidedRef.current = { on: false, step: 0 };
+            setGuidedMode(false);
+            setGuidedStep(0);
+            setCalibrationMsg("5 samples recorded! Evaluating empirical wake quantile...");
+            let calSuccess = false;
+            try {
+              setCalibrating(true);
+              const calResult = await calibratePrecognitive(5);
+              if (calResult.calibrated) {
+                setCalibrationMsg(`Calibration complete: ${calResult.wakeThresholdMs}ms (${calResult.sampleCount} samples)`);
+                calSuccess = true;
+              } else {
+                setCalibrationMsg(`Not enough empirical variance (${calResult.sampleCount}/5 samples); threshold unchanged`);
+              }
+            } catch (calErr) {
+              setCalibrationMsg(`Calibration error: ${calErr instanceof Error ? calErr.message : String(calErr)}`);
+            } finally {
+              setCalibrating(false);
+            }
+            if (calSuccess) {
+              try {
+                await fetchStatus(false);
+              } catch {}
+            }
+          } else {
+            setGuidedStep(nextStep);
+            setCalibrationMsg(`Sample ${nextStep} of 5 recorded (${dwellMs}ms). Hold target ${5 - nextStep} more times.`);
+          }
+        }
       }
     } catch (err) {
       if (isMountedRef.current) {
@@ -398,7 +446,11 @@ export function AnticipationRing({
         data-testid="dwell-probe-target"
       >
         <span>
-          {isHolding
+          {guidedMode
+            ? isHolding
+              ? `Recording Dwell: ${holdDurationMs}ms...`
+              : `Guided Calibration: Sample ${guidedStep + 1} of 5 (Hold target ~250ms)`
+            : isHolding
             ? `Recording Dwell: ${holdDurationMs}ms...`
             : lastDwellReported !== null
             ? `Last probe dwell: ${lastDwellReported}ms (Hold to test)`
@@ -413,6 +465,7 @@ export function AnticipationRing({
           marginTop: "16px",
           width: "100%",
           justifyContent: "center",
+          flexWrap: "wrap",
         }}
       >
         <button
@@ -423,6 +476,27 @@ export function AnticipationRing({
           data-testid="probe-pulse-btn"
         >
           {probing ? "Probing..." : "Probe Pulse"}
+        </button>
+        <button
+          type="button"
+          className="secondary pill"
+          onClick={() => {
+            if (guidedRef.current.on) {
+              guidedRef.current = { on: false, step: 0 };
+              setGuidedMode(false);
+              setGuidedStep(0);
+              setCalibrationMsg(null);
+            } else {
+              guidedRef.current = { on: true, step: 0 };
+              setGuidedMode(true);
+              setGuidedStep(0);
+              setCalibrationMsg("Guided mode: Hold the probe target 5 times (~200-300ms each) to empirically calibrate wake threshold.");
+            }
+          }}
+          disabled={calibrating}
+          data-testid="guided-calibrate-btn"
+        >
+          {guidedMode ? `Cancel Guided (${guidedStep}/5)` : "Guided Calibrate (5x)"}
         </button>
         <button
           type="button"

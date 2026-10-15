@@ -25,6 +25,7 @@ import {
 import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
+import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -829,11 +830,20 @@ export const server = createServer(async (req, res) => {
 
       const lastContext = defaultWorldModelHost.getLastGraphContext(auth.deviceId);
       if (!lastContext) {
-        sendJson(res, 200, { ok: true, context: null });
+        sendJson(res, 200, {
+          ok: true,
+          cognitiveMode: defaultWorldModelHost.cognitiveGate.mode,
+          entityCount: defaultWorldModelHost.lifeGraph.entityCount,
+          edgeCount: defaultWorldModelHost.lifeGraph.edgeCount,
+          context: null,
+        });
         return;
       }
       sendJson(res, 200, {
         ok: true,
+        cognitiveMode: defaultWorldModelHost.cognitiveGate.mode,
+        entityCount: defaultWorldModelHost.lifeGraph.entityCount,
+        edgeCount: defaultWorldModelHost.lifeGraph.edgeCount,
         context: {
           eventId: lastContext.eventId,
           timestamp: lastContext.timestamp,
@@ -981,6 +991,67 @@ export const server = createServer(async (req, res) => {
       });
     } catch (err) {
       sendInternalError(res, "failed to ingest precognitive telemetry", err);
+    }
+    return;
+  }
+
+  // --- Databank Autonomic Archival Endpoints ---
+
+  if (method === "GET" && url.pathname === "/v3/databank/status") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "telemetry:write", "approval:write", "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: databank status requires telemetry:write, approval:write, admin, or admin:read scope" });
+        return;
+      }
+      const status = await defaultDatabankArchivalHost.getStatus();
+      sendJson(res, 200, { ok: true, status });
+    } catch (err) {
+      sendInternalError(res, "failed to get databank status", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/databank/archive") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: manual databank archive requires admin:write scope" });
+        return;
+      }
+      const raw = await readBody(req, 16 * 1024);
+      let olderThanDays: number | undefined;
+      let prune: boolean | undefined;
+      if (raw.length > 0) {
+        try {
+          const body = JSON.parse(raw);
+          if (typeof body.older_than_days === "number" && body.older_than_days >= 0) {
+            olderThanDays = body.older_than_days;
+          }
+          if (typeof body.prune === "boolean") {
+            prune = body.prune;
+          }
+        } catch {
+          sendJson(res, 400, { error: "invalid JSON body" });
+          return;
+        }
+      }
+      const result = await defaultDatabankArchivalHost.runArchival({ olderThanDays, prune });
+      if (!result.ok) {
+        if (result.reason === "already_running") {
+          sendJson(res, 409, { ok: false, error: "archival already in progress" });
+          return;
+        }
+        if (result.reason === "locked-or-unreachable" || result.reason === "unauthorized") {
+          sendJson(res, 503, { ok: false, error: `vault unavailable: ${result.reason}` });
+          return;
+        }
+        sendJson(res, 500, { ok: false, error: result.reason });
+        return;
+      }
+      sendJson(res, 200, { ok: true, result });
+    } catch (err) {
+      sendInternalError(res, "failed to trigger databank archival", err);
     }
     return;
   }
@@ -1623,6 +1694,9 @@ if (process.env.NODE_ENV !== "test") {
   }
   if (process.env.EXOCORTEX_INFER_SCHEDULE !== "0") {
     defaultInferredOutcomeScheduler.start();
+  }
+  if (process.env.EXOCORTEX_ARCHIVAL_SCHEDULE !== "0") {
+    defaultDatabankArchivalHost.start();
   }
   try {
     const precogCal = defaultPreCognitiveHost.calibrateFromDatabase(getDatabase());

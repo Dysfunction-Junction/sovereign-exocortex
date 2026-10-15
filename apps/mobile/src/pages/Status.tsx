@@ -13,6 +13,7 @@ import { Switch } from "../components/Switch";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
 import { AnticipationRing } from "../components/AnticipationRing";
+import { AmbientGraphHud } from "../components/AmbientGraphHud";
 
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
 
@@ -366,6 +367,7 @@ export default function Status() {
           </div>
 
           <AnticipationRing />
+          <AmbientGraphHud />
 
           {!contextEnabled && (
             <p className="hint setup-note">

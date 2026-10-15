@@ -10,7 +10,8 @@
     "./client": "./src/pieces.ts",
     "./server": "./src/server.ts",
     "./embeddings": "./src/embeddings.ts",
-    "./archive-client": "./src/archive-client.ts"
+    "./archive-client": "./src/archive-client.ts",
+    "./memories": "./src/memories.ts"
   },
   "scripts": {
     "build": "tsc",
