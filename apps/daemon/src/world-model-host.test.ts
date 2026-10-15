@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { defaultWorldModelHost, WorldModelHost } from "./world-model-host.js";
+import { ExocortexDatabase } from "@exocortex/core/db";
+import { LearnedActiveInferenceEngine, systemObservationFromEvent, eventToObservation } from "@exocortex/world-model";
+import { ShadowRecorder, HOST_DEVICE_ID } from "./shadow-recorder.js";
+import { loadProposalPreferences } from "./proposal-preferences.js";
 
 test("WorldModelHost: singleton initialization and seeded ecosystem graph", () => {
   const host = defaultWorldModelHost;
@@ -9,6 +13,141 @@ test("WorldModelHost: singleton initialization and seeded ecosystem graph", () =
   assert.ok(status.entityCount >= 7, `Expected >= 7 entities, got ${status.entityCount}`);
   assert.ok(status.edgeCount >= 5, `Expected >= 5 edges, got ${status.edgeCount}`);
   assert.equal(status.registeredInvariantsCount >= 5, true);
+});
+
+test("WorldModelHost: explicit event actions, timestamps and confidence survive the shared live/replay mapping", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const host = WorldModelHost.createIsolatedForTest();
+    const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+    recorder.ensureHostDevice();
+    host.setShadowRecorder(recorder);
+    for (const payload of [
+      { invariantId: "inv_bridge_connected", observedState: false, confidence: 0.7, observedAt: 41,
+        factor: "link_health", observation: "ws_dropped", action: "reconnect_ws" },
+      { factor: "repo_health", observation: "tests_fail", action: "run_diagnostics" },
+      { invariantId: "inv_zero_broken_commits", observedState: true },
+      { foregroundApp: "vscode" },
+    ]) {
+      const event = db.ingestEvent(HOST_DEVICE_ID, {
+        event_id: `observation:${db.listEvents().length}`, kind: "observation", ts_device: 42, schema_ver: 1, payload,
+      }).event;
+      if (payload.confidence !== undefined) {
+        const mapped = systemObservationFromEvent(event, eventToObservation(event)!)!;
+        assert.equal(mapped.observedAt, 41);
+        assert.equal(mapped.confidence, 0.7);
+        assert.equal(mapped.metadata?.action, "reconnect_ws");
+      }
+      host.onEventAppended(event, db);
+    }
+    const replay = new LearnedActiveInferenceEngine();
+    const events = db.listEvents();
+    replay.replayEventStream(events);
+    assert.deepEqual(host.learnedEngine.exportModelParams(0), replay.exportModelParams(0));
+    assert.deepEqual(host.learnedEngine.createBeliefSnapshot(0), replay.createBeliefSnapshot(0));
+    const policiesBefore = db.listEvents({ kind: "proposal" }).length;
+    const telemetry = db.ingestEvent(HOST_DEVICE_ID, {
+      event_id: "arbitrary-telemetry", kind: "telemetry", ts_device: 43, schema_ver: 1,
+      payload: { factor: "repo_health", observation: "tests_fail" },
+    }).event;
+    host.onEventAppended(telemetry, db);
+    assert.equal(db.listEvents({ kind: "proposal" }).length, policiesBefore);
+    const before = host.learnedEngine.exportModelParams(0);
+    assert.throws(() => host.ingestObservation({
+      invariantId: "inv_clean_test_suite", observedState: false, confidence: 1, observedAt: 44,
+      metadata: { factor: "repo_health", observation: "tests_fail", action: "self_heal_restore" },
+    }), /unsupported/);
+    assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
+    assert.equal(db.listEvents({ kind: "proposal" }).length, policiesBefore);
+  } finally {
+    db.close();
+  }
+});
+
+test("WorldModelHost: verified preferences are immediate, replaceable, restart-safe and scored pre-feedback", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const host = WorldModelHost.createIsolatedForTest();
+    const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+    host.setShadowRecorder(recorder);
+    const observation = {
+      invariantId: "inv_clean_test_suite", observedState: false, confidence: 1, observedAt: Date.now(),
+    };
+    const first = host.ingestObservation(observation);
+    const firstIds = first.proposals.map((p) => p.id);
+    const label = (id: string, wanted: boolean, source = "tap") => db.recordShadowLabel({
+      proposal_id: id, label: wanted ? "wanted" : "not_wanted", actual: JSON.stringify({ source }), ts: Date.now(),
+    });
+    const eventRanking = (id: string) => {
+      const row = db.getProposal(id)!;
+      return JSON.parse(db.getEventBySeq(row.created_seq)!.payload).ranking;
+    };
+    assert.equal(eventRanking(firstIds[0]).wantedProbability, 0.5);
+    const paramsBeforeFeedback = host.learnedEngine.exportModelParams(0);
+    // A client ledger claiming tap provenance is not an authoritative label.
+    const spoof = db.ingestEvent(HOST_DEVICE_ID, {
+      event_id: "spoofed-feedback", kind: "observation", ts_device: Date.now(), schema_ver: 1,
+      payload: { proposal_id: firstIds[0], label: "wanted", source: "tap" },
+    }).event;
+    host.onEventAppended(spoof, db);
+    assert.deepEqual(host.learnedEngine.exportModelParams(0), paramsBeforeFeedback);
+    assert.equal(loadProposalPreferences(db, Date.now()).preferences.size, 0);
+    label(firstIds[0], false, "inferred");
+    assert.equal(loadProposalPreferences(db, Date.now()).preferences.size, 0);
+    label(firstIds[0], false);
+    label(firstIds[1], true);
+    const projection = loadProposalPreferences(db, Date.now());
+    assert.deepEqual(loadProposalPreferences(db, Date.now()), projection); // delivery is idempotent
+    assert.equal(projection.metrics.evaluated, 2);
+    assert.equal(projection.metrics.brier, 0.25);
+    assert.equal(projection.metrics.brierImprovement, 0);
+    assert.equal(projection.metrics.logLossImprovement, 0);
+    assert.deepEqual(host.learnedEngine.exportModelParams(0), paramsBeforeFeedback); // preference is not execution
+    const second = host.ingestObservation(observation);
+    assert.equal(second.proposals[0].category, "EPISTEMIC");
+    const secondId = second.proposals[0].id;
+    assert.equal(eventRanking(secondId).wantedProbability, 2 / 3);
+    assert.equal(eventRanking(secondId).baselinePredictor, "fixed-0.5");
+    const stored = db.getProposal(secondId)!;
+    assert.equal(stored.efe, 0.72); // legacy columns retain their utility/risk meanings
+    assert.equal(stored.risk_term, 0);
+    assert.equal(JSON.parse(stored.action).ranking, undefined);
+    label(secondId, true);
+    const metrics = host.getStatus().preferenceMetrics;
+    assert.equal(metrics.evaluated, 3);
+    assert.ok(Math.abs(metrics.brier! - (0.25 + 0.25 + 1 / 9) / 3) < 1e-12);
+    assert.ok(metrics.brierImprovement! > 0);
+    assert.ok(metrics.logLossImprovement! > 0);
+    assert.equal(eventRanking(secondId).wantedProbability, 2 / 3); // never recomputed after feedback
+    label(firstIds[1], false); // replacement, not another increment
+    const replaced = loadProposalPreferences(db, Date.now());
+    assert.deepEqual(replaced.preferences.get("inv_clean_test_suite:EPISTEMIC"), { wanted: 1, notWanted: 1 });
+    const restarted = WorldModelHost.createIsolatedForTest();
+    restarted.setShadowRecorder(new ShadowRecorder(db, { cooldownMs: 0 }));
+    assert.deepEqual(restarted.getStatus().preferenceMetrics, host.getStatus().preferenceMetrics);
+    const afterRestart = restarted.ingestObservation(observation);
+    assert.equal(afterRestart.proposals[0].category, "EPISTEMIC");
+    assert.equal(eventRanking(afterRestart.proposals[0].id).wantedProbability, 0.5);
+    assert.equal(afterRestart.proposals.find((p) => p.category === "PRAGMATIC")!.estimatedRisk, 0.05);
+    const legacy = host.activeInference.generatePolicies([host.activeInference.evaluateObservation(observation)])[0];
+    for (const [suffix, ranking] of [
+      ["missing", undefined],
+      ["invalid", { ...eventRanking(secondId), wantedProbability: 2 }],
+      ["post-feedback", { ...eventRanking(secondId), predictedAt: Date.now() + 86_400_000 }],
+    ] as const) {
+      const policy = { ...legacy, id: `${legacy.id}:${suffix}`, ranking };
+      const proposal = host.activeInference.policyToProposal(policy);
+      recorder.record(policy, proposal, host.cognitiveGate.evaluateProposal(proposal));
+      label(policy.id, true);
+    }
+    const excluded = loadProposalPreferences(db, Date.now()).metrics;
+    assert.equal(excluded.evaluated, 3);
+    assert.equal(excluded.excluded, 3);
+    assert.equal(excluded.baselineBrier, metrics.baselineBrier);
+    assert.equal(excluded.brier, metrics.brier); // same scoring population, no retroactive predictions
+  } finally {
+    db.close();
+  }
 });
 
 test("WorldModelHost: ingests telemetry and updates cognitive mode", () => {
@@ -119,5 +258,3 @@ test("WorldModelHost: rejects invalid or uncalibrated observations", () => {
   });
   assert.equal(typeof outcomeNum.surprisalNats, "number");
 });
-
-

@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { LivingLifeGraph } from './life-graph.js';
 import { ActiveInferenceEngine, type SystemObservation } from './active-inference.js';
+import { LearnedActiveInferenceEngine } from './generative-model.js';
+import { rankInferencePolicies, preferenceKey } from './policy-ranking.js';
 
 describe('ActiveInferenceEngine (Pillar 3)', () => {
   let graph: LivingLifeGraph;
@@ -14,6 +16,52 @@ describe('ActiveInferenceEngine (Pillar 3)', () => {
     graph.addEntity({ id: 'project_bear_house_classic', name: 'Bear House Classic', type: 'PROJECT' });
 
     engine = new ActiveInferenceEngine(graph);
+  });
+
+  it('ranks only existing candidates by lower trained EFE and retains every safety field', () => {
+    const learned = new LearnedActiveInferenceEngine();
+    const factor = learned.getFactor("repo_health")!;
+    const candidates = engine.generatePolicies([engine.evaluateObservation({
+      invariantId: "inv_clean_test_suite", observedState: false, observedAt: 100, confidence: 1,
+    })]);
+    const evaluations = factor.evaluatePolicies().map((e) => ({
+      ...e, expectedFreeEnergy: e.actionName === "run_diagnostics" ? 1 : 4,
+    }));
+    vi.spyOn(factor, "evaluatePolicies").mockReturnValue(evaluations);
+    const rank = () => rankInferencePolicies(candidates, learned, graph, new Map(), 100, 200);
+    expect(rank().map((p) => p.id)).toEqual(candidates.map((p) => p.id)); // untrained
+    factor.version = 2;
+    const ranked = rank();
+    expect(ranked[0].type).toBe("EPISTEMIC");
+    for (const { ranking, ...policy } of ranked) {
+      expect(policy).toEqual(candidates.find((p) => p.id === policy.id));
+      expect(ranking?.method).toBe("learned");
+    }
+    for (const e of evaluations) e.expectedFreeEnergy = 1;
+    expect(rank().map((p) => p.id)).toEqual(candidates.map((p) => p.id)); // tied
+    evaluations[0].expectedFreeEnergy = NaN;
+    expect(rank().map((p) => p.id)).toEqual(candidates.map((p) => p.id)); // damaged
+    factor.aCounts[0][0] = NaN;
+    expect(rank().map((p) => p.id)).toEqual(candidates.map((p) => p.id));
+  });
+
+  it('uses smoothed preference only for ordering and informs associations through decayed known edges', () => {
+    const learned = new LearnedActiveInferenceEngine();
+    const now = 1_000;
+    graph.addEntity({ id: "goal_tests", name: "Tests", type: "GOAL", lastActive: now });
+    graph.addEdge("project_sovereign_exocortex", "goal_tests", "DEPENDS_ON", 0.9);
+    const candidates = engine.generatePolicies([engine.evaluateObservation({
+      invariantId: "inv_clean_test_suite", observedState: false, observedAt: now, confidence: 1,
+    })]);
+    const preferences = new Map([[preferenceKey("inv_clean_test_suite", "EPISTEMIC"), { wanted: 4, notWanted: 0 }]]);
+    const ranked = rankInferencePolicies(candidates, learned, graph, preferences, now, now);
+    expect(ranked[0].type).toBe("EPISTEMIC");
+    expect(ranked[0].ranking?.wantedProbability).toBe(5 / 6);
+    expect(ranked[0].ranking?.baselineWantedProbability).toBe(0.5);
+    expect(ranked[0].ranking?.associations[0].entityId).toBe("goal_tests");
+    const later = rankInferencePolicies(candidates, learned, graph, preferences, Date.now() + 60 * 86_400_000, now);
+    expect(later[0].ranking!.associations[0]?.activation ?? 0).toBeLessThan(ranked[0].ranking!.associations[0].activation);
+    expect(graph.edgeCount).toBe(1);
   });
 
   it('initializes with default sovereign invariants', () => {

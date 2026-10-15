@@ -20,6 +20,10 @@ import {
   ActiveInferenceEngine,
   LearnedActiveInferenceEngine,
   eventToObservation,
+  systemObservationFromEvent,
+  foregroundObservation,
+  invariantObservation,
+  rankInferencePolicies,
   type CognitiveMode,
   type ProposalEnvelope,
   type ContextualSignals,
@@ -32,30 +36,11 @@ import { defaultDryRunCache, type SpeculativeProposal, type EventRecord } from "
 import { mayActuateAutoExecute, type ShadowRecorder } from "./shadow-recorder.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import type { ExocortexDatabase } from "@exocortex/core/db";
+import { loadProposalPreferences, type PreferenceMetrics } from "./proposal-preferences.js";
 
 const MAX_RECORDER_FAILURES = 5;
 
 const SCREEN_STATES = ["ON", "OFF", "UNLOCKED"];
-
-/** Convert only explicit, supported observations into homeostatic signals. */
-function systemObservationForEvent(
-  event: EventRecord,
-  extracted: { factor: string; obs: string },
-): SystemObservation | null {
-  if (event.kind !== "observation") return null;
-  const invariantBySignal: Record<string, { invariantId: string; observedState: boolean }> = {
-    "repo_health\u0000tests_pass": { invariantId: "inv_clean_test_suite", observedState: true },
-    "repo_health\u0000tests_fail": { invariantId: "inv_clean_test_suite", observedState: false },
-    "repo_health\u0000clean_checkout": { invariantId: "inv_zero_broken_commits", observedState: true },
-    "repo_health\u0000uncommitted_edits": { invariantId: "inv_zero_broken_commits", observedState: false },
-    "link_health\u0000ping_fast": { invariantId: "inv_bridge_connected", observedState: true },
-    "link_health\u0000ping_slow": { invariantId: "inv_bridge_connected", observedState: true },
-    "link_health\u0000ws_dropped": { invariantId: "inv_bridge_connected", observedState: false },
-  };
-  const signal = invariantBySignal[`${extracted.factor}\u0000${extracted.obs}`];
-  if (!signal) return null;
-  return { ...signal, observedAt: event.ts_device, confidence: 1 };
-}
 
 /** Validate untrusted telemetry signals before any state is mutated. Throws TypeError on bad input. */
 function validateSignals(signals: unknown): asserts signals is ContextualSignals {
@@ -101,6 +86,7 @@ export class WorldModelHost {
   private recorderFailures = 0;
   private recorderDisabled = false;
   private autoExecutor: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null = null;
+  private preferenceDb: ExocortexDatabase | null = null;
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
@@ -113,6 +99,7 @@ export class WorldModelHost {
     if (hasDatabase()) {
       try {
         const db = getDatabase();
+        this.preferenceDb = db;
         const params = db.listModelParams();
         if (params.length > 0) {
           this.learnedEngine.importModelParams(params);
@@ -146,6 +133,7 @@ export class WorldModelHost {
   /** Attach (or detach with null) the recorder that persists proposals + gate decisions. */
   public setShadowRecorder(recorder: ShadowRecorder | null): void {
     this.shadowRecorder = recorder;
+    if (recorder) this.preferenceDb = recorder.database;
     this.recorderFailures = 0;
     this.recorderDisabled = false;
   }
@@ -259,22 +247,17 @@ export class WorldModelHost {
     const prevMode = this.cognitiveGate.mode;
     const mode = this.cognitiveGate.classifyMode(signals);
 
-    // Stimulate relevant nodes in the Life Graph & update discrete generative model
-    if (signals.foregroundApp) {
-      const app = signals.foregroundApp.toLowerCase();
-      if (app.includes("code") || app.includes("antigravity")) {
-        this.lifeGraph.stimulate("project_sovereign_exocortex", 0.3);
-        try {
-          this.learnedEngine.processObservation("user_mode", "typing_burst");
-        } catch {
-          // non-fatal
-        }
-      } else {
-        try {
-          this.learnedEngine.processObservation("user_mode", "window_switch");
-        } catch {
-          // non-fatal
-        }
+    const extracted = foregroundObservation(signals as unknown as Record<string, unknown>);
+    const timestamp = signals.timestamp ?? Date.now();
+    this.lifeGraph.decay(timestamp);
+    if (extracted) {
+      if (extracted.obs === "typing_burst") {
+        this.lifeGraph.stimulate("project_sovereign_exocortex", 0.3, timestamp);
+      }
+      try {
+        this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+      } catch {
+        // Retain telemetry classification if a learned table is unavailable.
       }
     }
 
@@ -297,7 +280,7 @@ export class WorldModelHost {
    */
   public ingestObservation(
     obs: SystemObservation,
-    options: { allowAutoExecute?: boolean } = {},
+    options: { allowAutoExecute?: boolean; db?: ExocortexDatabase } = {},
   ): {
     surprisalNats: number;
     isAnomaly: boolean;
@@ -333,24 +316,30 @@ export class WorldModelHost {
         throw new TypeError("invalid observation: observedAt must be a finite timestamp");
       }
     }
+    const extracted = invariantObservation(obs);
+    if (options.db) this.preferenceDb = options.db;
+    const timestamp = obs.observedAt ?? Date.now();
+    this.lifeGraph.decay(timestamp);
+    if (extracted) {
+      try {
+        this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
+      } catch {
+        // A damaged learned model cannot disable deterministic anomaly handling.
+      }
+    }
     const metric = this.activeInference.evaluateObservation(obs);
 
-    // In parallel, update discrete generative learned factor
+    const predictedAt = Date.now();
+    let preferences = new Map();
     try {
-      if (obs.metadata?.factor && obs.metadata?.observation) {
-        this.learnedEngine.processObservation(String(obs.metadata.factor), String(obs.metadata.observation));
-      } else if (obs.invariantId === "inv_clean_test_suite") {
-        this.learnedEngine.processObservation("repo_health", obs.observedState === true ? "tests_pass" : "tests_fail");
-      } else if (obs.invariantId === "inv_bridge_connected") {
-        this.learnedEngine.processObservation("link_health", obs.observedState === true ? "ping_fast" : "ws_dropped");
-      } else if (obs.invariantId === "inv_zero_broken_commits") {
-        this.learnedEngine.processObservation("repo_health", obs.observedState === true ? "clean_checkout" : "uncommitted_edits");
-      }
+      preferences = loadProposalPreferences(this.preferenceDb, predictedAt).preferences;
     } catch {
-      // Non-fatal learning step
+      // Database failures leave the deterministic scorer available.
     }
-
-    const policies = this.activeInference.generatePolicies([metric]);
+    const policies = rankInferencePolicies(
+      this.activeInference.generatePolicies([metric]), this.learnedEngine, this.lifeGraph,
+      preferences, timestamp, predictedAt,
+    );
     const proposals: ProposalEnvelope[] = [];
 
     for (const policy of policies) {
@@ -418,6 +407,7 @@ export class WorldModelHost {
     registeredInvariantsCount: number;
     learnedFactorsCount: number;
     learnedModelVersion: number;
+    preferenceMetrics: PreferenceMetrics;
   } {
     const factors = this.learnedEngine.listFactors();
     const maxVersion = factors.reduce((max, f) => Math.max(max, f.version), 1);
@@ -429,7 +419,16 @@ export class WorldModelHost {
       registeredInvariantsCount: this.activeInference.registeredInvariants.length,
       learnedFactorsCount: factors.length,
       learnedModelVersion: maxVersion,
+      preferenceMetrics: this.getPreferenceMetrics(),
     };
+  }
+
+  private getPreferenceMetrics(): PreferenceMetrics {
+    try {
+      return loadProposalPreferences(this.preferenceDb, Date.now()).metrics;
+    } catch {
+      return loadProposalPreferences(null, Date.now()).metrics;
+    }
   }
 
   /**
@@ -437,6 +436,7 @@ export class WorldModelHost {
    */
   public persistBeliefState(asOfSeq: number, db?: ExocortexDatabase): BeliefSnapshotRecord | null {
     const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
+    if (targetDb) this.preferenceDb = targetDb;
     if (!targetDb) return null;
 
     const snapshot = this.learnedEngine.createBeliefSnapshot(asOfSeq);
@@ -455,6 +455,7 @@ export class WorldModelHost {
    */
   public onEventsAppended(events: EventRecord[], db?: ExocortexDatabase): BeliefSnapshotRecord | null {
     const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
+    if (targetDb) this.preferenceDb = targetDb;
     const touchedFactors = new Set<string>();
     const batchSnapshots: BeliefSnapshotRecord[] = [];
     let lastObsSeq: number | null = null;
@@ -463,10 +464,10 @@ export class WorldModelHost {
       try {
         const extracted = eventToObservation(ev);
         if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
-          const systemObservation = systemObservationForEvent(ev, extracted);
+          const systemObservation = systemObservationFromEvent(ev, extracted);
           if (systemObservation) {
             // ingestObservation updates the same learned factor and also runs active inference.
-            this.ingestObservation(systemObservation);
+            this.ingestObservation(systemObservation, targetDb ? { db: targetDb } : {});
           } else {
             this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
           }
@@ -535,6 +536,7 @@ export class WorldModelHost {
     }
 
     this.learnedEngine = freshEngine;
+    if (targetDb) this.preferenceDb = targetDb;
     return result;
   }
 }

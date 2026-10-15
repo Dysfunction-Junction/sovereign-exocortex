@@ -138,11 +138,11 @@ export class LivingLifeGraph {
   /**
    * Stimulate an entity, boosting its activation to 1.0 and updating lastActive.
    */
-  public stimulate(entityId: string, amount: number = 0.5): void {
+  public stimulate(entityId: string, amount: number = 0.5, observedAt: number = Date.now()): void {
     const entity = this.entities.get(entityId);
     if (!entity) return;
     entity.activation = Math.min(1.0, entity.activation + amount);
-    entity.lastActive = Date.now();
+    entity.lastActive = Math.max(entity.lastActive, observedAt);
     this.decayedAt.delete(entity);
   }
 

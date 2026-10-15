@@ -49,6 +49,12 @@ phone + PC signals --> event log --> world model --> proposal
 - **Active Inference:** a small discrete generative model (A, B, C, D tables learned from the event log) scores policies by expected free energy.
 - **Approvals:** Android Keystore keys with BiometricPrompt, verified on the host through the attestation chain. Single-use tokens prevent replay.
 
+### Adaptive foundation
+
+The adaptive layer ranks existing policy candidates; it does not invent executable commands or change their risk, urgency, confidence, or approval requirements. Supported observations share a validated mapping for live learning and event replay. The existing life graph supplies decayed, spreading-activation context rather than a second graph store.
+
+Verified `wanted`/`not_wanted` tap labels teach proposal preferences, not action-success or execution transitions. Predictions are recorded before feedback so usefulness can be compared with a simple baseline without training on the answer. When neither usable learned scores nor verified preferences distinguish candidates, deterministic policy ordering is retained. These diagnostics do not replace the Precision@surface rollout gate or disable shadow mode; no trained neural network or new external service is required.
+
 Full detail: [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md).
 
 ## Quick start

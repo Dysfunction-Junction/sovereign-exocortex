@@ -2,9 +2,53 @@ import { describe, it, expect } from "vitest";
 import {
   DiscreteGenerativeFactor,
   LearnedActiveInferenceEngine,
+  eventToObservation,
   type FactorDefinition,
 } from "./generative-model.js";
 import type { EventRecord } from "@exocortex/core";
+
+describe("shared validated observations", () => {
+  function event(payload: Record<string, unknown>, kind: "observation" | "telemetry" | "shadow_label" = "observation"): EventRecord {
+    return { seq: 1, kind, ts_device: 100, payload: JSON.stringify(payload) } as EventRecord;
+  }
+
+  it("maps invariant booleans and foreground aliases identically and rejects unsupported signals", () => {
+    expect(eventToObservation(event({ invariantId: "inv_bridge_connected", observedState: false })))
+      .toEqual({ factor: "link_health", obs: "ws_dropped" });
+    for (const alias of ["app", "foreground", "foregroundApp"]) {
+      expect(eventToObservation(event({ [alias]: "com.microsoft.VSCode" }, "telemetry")))
+        .toEqual({ factor: "user_mode", obs: "typing_burst" });
+      expect(eventToObservation(event({ [alias]: "decoder" }, "telemetry"))?.obs).toBe("window_switch");
+    }
+    for (const payload of [
+      { factor: "repo_health", observation: "invented" },
+      { factor: "constructor", observation: "tests_fail" },
+      { invariantId: "constructor", observedState: false },
+      { factor: "repo_health", observation: "tests_fail", action: "self_heal_restore" },
+      { invariantId: "inv_clean_test_suite", observedState: "false" },
+      { invariantId: "inv_clean_test_suite", observedState: true, factor: "repo_health", observation: "tests_fail" },
+      { factor: "repo_health", observation: "tests_fail", confidence: NaN },
+      { tests: "maybe" },
+      { tests: "passed", state: false },
+      { invariant: "clean_suite", state: "false" },
+    ]) expect(eventToObservation(event(payload))).toBeNull();
+    expect(eventToObservation(event({ factor: "repo_health", observation: "tests_pass", action: "self_heal_patch" }, "shadow_label"))).toBeNull();
+  });
+
+  it("learns transitions only for recorded actions, never proposed actions", () => {
+    const learned = new LearnedActiveInferenceEngine();
+    const factor = learned.getFactor("repo_health")!;
+    const before = structuredClone(factor.bCounts);
+    learned.processObservation("repo_health", "tests_fail");
+    expect(factor.bCounts.slice(0, -1)).toEqual(before.slice(0, -1));
+    expect(factor.bCounts.at(-1)).not.toEqual(before.at(-1));
+    expect(factor.lastActionIndex).toBe(factor.actions.indexOf("no_op"));
+    const after = structuredClone(factor.bCounts);
+    learned.processObservation("repo_health", "tests_pass", "self_heal_patch");
+    expect(factor.bCounts[0]).not.toEqual(after[0]);
+    expect(factor.bCounts.slice(1)).toEqual(after.slice(1));
+  });
+});
 
 describe("DiscreteGenerativeFactor", () => {
   const testFactorDef: FactorDefinition = {

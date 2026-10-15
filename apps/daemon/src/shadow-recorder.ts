@@ -100,6 +100,10 @@ export class ShadowRecorder {
     this.cooldownMs = options.cooldownMs ?? DEFAULT_COOLDOWN_MS;
   }
 
+  public get database(): ExocortexDatabase {
+    return this.db;
+  }
+
   public ensureHostDevice(): void {
     if (this.hostReady) return;
     if (!this.db.getDevice(HOST_DEVICE_ID)) {
@@ -184,6 +188,7 @@ export class ShadowRecorder {
           policy_type: policy.type,
           summary: policy.title,
           shadow: this.shadow,
+          ...(policy.ranking ? { ranking: policy.ranking } : {}),
         },
       });
 
