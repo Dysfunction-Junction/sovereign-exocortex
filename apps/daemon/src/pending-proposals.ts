@@ -7,6 +7,7 @@
 
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import { forwardDelegate, GATEWAY_NODE, type DelegateEnvelope } from "./network.js";
+import { HOST_DEVICE_ID } from "./shadow-recorder.js";
 
 export interface RegistryPending {
   proposalId: string;
@@ -68,6 +69,61 @@ const MAX_SPECULATIONS_PER_POLL = 20;
 const MIN_TTL_MS = 1_000;
 const MAX_TTL_MS = 10 * 60 * 1000;
 
+interface BatchPosition {
+  batchId: string;
+  position: number;
+}
+
+/** Reorder only occupied slots of the same recorded host batch; never trust registry/client scores. */
+function orderRecordedBatches<T>(db: ExocortexDatabase, items: T[], idOf: (item: T) => string): T[] {
+  const cache = new Map<string, BatchPosition | null>();
+  const invalidBatches = new Set<string>();
+  const positionOf = (id: string): BatchPosition | null => {
+    if (cache.has(id)) return cache.get(id)!;
+    let result: BatchPosition | null = null;
+    try {
+      const row = db.getProposal(id);
+      const event = row && db.getEventBySeq(row.created_seq);
+      if (row && event?.kind === "proposal" && event.device_id === HOST_DEVICE_ID) {
+        const payload = JSON.parse(event.payload);
+        const ranking = payload.ranking;
+        const action = parseActionPayload(row.action);
+        if (payload.proposal_id === id && payload.policy_type === row.policy_type
+          && typeof payload.invariant_id === "string"
+          && payload.invariant_id === (row.invariant_id ?? action.invariantId)
+          && ranking?.version === 1 && typeof ranking.batchId === "string" && ranking.batchId) {
+          if (Number.isSafeInteger(ranking.position) && ranking.position >= 0) {
+            result = { batchId: ranking.batchId, position: ranking.position };
+          } else {
+            invalidBatches.add(ranking.batchId);
+          }
+        }
+      }
+    } catch {
+      // Old, malformed or unavailable records keep their original slots.
+    }
+    cache.set(id, result);
+    return result;
+  };
+  const groups = new Map<string, Array<{ index: number; item: T; position: number }>>();
+  items.forEach((item, index) => {
+    const ranking = positionOf(idOf(item));
+    if (!ranking) return;
+    const anchor = positionOf(ranking.batchId);
+    if (!anchor || anchor.batchId !== ranking.batchId || anchor.position !== 0) return;
+    const group = groups.get(ranking.batchId) ?? [];
+    group.push({ index, item, position: ranking.position });
+    groups.set(ranking.batchId, group);
+  });
+  const ordered = [...items];
+  for (const [batchId, group] of groups) {
+    if (invalidBatches.has(batchId) || new Set(group.map((entry) => entry.position)).size !== group.length) continue;
+    const sorted = [...group].sort((a, b) => a.position - b.position);
+    group.forEach((entry, index) => { ordered[entry.index] = sorted[index].item; });
+  }
+  return ordered;
+}
+
 function parseActionPayload(action: string): Record<string, unknown> {
   try {
     const v = JSON.parse(action);
@@ -79,7 +135,8 @@ function parseActionPayload(action: string): Record<string, unknown> {
 
 /** Speculate every live SURFACED/STAGED proposal so each has a nonce to list. Failures are non-fatal. */
 export async function ensureSpeculated(db: ExocortexDatabase, speculator: Speculator, now: number): Promise<void> {
-  const rows = db.listProposalsByState(["SURFACED", "STAGED"], now).slice(0, MAX_SPECULATIONS_PER_POLL);
+  const rows = orderRecordedBatches(db, db.listProposalsByState(["SURFACED", "STAGED"], now), (row) => row.proposal_id)
+    .slice(0, MAX_SPECULATIONS_PER_POLL);
   for (const row of rows) {
     const ttlMs = Math.min(MAX_TTL_MS, Math.max(MIN_TTL_MS, row.expires_at - now));
     try {
@@ -156,5 +213,5 @@ export async function buildPendingProposals(
       ...(r.actionPayload && typeof r.actionPayload === "object" ? { actionPayload: r.actionPayload } : {}),
     });
   }
-  return out;
+  return orderRecordedBatches(db, out, (item) => item.proposalId);
 }

@@ -44,6 +44,25 @@ export interface SurprisalMetric {
 
 export type PolicyType = 'PRAGMATIC' | 'EPISTEMIC';
 
+export interface PolicyRankingMetadata {
+  version: 1;
+  method: "baseline" | "learned";
+  baselineScore: number;
+  wantedProbability: number;
+  baselineWantedProbability: number;
+  baselinePredictor: "fixed-0.5";
+  preferenceSamples: number;
+  predictedAt: number;
+  factor?: string;
+  action?: string;
+  expectedFreeEnergy?: number;
+  riskTerm?: number;
+  ambiguityTerm?: number;
+  associations: Array<{ entityId: string; activation: number }>;
+  batchId?: string;
+  position?: number;
+}
+
 export interface InferencePolicy {
   id: string;
   type: PolicyType;
@@ -57,6 +76,7 @@ export interface InferencePolicy {
   estimatedRisk: number; // 0.0 to 1.0
   urgency: number; // 0.0 to 1.0
   actionPayload: Record<string, unknown>;
+  ranking?: PolicyRankingMetadata;
 }
 
 /**
@@ -183,7 +203,7 @@ export class ActiveInferenceEngine {
 
     // Stimulate target entity in the Living Life Graph upon surprise
     if (isAnomaly) {
-      this.lifeGraph.stimulate(invariant.targetEntityId, 0.8);
+      this.lifeGraph.stimulate(invariant.targetEntityId, 0.8, obs.observedAt);
     }
 
     return {

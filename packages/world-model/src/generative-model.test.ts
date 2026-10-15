@@ -2,9 +2,116 @@ import { describe, it, expect } from "vitest";
 import {
   DiscreteGenerativeFactor,
   LearnedActiveInferenceEngine,
+  eventToObservation,
   type FactorDefinition,
 } from "./generative-model.js";
 import type { EventRecord } from "@exocortex/core";
+
+describe("shared validated observations", () => {
+  function event(payload: Record<string, unknown>, kind: "observation" | "telemetry" | "shadow_label" = "observation"): EventRecord {
+    return { seq: 1, kind, ts_device: 100, payload: JSON.stringify(payload) } as EventRecord;
+  }
+
+  it("maps invariant booleans and foreground aliases identically and rejects unsupported signals", () => {
+    expect(eventToObservation(event({ invariantId: "inv_bridge_connected", observedState: false })))
+      .toEqual({ factor: "link_health", obs: "ws_dropped" });
+    for (const alias of ["app", "foreground", "foregroundApp"]) {
+      expect(eventToObservation(event({ [alias]: "com.microsoft.VSCode" }, "telemetry")))
+        .toEqual({ factor: "user_mode", obs: "typing_burst" });
+      expect(eventToObservation(event({ [alias]: "decoder" }, "telemetry"))?.obs).toBe("window_switch");
+    }
+    for (const payload of [
+      { factor: "repo_health", observation: "invented" },
+      { factor: "constructor", observation: "tests_fail" },
+      { factor: "__proto__", observation: "tests_fail" },
+      { factor: "toString", observation: "tests_fail" },
+      { invariantId: "constructor", observedState: false },
+      { invariantId: "__proto__", observedState: false },
+      { invariantId: "toString", observedState: false },
+      { factor: "repo_health", observation: "tests_fail", action: "self_heal_restore" },
+      { invariantId: "inv_clean_test_suite", observedState: "false" },
+      { invariantId: "inv_clean_test_suite", observedState: true, factor: "repo_health", observation: "tests_fail" },
+      { factor: "repo_health", observation: "tests_fail", confidence: NaN },
+      { tests: "maybe" },
+      { tests: "passed", state: false },
+      { invariant: "clean_suite", state: "false" },
+    ]) expect(eventToObservation(event(payload))).toBeNull();
+    expect(eventToObservation(event({ factor: "repo_health", observation: "tests_pass", action: "self_heal_patch" }, "shadow_label"))).toBeNull();
+  });
+
+  it("learns transitions only for recorded actions, never proposed actions", () => {
+    const learned = new LearnedActiveInferenceEngine();
+    const factor = learned.getFactor("repo_health")!;
+    const before = structuredClone(factor.bCounts);
+    learned.processObservation("repo_health", "tests_fail");
+    expect(factor.bCounts.slice(0, -1)).toEqual(before.slice(0, -1));
+    expect(factor.bCounts.at(-1)).not.toEqual(before.at(-1));
+    expect(factor.lastActionIndex).toBe(factor.actions.indexOf("no_op"));
+    const after = structuredClone(factor.bCounts);
+    learned.processObservation("repo_health", "tests_pass", "self_heal_patch");
+    expect(factor.bCounts[0]).not.toEqual(after[0]);
+    expect(factor.bCounts.slice(1)).toEqual(after.slice(1));
+  });
+
+  it("validates custom registered factor observations during replay without freezing support to defaults", () => {
+    const definition = {
+      name: "custom_health", states: ["ready", "broken"],
+      observations: ["green", "red"], actions: ["repair", "no_op"],
+    };
+    const live = new LearnedActiveInferenceEngine();
+    const replay = new LearnedActiveInferenceEngine();
+    live.registerFactor(definition);
+    replay.registerFactor(definition);
+    const events = [
+      event({ factor: "custom_health", observation: "red" }),
+      event({ factor: "custom_health", observation: "red", action: "invented" }),
+      event({ factor: "custom_health", observation: "green", action: "repair" }),
+    ].map((e, i) => ({ ...e, seq: i + 1 }));
+    expect(eventToObservation(events[0])).toBeNull(); // callers without a model know only defaults
+    expect(eventToObservation(events[0], (name) => live.getFactor(name))?.obs).toBe("red");
+    expect(eventToObservation(events[1], (name) => live.getFactor(name))).toBeNull();
+    live.processObservation("custom_health", "red");
+    live.processObservation("custom_health", "green", "repair");
+    replay.replayEventStream(events);
+    expect(replay.exportModelParams(0)).toEqual(live.exportModelParams(0));
+    expect(replay.createBeliefSnapshot(0)).toEqual(live.createBeliefSnapshot(0));
+  });
+
+  it("skips poison invariant metadata and prototype keys without aborting replay or mutating learned state", () => {
+    const poisonedPayloads = [
+      { tests: { toString: null } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "tests_pass" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: "repo_health", observation: "invented" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: { action: "run_diagnostics" } },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: [] },
+      { invariantId: "inv_clean_test_suite", observedState: false, metadata: "malformed" },
+      { invariantId: "inv_clean_test_suite", observedState: false, factor: "repo_health", observation: "tests_fail", metadata: "malformed" },
+      ...["__proto__", "toString", "constructor"].flatMap((key) => [
+        { factor: key, observation: "tests_fail" },
+        { invariantId: key, observedState: false },
+        { invariantId: "inv_clean_test_suite", observedState: false, metadata: { factor: key, observation: "tests_fail" } },
+      ]),
+    ];
+    const replay = new LearnedActiveInferenceEngine();
+    const before = replay.exportModelParams(0);
+    for (const payload of poisonedPayloads) {
+      expect(eventToObservation(event(payload))).toBeNull();
+      replay.replayEventStream([event(payload)]);
+      expect(replay.exportModelParams(0)).toEqual(before);
+    }
+    const events = [
+      ...poisonedPayloads.map((payload) => event(payload)),
+      event({ factor: "repo_health", observation: "tests_pass", action: "run_diagnostics" }),
+    ].map((e, i) => ({ ...e, seq: i + 1 }));
+    const result = replay.replayEventStream(events);
+    expect(result.replayedCount).toBe(events.length);
+    expect(result.snapshots).toHaveLength(events.length);
+    const expected = new LearnedActiveInferenceEngine();
+    expected.processObservation("repo_health", "tests_pass", "run_diagnostics");
+    expect(replay.exportModelParams(0)).toEqual(expected.exportModelParams(0));
+    expect(replay.createBeliefSnapshot(0)).toEqual(expected.createBeliefSnapshot(0));
+  });
+});
 
 describe("DiscreteGenerativeFactor", () => {
   const testFactorDef: FactorDefinition = {

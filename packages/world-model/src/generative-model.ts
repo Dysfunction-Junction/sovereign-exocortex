@@ -13,6 +13,7 @@ import type {
   BeliefSnapshotRecord,
   EventRecord,
 } from "@exocortex/core";
+import type { SystemObservation } from "./active-inference.js";
 
 export type { ModelParamRecord, BeliefSnapshotRecord, EventRecord };
 
@@ -22,10 +23,144 @@ export interface ExtractedObservation {
   action?: string;
 }
 
+const INVARIANT_SIGNALS: Record<string, { factor: string; positive: string; negative: string }> = {
+  inv_clean_test_suite: { factor: "repo_health", positive: "tests_pass", negative: "tests_fail" },
+  inv_zero_broken_commits: { factor: "repo_health", positive: "clean_checkout", negative: "uncommitted_edits" },
+  inv_bridge_connected: { factor: "link_health", positive: "ping_fast", negative: "ws_dropped" },
+};
+
+const SUPPORTED_SIGNALS: Record<string, { observations: string[]; actions: string[] }> = {
+  user_mode: {
+    observations: ["typing_burst", "test_running", "docs_reading", "idle_long", "window_switch"],
+    actions: ["focus_lock", "prompt_suggest", "run_tests", "notify_user", "no_op"],
+  },
+  repo_health: {
+    observations: ["tests_pass", "tests_fail", "type_error", "clean_checkout", "uncommitted_edits"],
+    actions: ["self_heal_patch", "run_diagnostics", "stage_commit", "revert_candidate", "no_op"],
+  },
+  link_health: {
+    observations: ["ping_fast", "ping_slow", "ws_dropped", "packet_loss"],
+    actions: ["reconnect_ws", "flush_outbox", "throttle_telemetry", "no_op"],
+  },
+};
+
+export type ObservationSupport = (factor: string) => { observations: readonly string[]; actions: readonly string[] } | undefined;
+
+export function isSupportedObservation(value: ExtractedObservation, support?: ObservationSupport): boolean {
+  const supported = support ? support(value.factor)
+    : Object.hasOwn(SUPPORTED_SIGNALS, value.factor) ? SUPPORTED_SIGNALS[value.factor] : undefined;
+  return !!supported && supported.observations.includes(value.obs)
+    && (value.action === undefined || supported.actions.includes(value.action));
+}
+
+export function foregroundObservation(payload: Record<string, unknown>): ExtractedObservation | null {
+  const app = payload.foregroundApp ?? payload.app ?? payload.foreground;
+  if (typeof app !== "string" || !app.trim()) return null;
+  return { factor: "user_mode", obs: /(?:vscode|code\.exe|\bantigravity\b)/i.test(app) ? "typing_burst" : "window_switch" };
+}
+
+export function invariantObservation(obs: SystemObservation, support?: ObservationSupport): ExtractedObservation | null {
+  const signal = Object.hasOwn(INVARIANT_SIGNALS, obs.invariantId) ? INVARIANT_SIGNALS[obs.invariantId] : undefined;
+  const metadata = obs.metadata;
+  if (metadata !== undefined && (!metadata || typeof metadata !== "object" || Array.isArray(metadata))) {
+    throw new TypeError("invalid observation: metadata must be an object");
+  }
+  const explicit = metadata?.factor !== undefined || metadata?.observation !== undefined || metadata?.action !== undefined;
+  if (explicit) {
+    const extracted = { factor: metadata?.factor, obs: metadata?.observation, action: metadata?.action };
+    if (typeof extracted.factor !== "string" || typeof extracted.obs !== "string"
+      || (extracted.action !== undefined && typeof extracted.action !== "string")
+      || !isSupportedObservation(extracted as ExtractedObservation, support)) {
+      throw new TypeError("invalid observation: unsupported factor, observation or action");
+    }
+    const value = extracted as ExtractedObservation;
+    if (!signal || typeof obs.observedState !== "boolean") return null;
+    const allowed = signal && value.factor === signal.factor && (
+      value.obs === (obs.observedState === true ? signal.positive : signal.negative)
+      || (obs.invariantId === "inv_bridge_connected" && obs.observedState === true && value.obs === "ping_slow")
+    );
+    if (!allowed) throw new TypeError("invalid observation: inconsistent invariant mapping");
+    return value;
+  }
+  return signal && typeof obs.observedState === "boolean"
+    ? { factor: signal.factor, obs: obs.observedState === true ? signal.positive : signal.negative }
+    : null;
+}
+
+function explicitInvariantObservation(
+  payload: Record<string, unknown>, timestamp: number, support?: ObservationSupport,
+): SystemObservation | null {
+  const state = payload.observedState;
+  if (typeof payload.invariantId !== "string" || !payload.invariantId.trim()
+    || !(typeof state === "boolean" || typeof state === "string" || (typeof state === "number" && Number.isFinite(state)))) return null;
+  const rawMetadata = payload.metadata;
+  if (rawMetadata !== undefined && (!rawMetadata || typeof rawMetadata !== "object" || Array.isArray(rawMetadata))) return null;
+  const metadata: Record<string, unknown> = { ...(rawMetadata as Record<string, unknown> | undefined) };
+  for (const key of ["factor", "observation", "action"]) {
+    if (payload[key] === undefined) continue;
+    if (metadata[key] !== undefined && metadata[key] !== payload[key]) return null;
+    metadata[key] = payload[key];
+  }
+  if (payload.source === "local_vision" || metadata.source === "local_vision") metadata.source = "local_vision";
+  else if (typeof payload.source === "string") metadata.source = payload.source;
+  const observation: SystemObservation = {
+    invariantId: payload.invariantId, observedState: state,
+    observedAt: typeof payload.observedAt === "number" ? payload.observedAt : timestamp,
+    confidence: typeof payload.confidence === "number" ? payload.confidence : 1,
+    metadata,
+  };
+  try {
+    invariantObservation(observation, support);
+    return observation;
+  } catch {
+    return null;
+  }
+}
+
+export function systemObservationFromEvent(
+  event: EventRecord, extracted: ExtractedObservation | null, support?: ObservationSupport,
+): SystemObservation | null {
+  if (event.kind !== "observation" || !Number.isFinite(event.ts_device)) return null;
+  let payload: Record<string, unknown>;
+  try {
+    const raw = typeof event.payload === "string" ? JSON.parse(event.payload) : event.payload;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    payload = raw as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (payload.observedAt !== undefined && (typeof payload.observedAt !== "number" || !Number.isFinite(payload.observedAt))) return null;
+  if (payload.confidence !== undefined && (typeof payload.confidence !== "number" || !Number.isFinite(payload.confidence)
+    || payload.confidence < 0 || payload.confidence > 1)) return null;
+  if (payload.invariantId !== undefined || payload.observedState !== undefined) {
+    return explicitInvariantObservation(payload, event.ts_device, support);
+  }
+  if (!extracted || !isSupportedObservation(extracted, support)) return null;
+  for (const [invariantId, signal] of Object.entries(INVARIANT_SIGNALS)) {
+    if (extracted.factor !== signal.factor) continue;
+    const positive = extracted.obs === signal.positive
+      || (invariantId === "inv_bridge_connected" && extracted.obs === "ping_slow");
+    if (!positive && extracted.obs !== signal.negative) continue;
+    if (payload.invariantId !== undefined && payload.invariantId !== invariantId) return null;
+    if (payload.observedState !== undefined && payload.observedState !== positive) return null;
+    return {
+      invariantId, observedState: positive,
+      observedAt: typeof payload.observedAt === "number" ? payload.observedAt : event.ts_device,
+      confidence: typeof payload.confidence === "number" ? payload.confidence : 1,
+      metadata: {
+        factor: extracted.factor, observation: extracted.obs,
+        ...(extracted.action ? { action: extracted.action } : {}),
+        ...(typeof payload.source === "string" ? { source: payload.source } : {}),
+      },
+    };
+  }
+  return null;
+}
+
 /**
  * Pure function to extract factor observation and optional action from an immutable EventRecord.
  */
-export function eventToObservation(event: EventRecord): ExtractedObservation | null {
+export function eventToObservation(event: EventRecord, support?: ObservationSupport): ExtractedObservation | null {
   if (!event || typeof event !== "object") return null;
   if (event.kind !== "observation" && event.kind !== "telemetry") return null;
 
@@ -39,29 +174,44 @@ export function eventToObservation(event: EventRecord): ExtractedObservation | n
   } catch {
     return null;
   }
+  for (const key of ["observedAt", "confidence"]) {
+    if (payload[key] !== undefined && (typeof payload[key] !== "number" || !Number.isFinite(payload[key]))) return null;
+  }
+  if (typeof payload.confidence === "number" && (payload.confidence < 0 || payload.confidence > 1)) return null;
+  if (!Number.isFinite(event.ts_device)) return null;
+  if (payload.invariantId !== undefined && typeof payload.invariantId !== "string") return null;
+  if (payload.observedState !== undefined && typeof payload.observedState !== "boolean"
+    && typeof payload.observedState !== "string"
+    && !(typeof payload.observedState === "number" && Number.isFinite(payload.observedState))) return null;
+  if (payload.invariantId !== undefined || payload.observedState !== undefined) {
+    const observation = explicitInvariantObservation(payload, event.ts_device, support);
+    if (!observation) return null;
+    try {
+      return invariantObservation(observation, support);
+    } catch {
+      return null;
+    }
+  }
 
   // 1. Explicit factor and observation payload
-  if (typeof payload.factor === "string" && typeof payload.observation === "string") {
-    const action = typeof payload.action === "string" ? payload.action : undefined;
-    return {
-      factor: payload.factor,
-      obs: payload.observation,
-      action,
-    };
+  if (payload.factor !== undefined || payload.observation !== undefined || payload.action !== undefined) {
+    if (typeof payload.factor !== "string" || typeof payload.observation !== "string"
+      || (payload.action !== undefined && typeof payload.action !== "string")) return null;
+    const extracted = { factor: payload.factor, obs: payload.observation, action: payload.action as string | undefined };
+    if (!isSupportedObservation(extracted, support)) return null;
+    return extracted;
   }
 
-  // 2. Telemetry desktop/mobile foreground app mapping
-  const appStr = typeof payload.app === "string" ? payload.app : typeof payload.foreground === "string" ? payload.foreground : null;
-  if (appStr) {
-    const isCoding = /(?:vscode|code\.exe|\bantigravity\b)/i.test(appStr);
-    return {
-      factor: "user_mode",
-      obs: isCoding ? "typing_burst" : "window_switch",
-    };
-  }
+  const foreground = foregroundObservation(payload);
+  if (foreground) return foreground;
 
-  // 3. Test runner / CI invariants
   if (payload.invariant === "clean_suite" || payload.tests !== undefined) {
+    if (payload.state !== undefined && typeof payload.state !== "boolean") return null;
+    if (payload.tests !== undefined && (typeof payload.tests !== "string"
+      || !["passed", "ok", "failed", "fail"].includes(payload.tests))) return null;
+    if (payload.state === undefined && payload.tests === undefined) return null;
+    if (typeof payload.state === "boolean" && payload.tests !== undefined
+      && payload.state !== (payload.tests === "passed" || payload.tests === "ok")) return null;
     const isPass = payload.state === true || payload.tests === "passed" || payload.tests === "ok";
     return {
       factor: "repo_health",
@@ -408,8 +558,8 @@ export class LearnedActiveInferenceEngine {
     this.registerFactor({
       name: "user_mode",
       states: ["DEEP_FOCUS", "HIGH_VELOCITY", "EXPLORATORY", "MAINTENANCE", "REST"],
-      observations: ["typing_burst", "test_running", "docs_reading", "idle_long", "window_switch"],
-      actions: ["focus_lock", "prompt_suggest", "run_tests", "notify_user", "no_op"],
+      observations: SUPPORTED_SIGNALS.user_mode.observations,
+      actions: SUPPORTED_SIGNALS.user_mode.actions,
       initialPriorCounts: [5.0, 3.0, 2.0, 1.0, 1.0],
       initialLikelihoodCounts: [
         [8.0, 5.0, 1.0, 0.5, 0.1], // typing_burst
@@ -432,8 +582,8 @@ export class LearnedActiveInferenceEngine {
     this.registerFactor({
       name: "repo_health",
       states: ["CLEAN", "DIRTY_SAFE", "BROKEN_TESTS", "TYPE_ERROR", "STALE_BRANCH"],
-      observations: ["tests_pass", "tests_fail", "type_error", "clean_checkout", "uncommitted_edits"],
-      actions: ["self_heal_patch", "run_diagnostics", "stage_commit", "revert_candidate", "no_op"],
+      observations: SUPPORTED_SIGNALS.repo_health.observations,
+      actions: SUPPORTED_SIGNALS.repo_health.actions,
       initialPriorCounts: [7.0, 3.0, 0.5, 0.5, 1.0],
       initialLikelihoodCounts: [
         [8.0, 6.0, 0.05, 0.05, 1.0], // tests_pass
@@ -456,8 +606,8 @@ export class LearnedActiveInferenceEngine {
     this.registerFactor({
       name: "link_health",
       states: ["CONNECTED_FAST", "CONNECTED_SLOW", "RECONNECTING", "OFFLINE"],
-      observations: ["ping_fast", "ping_slow", "ws_dropped", "packet_loss"],
-      actions: ["reconnect_ws", "flush_outbox", "throttle_telemetry", "no_op"],
+      observations: SUPPORTED_SIGNALS.link_health.observations,
+      actions: SUPPORTED_SIGNALS.link_health.actions,
       initialPriorCounts: [8.0, 2.0, 0.5, 0.5],
       initialLikelihoodCounts: [
         [9.0, 1.0, 0.05, 0.01], // ping_fast
@@ -540,7 +690,8 @@ export class LearnedActiveInferenceEngine {
     // 3. Planning: Evaluate candidate policies via EFE
     const policies = factor.evaluatePolicies(posterior);
     const bestPolicy = policies[0];
-    factor.lastActionIndex = bestPolicy.actionIndex;
+    // Planning is not evidence that the proposed action was executed.
+    factor.lastActionIndex = actionIdx;
 
     const posteriorMap: Record<string, number> = {};
     factor.states.forEach((stateName, idx) => {
@@ -709,14 +860,13 @@ export class LearnedActiveInferenceEngine {
 
     for (const event of events) {
       count++;
-      const extracted = eventToObservation(event);
-      if (extracted && this.factors.has(extracted.factor)) {
-        try {
+      try {
+        const extracted = eventToObservation(event, (name) => this.factors.get(name));
+        if (extracted && this.factors.has(extracted.factor)) {
           this.processObservation(extracted.factor, extracted.obs, extracted.action);
-        } catch {
-          // A poison event (unknown observation/action name for a known factor) must not
-          // abort replay of the entire append-only log; skip it deterministically.
         }
+      } catch {
+        // Malformed payloads and unsupported signals must not abort the append-only log.
       }
       snapshots.push(this.createBeliefSnapshot(event.seq));
     }

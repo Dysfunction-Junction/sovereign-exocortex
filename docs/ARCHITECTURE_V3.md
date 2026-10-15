@@ -36,7 +36,7 @@ Each step reads only from the log or the step before it, so any projection can b
 
 ## World model: a real generative model
 
-Replace the hardcoded scores with a small discrete generative model, learned from the event log. Today `active-inference.ts` computes `-ln(prior)` for a match or mismatch and returns constants for expected free energy. With about six hidden factors of at most five states each, exact inference is a few matrix multiplies and runs in microseconds.
+The discrete generative model learns from supported observations in the event log. `active-inference.ts` retains deterministic invariant checks and candidate generation as the baseline; the host's adaptive layer ranks those candidates using learned scores and verified proposal preferences. Baseline ordering is retained when neither usable learned scores nor verified preferences distinguish candidates. The default model has three hidden factors (`user_mode`, `repo_health`, and `link_health`); this is a small probabilistic model, not a trained neural network.
 
 **Model per hidden factor** (for example `user_mode`, `link_health`, `repo_health`):
 
@@ -59,7 +59,11 @@ G(\pi)=\sum_{\tau}\Big[\underbrace{D_{KL}\big(q(o_\tau\mid\pi)\,\|\,p(o)\big)}_{
 
 Risk comes from C (how far predicted outcomes sit from what you want). Ambiguity comes from A (how uninformative the sensors are). Pragmatic and epistemic policies fall out of the same score instead of being typed in as two constants.
 
-**Learning.** A and B are Dirichlet count tables stored in `model_params`. Each logged event increments counts, and the model can be replayed from the log at any time.
+**Learning.** A and B are Dirichlet count tables stored in `model_params`. Supported observations increment counts; unrelated or invalid events are skipped. The model can be rebuilt by replaying the log.
+
+**Proposal feedback.** Verified direct `wanted`/`not_wanted` labels train a separate usefulness projection. A wanted proposal is not evidence that its action ran or repaired anything, so these labels do not train execution transitions. Proposal-time predictions and baseline predictions are retained for comparison with later feedback. This comparison is separate from Precision@surface and does not grant execution capabilities.
+
+**Associative context.** The existing life graph supplies decayed activation and bounded spreading-activation context, recorded as proposal diagnostics. Learned scores affect candidate ordering only; command payloads, risk, urgency, confidence, and deterministic approval gates remain unchanged. Shared observation mappings keep live factor updates and event replay consistent, while only explicit supported system observations trigger policy generation.
 
 **Honesty test.** The model must beat a dumb baseline ("same action as this hour yesterday") on precision@surface in shadow mode. If it doesn't, rename it "heuristic scorer" and ship the baseline.
 

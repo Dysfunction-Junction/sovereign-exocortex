@@ -30,6 +30,21 @@ pnpm exec tsx packages/core/src/shadow-report-cli.ts "$env:LOCALAPPDATA\exocorte
 
 The release gate is at least 50 direct tap labels, Precision@surface at least 0.90, and a positive gap over the measured baseline; inferred labels are reported separately. Without a supplied baseline, the report shows the gap as unavailable. Insufficient data is not a pass. Keep shadow mode enabled until the gate is met and reviewed.
 
+### Proposal-preference diagnostics
+
+`GET /world-model/state` also returns `state.preferenceMetrics`. These cumulative diagnostics evaluate proposal-time wanted probabilities against later verified direct tap labels on shadow proposals:
+
+- `evaluated`: eligible labels with valid pre-feedback predictions.
+- `eligibleLabels` and `predictionCoverage`: eligible tap count and the fraction with usable predictions.
+- `excluded`: eligible labels whose prediction metadata is missing or unusable, including older proposals.
+- `brier` and `logLoss`: average prediction losses; lower is better.
+- `baselineBrier` and `baselineLogLoss`: losses on the same samples for the explicitly named `fixed-0.5` predictor.
+- `brierImprovement` and `logLossImprovement`: baseline loss minus learned loss; positive values favor the learned preference predictor.
+
+Without matched labels, losses and improvements are `null`. The preference projection is rebuilt from authoritative label rows, so repeated delivery does not add training samples and replacing a label replaces its contribution. Inferred labels and unverified client claims of `source: "tap"` do not train it. A wanted label is not evidence that an action executed successfully.
+
+These metrics measure usefulness prediction, not causal ranking lift or Precision@surface. They include eligible shadow proposals regardless of their gate decision and are not restricted to the release gate's 14-day window. The fixed-0.5 predictor is **not** the independently measured same-hour-yesterday precision baseline above. Neither a positive loss improvement nor a ranking change unlocks execution.
+
 ## Interpretation
 
 - `wanted` and `not_wanted` tap labels determine Precision@surface.
