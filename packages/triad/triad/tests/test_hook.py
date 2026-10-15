@@ -884,7 +884,7 @@ class TestRealRepoInvariants(unittest.TestCase):
                     self.assertIn("Self-healing fix proposed by Advisory Council persisted to", out.getvalue())
                     self.assertIn("Direct execution preserves working directory files without uncoordinated in-place mutation", out.getvalue())
                     self.assertFalse((self.repo / ".triad_proposed_fix.patch").exists())
-                    self.assertTrue((self.repo / ".git" / "triad_proposed_fix.patch").exists())
+                    self.assertTrue((self.repo / ".git" / "triad-review" / "triad_proposed_fix.patch").exists())
 
     def test_candidate_tree_unstaged_selection_working_vs_commit_semantics(self):
         """Verify candidate_tree selects working tree for require_index=False (auto) and index for require_index=True (gate)."""
@@ -5727,8 +5727,8 @@ exit 0
                         self.assertEqual(cm.exception.code, 1)
 
             # 1. Patch file must be persisted
-            patch_file = repo / ".git" / "triad_proposed_fix.patch"
-            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .git/triad_proposed_fix.patch")
+            patch_file = repo / ".git" / "triad-review" / "triad_proposed_fix.patch"
+            self.assertTrue(patch_file.exists(), "Proposed fix must be saved to .git/triad-review/triad_proposed_fix.patch")
             self.assertEqual(patch_file.read_text(encoding="utf-8"), fake_fix)
             self.assertFalse((repo / ".triad_proposed_fix.patch").exists(), "Proposed fix must not be written into the working tree")
             self.assertFalse((repo / "triad_proposed_fix.patch").exists())
@@ -5746,7 +5746,9 @@ exit 0
             subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
             victim = Path(victim_dir) / "victim.txt"
             victim.write_text("ORIGINAL", encoding="utf-8")
-            dest = repo / ".git" / "triad_proposed_fix.patch"
+            review_dir = repo / ".git" / "triad-review"
+            review_dir.mkdir()
+            dest = review_dir / "triad_proposed_fix.patch"
             try:
                 os.symlink(str(victim), str(dest))
             except (OSError, NotImplementedError, AttributeError):
@@ -6267,5 +6269,4 @@ exit 0
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
 

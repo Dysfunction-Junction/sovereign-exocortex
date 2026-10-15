@@ -61,15 +61,16 @@ Behaviour changes from this pass:
 - `updateProposalState` throws on illegal transitions and on unknown proposal ids. The transition table was inferred (nothing in the repo called it yet); GATED -> EXECUTING is allowed for the auto-execute path.
 - `ingestTelemetry` rejects malformed signals with a 400 instead of half-applying them.
 
-## Needs a design decision (not implemented here)
+## Status of the original follow-up decisions
 
 | ID | Item | Why it waits | Proposed default |
 |---|---|---|---|
-| P4 | **CODE_HEALTH policies score confidence 0.90 / risk 0.05** and pass auto-execute (`self_heal_restore`). | Shadow gating now exists at the daemon routes, but the executor of `SILENT_AUTO_EXECUTE` is not in these packages. | Require an explicit per-policy allowlist plus a shadow check in the executor. |
-| P5 | **`createBeliefSnapshot.totalSurprisal`** is always 0. | The per-step surprisal is not retained. | Accumulate surprisal in `processObservation`; store it in the snapshot. |
-| P9 | **`semanticSearch`** drops local hits when the server summaries call fails with a non-unreachable error. | May be intended. | Fall back to local-only results with a notice. |
-| P10 | `.triad_proposed_fix.patch` is written into the working tree in direct mode (symlink write, blocks the next gate run). | Low severity, fail-closed. | Write into `.git/`. |
-| P11 | `packages/mesh` (~40k lines) and triad `bench/` were not audited. | Scope. | Separate audit. |
+| P4 | **CODE_HEALTH policies could auto-execute `self_heal_restore`.** | Resolved in `packages/world-model/src/cognitive-gate.ts`: the auto-execute allowlist contains only `diagnostic_probe`; repair actions stay out of unattended execution. Triad direct-mode proposals are saved for review, while isolated validation only reaches the parent workspace with `--apply-verified`. | Keep unattended repair execution disabled; require Triad validation and explicit verified application. |
+| P5 | **`createBeliefSnapshot.totalSurprisal` was always 0.** | Resolved in `packages/world-model/src/generative-model.ts`: surprisal is accumulated and included in belief snapshots, with coverage in `packages/world-model/src/p4-p5.test.ts`. | Keep the current accumulated measure; no additional behavior change selected. |
+| P9 | **`semanticSearch` dropped local hits on server summary errors.** | Resolved in `apps/mobile/src/lib/semanticSearch.ts`: local ranked results are retained when server lookup fails, with `serverFailed` signaling the degraded response. | Keep the local-only fallback and its status signal. |
+| P10 | **Triad's direct-mode proposal patch location.** | Resolved: proposed patches are stored outside the working tree at `<git dir>/triad-review/triad_proposed_fix.patch`; direct mode exits without applying them. | Keep proposals in the private review folder; only merge a validated repair with `--apply-verified`. |
+| P11 | **`packages/mesh` and triad `bench/` were not audited.** | Still open. The previous review was not exhaustive and did not cover these areas line-by-line. | Continue a systematic repository audit; do not claim whole-repository coverage until those areas and remaining packages are reviewed. |
+| P12 | **SWE-bench candidate patches could execute tests on the host.** | Resolved in `packages/triad/triad/bench/swebench_runner.py` and `docker_harness.py`: candidate tests run only in Docker, with networking disabled and Linux capabilities dropped; unavailable or inconclusive sandbox runs never fall back to host execution. | Keep untrusted benchmark tests sandboxed; do not count missing/incomplete test runs as verified passes. |
 
 ## Verification
 
