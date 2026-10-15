@@ -205,3 +205,38 @@ Mobile device displayed wake card status failed 401 unauthorized, invalid signat
    - `pnpm --filter @exocortex/mobile test`: 18 suites / 143 tests passing 100%.
    - `pytest packages/triad/triad/tests`: 391 passed (100%).
 
+---
+
+## 10. Autonomous Symbiosis Trinity: Guided Dwell Calibration, Ambient Graph HUD, and Autonomic Databank Archival
+
+### Commit: `a28e719` — `feat(symbiosis): guided dwell calibration, ambient graph hud, and autonomic databank archival`
+- Remote: Synced and pushed to `origin/main` (`722aa9b..a28e719`).
+
+### Delivered Features:
+1. **Feature 1: Guided 5-Step Neuromuscular Dwell Calibration ([`AnticipationRing.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/components/AnticipationRing.tsx))**
+   - Ref-based non-blocking multi-step guided calibration flow (`guidedRef.current`).
+   - Touch dwell window validation enforcing physical bounds: touches `< 80ms` (accidental taps) and `> 800ms` (tremors/abandoned holds) are rejected with constructive guidance.
+   - Automatic trigger of `calibratePrecognitive(5)` upon completion of the 5th valid sample to update the empirical $p_{20}$ wake quantile.
+   - Comprehensive unit test coverage in [`AnticipationRing.test.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/components/AnticipationRing.test.tsx) (13/13 passing).
+
+2. **Feature 2: Ambient Living Graph & Cognitive Mode HUD ([`AmbientGraphHud.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/components/AmbientGraphHud.tsx))**
+   - Real-time cognitive state HUD mounted directly under the Anticipation Ring on mobile [`Status.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/pages/Status.tsx).
+   - Displays live cognitive mode (e.g. `HIGH_VELOCITY_EXECUTION`), entity/edge telemetry (`199 entities · 501 edges`), and proactive neural inference context.
+   - Request sequence guarding via `reqIdRef` to prevent race conditions during background polling, with automatic polling backoff on 403 scope requirements.
+   - Unit tested in [`AmbientGraphHud.test.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/components/AmbientGraphHud.test.tsx) (4/4 passing).
+
+3. **Feature 3: Autonomic Databank Archival Host ([`databank-archival-host.ts`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/daemon/src/databank-archival-host.ts))**
+   - Integrated scheduled background memory archival daemon with remote vault health caching (15s TTL).
+   - Enforced 7-day minimum retention floor (`Math.max(7, olderThanDays)`) to safeguard against accidental memory loss.
+   - Atomic pre-prune backup to `.exocortex/memories.backup.<ts>.jsonl` before pruning local memories.
+   - Exposes REST endpoints `/v3/databank/status` and `/v3/databank/archive` with mapped HTTP error codes (409 conflict for running jobs, 503 for locked/offline vaults).
+   - Unit tested in [`databank-archival-host.test.ts`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/daemon/src/databank-archival-host.test.ts) (6/6 passing).
+
+### Live Verification & Monorepo Health:
+- `pnpm -r typecheck`: 0 errors across all 11 workspace packages.
+- `@exocortex/daemon` tests: 168/168 passing (100%).
+- `@exocortex/mobile` tests: 149/149 passing (100%).
+- `@exocortex/triad` pytest: 392 passed, 2 skipped (100%).
+- Live Galaxy S26 Ultra deployment (`192.168.55.93:37725`): APK compiled, installed, and verified live on-device with active Obsidian Glass Anticipation Ring and Ambient Living Graph HUD.
+
+
