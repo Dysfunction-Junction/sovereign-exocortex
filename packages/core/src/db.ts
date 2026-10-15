@@ -961,6 +961,7 @@ export class ExocortexDatabase {
       threshold: opts?.threshold,
       minLabels: opts?.minLabels,
       baselinePrecision: opts?.baselinePrecision,
+      db: opts?.db ?? this.db,
     });
   }
 

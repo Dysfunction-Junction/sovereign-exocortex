@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import {
+  computeSameHourYesterdayBaseline,
   computeShadowMetrics,
   formatShadowReport,
   loadShadowRows,
@@ -221,3 +222,99 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
     expect(() => loadShadowRows(raw)).toThrow(/unknown label/);
   });
 });
+
+describe("computeSameHourYesterdayBaseline (sqlite)", () => {
+  function createTestDb(): DatabaseSync {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    raw.exec("PRAGMA foreign_keys = OFF");
+    return raw;
+  }
+
+  it("scores baseline precision when yesterday has matching surfaced action", () => {
+    const raw = createTestDb();
+    raw.exec(`
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p0',1,'PRAGMATIC',1,'s','{"op":"review"}',x'01',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p0','MAINTENANCE','SURFACE','r',${NOW - DAY});
+
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p1',2,'PRAGMATIC',1,'s','{"op":"review"}',x'02',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','SURFACE','r',${NOW});
+      INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
+    `);
+
+    const baseline = computeSameHourYesterdayBaseline(raw, { nowMs: NOW, windowDays: 7, minEvaluations: 1 });
+    expect(baseline.evaluations).toBe(1);
+    expect(baseline.baselineWanted).toBe(1);
+    expect(baseline.baselineNotWanted).toBe(0);
+    expect(baseline.baselinePrecision).toBe(1.0);
+  });
+
+  it("penalizes baseline when yesterday action was different", () => {
+    const raw = createTestDb();
+    raw.exec(`
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p0',1,'PRAGMATIC',1,'s','{"op":"other"}',x'01',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p0','MAINTENANCE','SURFACE','r',${NOW - DAY});
+
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p1',2,'PRAGMATIC',1,'s','{"op":"review"}',x'02',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','SURFACE','r',${NOW});
+      INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
+    `);
+
+    const baseline = computeSameHourYesterdayBaseline(raw, { nowMs: NOW, windowDays: 7, minEvaluations: 1 });
+    expect(baseline.evaluations).toBe(1);
+    expect(baseline.baselineWanted).toBe(0);
+    expect(baseline.baselineNotWanted).toBe(1);
+    expect(baseline.baselinePrecision).toBe(0.0);
+  });
+
+  it("returns null baseline when no proposals surfaced at that hour yesterday", () => {
+    const raw = createTestDb();
+    raw.exec(`
+      INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+        VALUES ('p1',2,'PRAGMATIC',1,'s','{"op":"review"}',x'02',1,0,0,'SURFACED',1,1,1);
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','SURFACE','r',${NOW});
+      INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
+    `);
+
+    const baseline = computeSameHourYesterdayBaseline(raw, { nowMs: NOW, windowDays: 7, minEvaluations: 1 });
+    expect(baseline.evaluations).toBe(0);
+    expect(baseline.baselinePrecision).toBeNull();
+  });
+
+  it("auto-resolves baseline in computeShadowMetrics when opts.db is provided", () => {
+    const raw = createTestDb();
+    for (let i = 0; i < 20; i++) {
+      raw.exec(`
+        INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+          VALUES ('y${i}',${100 + i},'PRAGMATIC',1,'s','{"op":"review"}',x'01',1,0,0,'SURFACED',1,1,1);
+        INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts)
+          VALUES ('y${i}','MAINTENANCE','SURFACE','r',${NOW - DAY + i * 10});
+      `);
+    }
+    for (let i = 0; i < 20; i++) {
+      raw.exec(`
+        INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+          VALUES ('t${i}',${200 + i},'PRAGMATIC',1,'s','{"op":"review"}',x'02',1,0,0,'SURFACED',1,1,1);
+        INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts)
+          VALUES ('t${i}','MAINTENANCE','SURFACE','r',${NOW + i * 10});
+        INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts)
+          VALUES ('t${i}','wanted','{"source":"tap"}',10,${NOW + i * 10});
+      `);
+    }
+
+    const rows = loadShadowRows(raw);
+    const metrics = computeShadowMetrics(rows, { nowMs: NOW + 1000, minLabels: 20, db: raw });
+    expect(metrics.baselinePrecision).toBe(1.0);
+    expect(metrics.baselineEvaluations).toBe(20);
+    expect(metrics.baselineGap).toBe(0.0);
+    expect(metrics.verdict).toBe("heuristic_scorer");
+
+    const report = formatShadowReport(metrics);
+    expect(report).toContain("baseline 100.0%, n=20");
+  });
+});
+

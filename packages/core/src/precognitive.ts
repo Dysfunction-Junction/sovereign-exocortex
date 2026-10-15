@@ -14,6 +14,10 @@
 
 import { DryRunCache, defaultDryRunCache, type SpeculativeProposal } from "./dry-run.js";
 
+export const DEFAULT_WAKE_THRESHOLD_MS = 4000;
+export const MIN_WAKE_THRESHOLD_MS = 500;
+export const MAX_WAKE_THRESHOLD_MS = 15000;
+
 export interface NeuromuscularSignals {
   lastVibrationAt?: number;
   screenOnAt?: number;
@@ -31,13 +35,104 @@ export interface ReadinessState {
   preStagedProposalId?: string;
 }
 
+export interface PreCognitiveOptions {
+  cache?: DryRunCache;
+  wakeThresholdMs?: number;
+  moderateMultiplier?: number;
+}
+
+/**
+ * Computes an empirical wake delta quantile (e.g. p20) from logged deltas (in milliseconds).
+ * Clamps result between MIN_WAKE_THRESHOLD_MS (500ms) and MAX_WAKE_THRESHOLD_MS (15000ms).
+ * Returns fallback (4000ms) when empty or invalid.
+ */
+export function computeWakeDeltaQuantile(
+  deltas: number[],
+  quantile = 0.20,
+  fallbackMs = DEFAULT_WAKE_THRESHOLD_MS,
+  minSamples = 20
+): number {
+  const valid = deltas.filter((d) => Number.isFinite(d) && d > 0).sort((a, b) => a - b);
+  if (valid.length < minSamples) return fallbackMs;
+  const q = Math.max(0, Math.min(1, quantile));
+  const pos = (valid.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  const raw = valid[base + 1] !== undefined ? valid[base] + rest * (valid[base + 1] - valid[base]) : valid[base];
+  const rounded = Math.round(raw);
+  return Math.max(MIN_WAKE_THRESHOLD_MS, Math.min(MAX_WAKE_THRESHOLD_MS, rounded));
+}
+
+export interface WakeEventRecord {
+  kind: string;
+  ts_device: number;
+  payload?: Record<string, unknown> | null;
+}
+
+/**
+ * Extracts wake-to-screen-on / wake-to-touch deltas (in ms) from an event stream.
+ * Specifically measures the interval between vibration (or wake notification) and
+ * the subsequent user wake action (SCREEN_ON or TOUCH) within maxWindowMs.
+ */
+export function extractWakeDeltasFromEvents(
+  events: WakeEventRecord[],
+  maxWindowMs = 30000
+): number[] {
+  const deltas: number[] = [];
+  const sorted = [...events].sort((a, b) => a.ts_device - b.ts_device);
+  let pendingWakeTs: number | null = null;
+
+  for (const ev of sorted) {
+    const isVibrationOrWake =
+      ev.kind === "vibration" ||
+      ev.kind === "wake" ||
+      (ev.kind === "telemetry" && ev.payload?.event === "VIBRATION");
+
+    const isScreenOnOrWakeResponse =
+      (ev.kind === "telemetry" && (ev.payload?.event === "SCREEN_ON" || ev.payload?.event === "TOUCH" || ev.payload?.event === "TAP")) ||
+      ev.kind === "touch";
+
+    if (isVibrationOrWake) {
+      // Use latest vibration timestamp in a burst
+      pendingWakeTs = ev.ts_device;
+    } else if (isScreenOnOrWakeResponse && pendingWakeTs !== null) {
+      const delta = ev.ts_device - pendingWakeTs;
+      if (delta >= 0 && delta <= maxWindowMs) {
+        deltas.push(delta);
+      }
+      pendingWakeTs = null;
+    }
+  }
+  return deltas;
+}
+
 export class PreCognitiveEngine {
   private cache: DryRunCache;
   private lastSignals: NeuromuscularSignals = {};
   private preStagedProposal: SpeculativeProposal | null = null;
+  private wakeThresholdMs: number;
+  private moderateMultiplier: number;
 
-  constructor(cache: DryRunCache = defaultDryRunCache) {
-    this.cache = cache;
+  constructor(cacheOrOpts: DryRunCache | PreCognitiveOptions = defaultDryRunCache) {
+    if (cacheOrOpts instanceof DryRunCache) {
+      this.cache = cacheOrOpts;
+      this.wakeThresholdMs = DEFAULT_WAKE_THRESHOLD_MS;
+      this.moderateMultiplier = 3;
+    } else {
+      this.cache = cacheOrOpts.cache ?? defaultDryRunCache;
+      this.wakeThresholdMs = cacheOrOpts.wakeThresholdMs ?? DEFAULT_WAKE_THRESHOLD_MS;
+      this.moderateMultiplier = cacheOrOpts.moderateMultiplier ?? 3;
+    }
+  }
+
+  public get wakeThreshold(): number {
+    return this.wakeThresholdMs;
+  }
+
+  public setWakeThreshold(ms: number): void {
+    if (Number.isFinite(ms) && ms > 0) {
+      this.wakeThresholdMs = Math.max(MIN_WAKE_THRESHOLD_MS, Math.min(MAX_WAKE_THRESHOLD_MS, Math.round(ms)));
+    }
   }
 
   /**
@@ -82,9 +177,11 @@ export class PreCognitiveEngine {
     const wakeupLatencyMs = Math.max(0, timestamp - refTime);
 
     let urgencyIntent: 'HIGH_URGENCY' | 'MODERATE' | 'CASUAL';
-    if (this.lastSignals.lastVibrationAt && wakeupLatencyMs < 4000) {
+    const highLimit = this.wakeThresholdMs;
+    const moderateLimit = Math.max(12000, highLimit * this.moderateMultiplier);
+    if (this.lastSignals.lastVibrationAt !== undefined && wakeupLatencyMs < highLimit) {
       urgencyIntent = 'HIGH_URGENCY';
-    } else if (wakeupLatencyMs < 12000) {
+    } else if (wakeupLatencyMs < moderateLimit) {
       urgencyIntent = 'MODERATE';
     } else {
       urgencyIntent = 'CASUAL';

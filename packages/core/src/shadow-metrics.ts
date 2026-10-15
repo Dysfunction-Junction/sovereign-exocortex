@@ -28,6 +28,7 @@ export interface ShadowRow {
   gate_ts: number;
   label: ShadowLabel | null;
   label_source: LabelSource | null;
+  action?: string | null;
 }
 
 export interface ShadowMetricsOptions {
@@ -36,6 +37,20 @@ export interface ShadowMetricsOptions {
   threshold?: number;
   minLabels?: number;
   baselinePrecision?: number;
+  db?: DatabaseSync;
+}
+
+export interface BaselineCalculationOptions {
+  nowMs: number;
+  windowDays?: number;
+  hourToleranceMs?: number;
+}
+
+export interface BaselineResult {
+  baselinePrecision: number | null;
+  evaluations: number;
+  baselineWanted: number;
+  baselineNotWanted: number;
 }
 
 export type ShadowVerdict = "insufficient_data" | "heuristic_scorer" | "pass" | "fail";
@@ -76,7 +91,9 @@ export interface ShadowMetrics {
   pessimisticPrecision: number | null;
   coverage: number | null;
   focusRegret: number;
+  baselinePrecision: number | null;
   baselineGap: number | null;
+  baselineEvaluations?: number;
   threshold: number;
   minLabels: number;
   verdict: ShadowVerdict;
@@ -137,8 +154,23 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
 
   const decided = wanted + notWanted;
   const precision = ratio(wanted, decided);
+
+  let baselinePrecision = opts.baselinePrecision;
+  let baselineEvaluations: number | undefined;
+
+  if (baselinePrecision === undefined && opts.db) {
+    const autoBaseline = computeSameHourYesterdayBaseline(opts.db, {
+      nowMs: opts.nowMs,
+      windowDays,
+    });
+    if (autoBaseline.baselinePrecision !== null) {
+      baselinePrecision = autoBaseline.baselinePrecision;
+      baselineEvaluations = autoBaseline.evaluations;
+    }
+  }
+
   const baselineGap =
-    precision !== null && opts.baselinePrecision !== undefined ? precision - opts.baselinePrecision : null;
+    precision !== null && baselinePrecision !== undefined ? precision - baselinePrecision : null;
 
   // Compare in counts, not floats: wanted/decided >= threshold.
   const meetsThreshold = wanted >= threshold * decided - 1e-9;
@@ -164,7 +196,9 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     pessimisticPrecision: ratio(wanted, decided + ignored),
     coverage: ratio(decided, surfaced.length),
     focusRegret: surfaced.filter((r) => r.mode === "DEEP_FOCUS").length,
+    baselinePrecision: baselinePrecision ?? null,
     baselineGap,
+    baselineEvaluations,
     threshold,
     minLabels,
     verdict,
@@ -193,6 +227,113 @@ function parseSource(actual: string | null): LabelSource | null {
   }
 }
 
+function actionsMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  try {
+    const objA = JSON.parse(a);
+    const objB = JSON.parse(b);
+    return JSON.stringify(objA) === JSON.stringify(objB);
+  } catch {
+    return false;
+  }
+}
+
+export function computeSameHourYesterdayBaseline(
+  db: DatabaseSync,
+  opts: BaselineCalculationOptions,
+): BaselineResult {
+  const windowDays = opts.windowDays ?? 14;
+  const hourToleranceMs = opts.hourToleranceMs ?? 30 * 60 * 1000;
+  const since = opts.nowMs - windowDays * DAY_MS;
+
+  const queryOnlyStmt = db.prepare("PRAGMA query_only");
+  const wasQueryOnly = Boolean((queryOnlyStmt.get() as { query_only?: number } | undefined)?.query_only);
+  if (!wasQueryOnly) {
+    db.exec("PRAGMA query_only = ON");
+  }
+
+  try {
+    interface BaselineRow {
+      proposal_id: string;
+      action: string;
+      gate_ts: number;
+      label: ShadowLabel | null;
+      actual: string | null;
+    }
+
+    const raw = db
+      .prepare(
+        `WITH ranked AS (
+           SELECT g.proposal_id, g.mode, g.decision, g.ts,
+                  ROW_NUMBER() OVER (PARTITION BY g.proposal_id ORDER BY g.ts DESC, g.rowid DESC) AS rn
+             FROM gate_decisions g
+         )
+         SELECT r.proposal_id, p.action, r.ts AS gate_ts, l.label, l.actual
+           FROM ranked r
+           JOIN proposals p ON p.proposal_id = r.proposal_id
+           LEFT JOIN shadow_labels l ON l.proposal_id = r.proposal_id
+          WHERE r.rn = 1 AND p.shadow = 1 AND r.decision = 'SURFACE'
+          ORDER BY r.ts ASC`,
+      )
+      .all() as unknown as BaselineRow[];
+
+    const surfacedList = raw.map((r) => ({
+      proposal_id: r.proposal_id,
+      action: r.action,
+      gate_ts: r.gate_ts,
+      label: r.label,
+      source: parseSource(r.actual) ?? (r.label === "wanted" || r.label === "not_wanted" ? "tap" : "inferred"),
+    }));
+
+    const targets = surfacedList.filter(
+      (r) =>
+        r.gate_ts > since &&
+        r.gate_ts <= opts.nowMs &&
+        (r.label === "wanted" || r.label === "not_wanted") &&
+        r.source === "tap",
+    );
+
+    let baselineWanted = 0;
+    let baselineNotWanted = 0;
+
+    for (const target of targets) {
+      const yesterdayTarget = target.gate_ts - DAY_MS;
+      const windowStart = yesterdayTarget - hourToleranceMs;
+      const windowEnd = yesterdayTarget + hourToleranceMs;
+
+      const candidates = surfacedList.filter(
+        (r) => r.gate_ts >= windowStart && r.gate_ts <= windowEnd,
+      );
+
+      if (candidates.length === 0) {
+        continue;
+      }
+
+      const prev = candidates[candidates.length - 1];
+      const isMatch = actionsMatch(prev.action, target.action);
+      if (isMatch && target.label === "wanted") {
+        baselineWanted++;
+      } else {
+        baselineNotWanted++;
+      }
+    }
+
+    const evaluations = baselineWanted + baselineNotWanted;
+    const baselinePrecision = evaluations > 0 ? baselineWanted / evaluations : null;
+
+    return {
+      baselinePrecision,
+      evaluations,
+      baselineWanted,
+      baselineNotWanted,
+    };
+  } finally {
+    if (!wasQueryOnly) {
+      db.exec("PRAGMA query_only = OFF");
+    }
+  }
+}
+
 export interface LoadShadowRowsOptions {
   restoreQueryOnly?: boolean;
 }
@@ -213,7 +354,8 @@ export function loadShadowRows(db: DatabaseSync, options?: LoadShadowRowsOptions
              FROM gate_decisions g
          )
          SELECT r.proposal_id AS proposal_id, p.shadow AS shadow, r.decision AS decision,
-                r.mode AS mode, r.ts AS gate_ts, l.label AS label, l.actual AS actual
+                r.mode AS mode, r.ts AS gate_ts, l.label AS label, l.actual AS actual,
+                p.action AS action
            FROM ranked r
            JOIN proposals p ON p.proposal_id = r.proposal_id
            LEFT JOIN shadow_labels l ON l.proposal_id = r.proposal_id
@@ -238,6 +380,13 @@ function pct(v: number | null): string {
 }
 
 export function formatShadowReport(m: ShadowMetrics): string {
+  const baselineStr =
+    m.baselineGap === null
+      ? "n/a (no baseline given)"
+      : m.baselinePrecision !== null && m.baselineEvaluations !== undefined
+        ? `${pct(m.baselineGap)}  (baseline ${pct(m.baselinePrecision)}, n=${m.baselineEvaluations})`
+        : pct(m.baselineGap);
+
   return [
     `Shadow metrics (last ${m.windowDays} days)`,
     `  Surfaced:            ${m.surfaced}  (unlabeled ${m.unlabeled})`,
@@ -246,7 +395,7 @@ export function formatShadowReport(m: ShadowMetrics): string {
     `  Precision@surface:   ${pct(m.precision)}  (Wilson 95% lower ${pct(m.wilsonLower)}, pessimistic ${pct(m.pessimisticPrecision)})`,
     `  Coverage:            ${pct(m.coverage)}`,
     `  Focus regret:        ${m.focusRegret}  (target 0)`,
-    `  Baseline gap:        ${m.baselineGap === null ? "n/a (no baseline given)" : pct(m.baselineGap)}`,
+    `  Baseline gap:        ${baselineStr}`,
     `  Verdict:             ${m.verdict}  (threshold ${pct(m.threshold)}, min labels ${m.minLabels})`,
     `  Circuit breaker:     ${m.breakerTripped ? "TRIPPED" : "ok"}`,
   ].join("\n");

@@ -15,3 +15,4 @@ export * from './past-ladder.js';
 export * from './comms-ladder.js';
 export * from './comms-timing.js';
 export * from './comms-seed.js';
+export * from './graph-linker.js';

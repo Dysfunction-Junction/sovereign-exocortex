@@ -16,7 +16,8 @@ export type EntityType =
   | 'GOAL'
   | 'ROUTINE'
   | 'CONTEXT_STATE'
-  | 'TOPIC';
+  | 'TOPIC'
+  | 'DOC';
 
 export type RelationType =
   | 'WORKS_ON'
@@ -26,7 +27,10 @@ export type RelationType =
   | 'BLOCKS'
   | 'CARES_ABOUT'
   | 'INTERACTS_WITH'
-  | 'TRANSITIONS_TO';
+  | 'TRANSITIONS_TO'
+  | 'HAS_TOPIC'
+  | 'REFERENCES'
+  | 'MENTIONS';
 
 export interface GraphEntity {
   id: string;
@@ -221,6 +225,34 @@ export class LivingLifeGraph {
     }
 
     return activationLevels;
+  }
+
+  /**
+   * Spreading Activation alias.
+   */
+  public spreadingActivation(
+    sourceIds: string[],
+    initialEnergy: number = 1.0,
+    retentionRate: number = 0.6,
+    depthLimit: number = 3,
+    edgeVisitBudget: number = Infinity,
+  ): Map<string, number> {
+    return this.spreadActivation(sourceIds, initialEnergy, retentionRate, depthLimit, edgeVisitBudget);
+  }
+
+  /**
+   * Get direct target neighbor entities for a given entity.
+   */
+  public getNeighbors(entityId: string): GraphEntity[] {
+    const outgoing = this.adjacency.get(entityId) ?? new Set();
+    const neighbors: GraphEntity[] = [];
+    for (const edgeId of outgoing) {
+      const edge = this.edges.get(edgeId);
+      if (!edge) continue;
+      const target = this.entities.get(edge.targetId);
+      if (target) neighbors.push(target);
+    }
+    return neighbors;
   }
 
   /**

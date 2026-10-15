@@ -43,7 +43,7 @@ try {
   const db = new DatabaseSync(parsed.positionals[0], { readOnly: true });
   try {
     db.exec("PRAGMA busy_timeout = 5000");
-    const metrics = computeShadowMetrics(loadShadowRows(db), { nowMs: Date.now(), windowDays, baselinePrecision });
+    const metrics = computeShadowMetrics(loadShadowRows(db), { nowMs: Date.now(), windowDays, baselinePrecision, db });
     console.log(formatShadowReport(metrics));
     process.exitCode = EXIT[metrics.verdict];
   } finally {
