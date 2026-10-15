@@ -208,6 +208,7 @@ function labelSource(
   if (attestation === undefined || attestation === null) return "inferred";
   const dev = db.getDevice(deviceId);
   if (!dev || dev.revoked_at) return "inferred";
+  if (db.getProposalSourceDeviceId(proposalId) !== deviceId) return "inferred";
   const v = verifyLabelAttestation(attestation, { deviceId, proposalId, label }, dev.pubkey_spki, Boolean(dev.key_attested));
   if (!v.ok) return "inferred";
   try {
@@ -1140,7 +1141,7 @@ export const server = createServer(async (req, res) => {
         latencyMs,
       });
 
-      if (proposal.shadow === 1 && (proposal.state === "SURFACED" || proposal.state === "STAGED")) {
+      if (source === "tap" && proposal.shadow === 1 && (proposal.state === "SURFACED" || proposal.state === "STAGED")) {
         try {
           db.updateProposalState(proposalId, label === "wanted" ? "APPROVED" : "REJECTED");
         } catch (stateErr) {
@@ -1507,7 +1508,8 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         try {
           const db = getDatabase();
           if (db.getProposal(proposalId)) {
-            applyShadowLabel(db, auth.deviceId, { proposalId, label: "wanted", source: "tap", actual: { via: "approval" } });
+            const source = db.getProposalSourceDeviceId(proposalId) === auth.deviceId ? "tap" : "inferred";
+            applyShadowLabel(db, auth.deviceId, { proposalId, label: "wanted", source, actual: { via: "approval" } });
           }
         } catch (labelErr) {
           console.error("[approve] failed to record tap label:", labelErr);

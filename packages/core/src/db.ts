@@ -766,6 +766,17 @@ export class ExocortexDatabase {
     };
   }
 
+  public getProposalSourceDeviceId(proposalId: string): string | null {
+    const stmt = this.db.prepare(`
+      SELECT events.device_id
+      FROM proposals
+      JOIN events ON events.seq = proposals.created_seq
+      WHERE proposals.proposal_id = ?
+    `);
+    const row = stmt.get(proposalId) as { device_id: string } | undefined;
+    return row ? String(row.device_id) : null;
+  }
+
   public updateProposalState(proposalId: string, state: ProposalState): void {
     this.withTransaction(() => {
       const current = this.getProposal(proposalId);
@@ -1025,4 +1036,3 @@ export class ExocortexDatabase {
     };
   }
 }
-
