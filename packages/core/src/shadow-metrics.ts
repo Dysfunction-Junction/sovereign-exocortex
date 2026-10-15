@@ -91,6 +91,15 @@ export interface ShadowMetrics {
   pessimisticPrecision: number | null;
   coverage: number | null;
   focusRegret: number;
+  focusOutcomes: {
+    wanted: number;
+    notWanted: number;
+    inferredWanted: number;
+    inferredNotWanted: number;
+    alreadyDid: number;
+    ignored: number;
+    unlabeled: number;
+  };
   baselinePrecision: number | null;
   baselineGap: number | null;
   baselineEvaluations?: number;
@@ -154,6 +163,7 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
 
   const decided = wanted + notWanted;
   const precision = ratio(wanted, decided);
+  const focusRows = surfaced.filter((r) => r.mode === "DEEP_FOCUS");
 
   let baselinePrecision = opts.baselinePrecision;
   let baselineEvaluations: number | undefined;
@@ -195,7 +205,16 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     wilsonLower: wilsonLowerBound(wanted, decided),
     pessimisticPrecision: ratio(wanted, decided + ignored),
     coverage: ratio(decided, surfaced.length),
-    focusRegret: surfaced.filter((r) => r.mode === "DEEP_FOCUS").length,
+    focusRegret: focusRows.length,
+    focusOutcomes: {
+      wanted: focusRows.filter((r) => r.label === "wanted" && sourceOf(r) === "tap").length,
+      notWanted: focusRows.filter((r) => r.label === "not_wanted" && sourceOf(r) === "tap").length,
+      inferredWanted: focusRows.filter((r) => r.label === "wanted" && sourceOf(r) === "inferred").length,
+      inferredNotWanted: focusRows.filter((r) => r.label === "not_wanted" && sourceOf(r) === "inferred").length,
+      alreadyDid: focusRows.filter((r) => r.label === "already_did").length,
+      ignored: focusRows.filter((r) => r.label === "ignored").length,
+      unlabeled: focusRows.filter((r) => r.label === null).length,
+    },
     baselinePrecision: baselinePrecision ?? null,
     baselineGap,
     baselineEvaluations,
@@ -395,6 +414,7 @@ export function formatShadowReport(m: ShadowMetrics): string {
     `  Precision@surface:   ${pct(m.precision)}  (Wilson 95% lower ${pct(m.wilsonLower)}, pessimistic ${pct(m.pessimisticPrecision)})`,
     `  Coverage:            ${pct(m.coverage)}`,
     `  Focus regret:        ${m.focusRegret}  (target 0)`,
+    `  Focus outcomes:      already_did ${m.focusOutcomes.alreadyDid}, ignored ${m.focusOutcomes.ignored}, tapped wanted ${m.focusOutcomes.wanted}, tapped not_wanted ${m.focusOutcomes.notWanted}, inferred wanted ${m.focusOutcomes.inferredWanted}, inferred not_wanted ${m.focusOutcomes.inferredNotWanted}, unlabeled ${m.focusOutcomes.unlabeled}`,
     `  Baseline gap:        ${baselineStr}`,
     `  Verdict:             ${m.verdict}  (threshold ${pct(m.threshold)}, min labels ${m.minLabels})`,
     `  Circuit breaker:     ${m.breakerTripped ? "TRIPPED" : "ok"}`,

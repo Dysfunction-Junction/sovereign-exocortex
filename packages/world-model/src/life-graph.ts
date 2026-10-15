@@ -348,4 +348,15 @@ export class LivingLifeGraph {
   public get edgeCount(): number {
     return this.edges.size;
   }
+
+  /** Return a detached snapshot of the complete graph for export and persistence. */
+  public snapshot(): { entities: GraphEntity[]; edges: GraphEdge[] } {
+    return {
+      entities: [...this.entities.values()].map((entity) => ({
+        ...entity,
+        ...(entity.properties ? { properties: structuredClone(entity.properties) } : {}),
+      })),
+      edges: [...this.edges.values()].map((edge) => ({ ...edge })),
+    };
+  }
 }

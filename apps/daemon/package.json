@@ -18,6 +18,8 @@
     "typecheck": "tsc --noEmit",
     "sentinel": "tsx src/mishmash-sentinel.ts",
     "triage-label": "tsx --env-file-if-exists=.env src/triage-label-cli.ts",
+    "benchmark-triage": "tsx scripts/benchmark-triage-models.ts",
+    "export-life-graph": "tsx src/export-graph-cli.ts",
     "pieces-backfill": "tsx --env-file-if-exists=.env src/pieces-backfill-cli.ts",
     "pieces-backtest": "tsx --env-file-if-exists=.env src/pieces-backtest-cli.ts",
     "comms-backfill": "tsx --env-file-if-exists=.env src/comms-backfill-cli.ts",

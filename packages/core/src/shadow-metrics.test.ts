@@ -97,11 +97,16 @@ describe("computeShadowMetrics", () => {
 
   it("counts focus regret from SURFACE rows in DEEP_FOCUS", () => {
     const data = [
-      row({ id: "a", mode: "DEEP_FOCUS" }),
+      row({ id: "a", mode: "DEEP_FOCUS", label: "already_did" }),
+      row({ id: "d", mode: "DEEP_FOCUS", label: "ignored" }),
+      row({ id: "e", mode: "DEEP_FOCUS", label: "wanted", label_source: "tap" }),
+      row({ id: "f", mode: "DEEP_FOCUS", label: "not_wanted", label_source: "inferred" }),
       row({ id: "b", mode: "DEEP_FOCUS", decision: "QUEUE" }),
       row({ id: "c" }),
     ];
-    expect(computeShadowMetrics(data, OPTS).focusRegret).toBe(1);
+    const metrics = computeShadowMetrics(data, OPTS);
+    expect(metrics.focusRegret).toBe(4);
+    expect(metrics.focusOutcomes).toEqual({ wanted: 1, notWanted: 0, inferredWanted: 0, inferredNotWanted: 1, alreadyDid: 1, ignored: 1, unlabeled: 0 });
   });
 
   it("splits label sources and honours explicit source", () => {

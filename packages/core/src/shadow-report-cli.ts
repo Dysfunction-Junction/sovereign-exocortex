@@ -1,5 +1,5 @@
 /**
- * Usage: tsx shadow-report-cli.ts <db-path> [--days N] [--baseline P]
+ * Usage: tsx shadow-report-cli.ts <db-path> [--days N] [--baseline P] [--json <output-path>]
  * Prints shadow-mode calibration metrics. Opens the database read-only.
  *
  * Exit codes: 0 pass, 1 circuit breaker tripped, 2 usage error,
@@ -8,12 +8,13 @@
 
 import { parseArgs } from "node:util";
 import { DatabaseSync } from "node:sqlite";
+import { writeFile } from "node:fs/promises";
 import { computeShadowMetrics, formatShadowReport, loadShadowRows, type ShadowVerdict } from "./shadow-metrics.js";
 
 const EXIT: Record<ShadowVerdict, number> = { pass: 0, fail: 1, insufficient_data: 3, heuristic_scorer: 4 };
 
 function usage(msg: string): never {
-  console.error(`${msg}\nusage: shadow-report-cli <db-path> [--days N] [--baseline P (0..1)]`);
+  console.error(`${msg}\nusage: shadow-report-cli <db-path> [--days N] [--baseline P (0..1)] [--json <output-path>]`);
   process.exit(2);
 }
 
@@ -24,10 +25,10 @@ function number(name: string, raw: string | undefined, ok: (n: number) => boolea
   return n;
 }
 
-let parsed: ReturnType<typeof parseArgs<{ options: { days: { type: "string" }; baseline: { type: "string" } }; allowPositionals: true }>>;
+let parsed: ReturnType<typeof parseArgs<{ options: { days: { type: "string" }; baseline: { type: "string" }; json: { type: "string" } }; allowPositionals: true }>>;
 try {
   parsed = parseArgs({
-    options: { days: { type: "string" }, baseline: { type: "string" } },
+    options: { days: { type: "string" }, baseline: { type: "string" }, json: { type: "string" } },
     allowPositionals: true,
     strict: true,
   });
@@ -45,6 +46,10 @@ try {
     db.exec("PRAGMA busy_timeout = 5000");
     const metrics = computeShadowMetrics(loadShadowRows(db), { nowMs: Date.now(), windowDays, baselinePrecision, db });
     console.log(formatShadowReport(metrics));
+    if (parsed.values.json !== undefined) {
+      await writeFile(parsed.values.json, `${JSON.stringify({ generatedAt: new Date().toISOString(), metrics }, null, 2)}\n`, { encoding: "utf8", flag: "w" });
+      console.error(`JSON report saved to ${parsed.values.json}`);
+    }
     process.exitCode = EXIT[metrics.verdict];
   } finally {
     db.close();

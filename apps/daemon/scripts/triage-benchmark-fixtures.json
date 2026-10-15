@@ -1,0 +1,17 @@
+[
+  { "id": "urgent-bank-login", "text": "Bank: Sign-in attempt blocked from an unfamiliar device. Review your account security now.", "label": "urgent" },
+  { "id": "urgent-prescription", "text": "Pharmacy: Your prescription refill is ready, but the current supply ends tomorrow.", "label": "urgent" },
+  { "id": "urgent-school-pickup", "text": "Oakridge: Bus route is delayed. Pickup has moved to the north entrance in 20 minutes.", "label": "urgent" },
+  { "id": "urgent-water-leak", "text": "Home sensor: Water detected under the kitchen sink.", "label": "urgent" },
+  { "id": "urgent-account-lock", "text": "Security alert: A password reset was requested for your email account.", "label": "urgent" },
+  { "id": "routine-water-bill", "text": "Water utility: Your bill is due in five days. Pay online or schedule a payment.", "label": "routine" },
+  { "id": "routine-meeting", "text": "Calendar: Project check-in is scheduled for Thursday at 2 PM.", "label": "routine" },
+  { "id": "routine-package", "text": "Delivery update: Your package is expected tomorrow between 10 AM and 2 PM.", "label": "routine" },
+  { "id": "routine-school-form", "text": "School: Please return the permission form by the end of next week.", "label": "routine" },
+  { "id": "routine-renewal", "text": "Reminder: Vehicle registration renewal is due in three weeks.", "label": "routine" },
+  { "id": "noise-promo", "text": "Pizza Palace: Get 20% off your next order this weekend.", "label": "noise" },
+  { "id": "noise-weather", "text": "Daily forecast: Mostly sunny with a high of 72 degrees.", "label": "noise" },
+  { "id": "noise-social", "text": "Alex: That was a great photo!", "label": "noise" },
+  { "id": "noise-game", "text": "Your daily game bonus is ready to collect.", "label": "noise" },
+  { "id": "noise-news", "text": "Weekend guide: Five new restaurants to try around town.", "label": "noise" }
+]

@@ -240,3 +240,30 @@ Mobile device displayed wake card status failed 401 unauthorized, invalid signat
 - Live Galaxy S26 Ultra deployment (`192.168.55.93:37725`): APK compiled, installed, and verified live on-device with active Obsidian Glass Anticipation Ring and Ambient Living Graph HUD.
 
 
+
+# Handoff â€” Shadow Metrics, Graph Export, and Triage Benchmark
+
+Date: 2026-10-15
+
+## Completed
+
+- P11 audit report created at `docs/P11_MESH_TRIAD_BENCH_AUDIT_2026-10-15.md` with four findings and regression-test recommendations.
+- Shadow report CLI now exports JSON with `--json <path>`, includes a breakdown of DEEP_FOCUS outcomes, and keeps its existing rolling Wilson and database-derived same-hour-yesterday baseline metrics. The runbook documents automatic baseline selection.
+- LivingLifeGraph now exposes detached snapshots. World-model exporters generate JSON graph and idempotent Cypher; daemon CLI rebuilds the graph projection from the configured SQLite event database in read-only mode. Run `pnpm --filter @exocortex/daemon export-life-graph` with optional `[db-path] [output-prefix]` arguments.
+- Ollama benchmark harness added at `apps/daemon/scripts/benchmark-triage-models.ts` with a 15-item mock fixture. Run `pnpm --filter @exocortex/daemon benchmark-triage`; use `--models`, `--dataset`, `--url`, and `--output` to configure it.
+- Benchmark results saved at `docs/TRIAGE_MODEL_BENCHMARK_2026-10-15.md`. It measured qwen2.5-coder:7b at 86.7% accuracy / 8.0 output tokens per second / 4.95 GB resident model size; qwen3:4b at 73.3% / 12.6 tok/s / 2.88 GB; qwen3:1.7b at 73.3% / 26.4 tok/s / 1.65 GB. Dataset is synthetic and small, so treat accuracy as preliminary.
+
+## Verification
+
+- `pnpm -r --stream typecheck` passed twice, including all new TypeScript files.
+- `packages/core`: 149 tests passed. `packages/world-model`: 92 tests passed.
+- `packages/triad/triad/tests/test_docker_harness.py`: 13 tests passed.
+- Full mesh suite: 313 passed; 13 failed because this Windows execution environment denies symlink creation and canonicalization of `C:\Users\micha` (`EPERM`).
+- Recursive workspace tests stopped at `packages/memory` because `tsx` failed in the sandbox with `uv_os_get_passwd returned ENOMEM`. The full Triad test command was interrupted after several minutes without a final summary. Its focused Docker harness test passed.
+- Ollama benchmark ran successfully through Node 24 native type stripping. Daemon exporter CLI was typechecked but its runtime smoke test was blocked because the native type loader does not map the workspace's `.js` import specifiers to `.ts`, and the sandbox's `tsx` invocation fails during `os.userInfo()`. The package script uses the repository's standard `tsx` runner for normal local execution.
+
+## Follow-up
+
+- Apply the P11 recommended patches and regression tests in a separate code-fix pass.
+- Rerun all workspace tests in a less restricted Windows environment, especially `packages/mesh`, and smoke-test the exporter against the configured read-only daemon database.
+- Collect at least 50 direct tap labels before using shadow results for the release gate; the synthetic triage benchmark is not a release evaluation.

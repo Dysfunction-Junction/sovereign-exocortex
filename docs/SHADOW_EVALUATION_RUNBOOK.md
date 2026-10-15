@@ -28,6 +28,8 @@ $baselinePrecision = 0.0 # replace with measured baseline precision (0..1)
 pnpm exec tsx packages/core/src/shadow-report-cli.ts "$env:LOCALAPPDATA\exocortex.db" --days 14 --baseline $baselinePrecision
 ```
 
+When using the database-backed same-hour-yesterday comparison, omit `--baseline`; the CLI derives it from matching surfaced actions and their direct tap labels in SQLite. Add `--json shadow-report.json` to save the same metrics, including focus outcome counts, as JSON while retaining the terminal summary.
+
 The release gate is at least 50 direct tap labels, Precision@surface at least 0.90, and a positive gap over the measured baseline; inferred labels are reported separately. Without a supplied baseline, the report shows the gap as unavailable. Insufficient data is not a pass. Keep shadow mode enabled until the gate is met and reviewed.
 
 ### Proposal-preference diagnostics
