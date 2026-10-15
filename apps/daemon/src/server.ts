@@ -22,6 +22,7 @@ import {
 } from "./pending-proposals.js";
 import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
+import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -210,75 +211,11 @@ function labelSource(
   return "tap";
 }
 
-function applyShadowLabel(
-  db: ExocortexDatabase,
-  deviceId: string,
-  params: {
-    proposalId: string;
-    label: ShadowLabel;
-    source: "tap" | "inferred";
-    actual?: unknown;
-    latencyMs?: number | null;
-    /** false when the label already arrived as a ledger event (avoids writing it twice). */
-    emitEvent?: boolean;
-  }
-): { proposalId: string; label: ShadowLabel; source: string; recordedAt: number } {
-  const proposal = db.getProposal(params.proposalId);
-  if (!proposal) {
-    throw new Error(`proposal not found: ${params.proposalId}`);
-  }
+export const defaultInferredOutcomeScheduler = new InferredOutcomeScheduler({
+  getDb: () => getDatabase(),
+  intervalMs: Number(process.env.EXOCORTEX_INFER_INTERVAL_MS) || 15 * 60 * 1000,
+});
 
-  let sanitizedActual: Record<string, unknown> = {};
-  if (params.actual && typeof params.actual === "object" && !Array.isArray(params.actual)) {
-    sanitizedActual = { ...(params.actual as Record<string, unknown>) };
-  } else if (params.actual !== undefined && params.actual !== null) {
-    sanitizedActual = { actual: String(params.actual) };
-  }
-  // Enforce authoritative source placement (cannot be overridden by caller's actual object)
-  sanitizedActual.source = params.source;
-  const actualStr = JSON.stringify(sanitizedActual);
-
-  const now = Date.now();
-  const latencyMs = Number.isSafeInteger(params.latencyMs) && (params.latencyMs as number) >= 0
-    ? (params.latencyMs as number)
-    : null;
-
-  db.withTransaction(() => {
-    db.recordShadowLabel({
-      proposal_id: params.proposalId,
-      label: params.label,
-      actual: actualStr,
-      latency_ms: latencyMs,
-      ts: now,
-    });
-
-    if (params.emitEvent === false) return;
-    const eventId = `label:${params.proposalId}:${now}:${Math.random().toString(36).slice(2, 8)}`;
-    try {
-      db.ingestEvent(deviceId, {
-        event_id: eventId,
-        kind: "label",
-        ts_device: now,
-        schema_ver: 1,
-        payload: {
-          proposal_id: params.proposalId,
-          label: params.label,
-          source: params.source,
-          latency_ms: latencyMs,
-        },
-      });
-    } catch {
-      // If host or device does not have telemetry:write, label row was still persisted atomically
-    }
-  });
-
-  return {
-    proposalId: params.proposalId,
-    label: params.label,
-    source: params.source,
-    recordedAt: now,
-  };
-}
 
 export const server = createServer(async (req, res) => {
 
@@ -576,7 +513,9 @@ export const server = createServer(async (req, res) => {
             try {
               const payload = JSON.parse(ev.payload);
               if (payload?.proposal_id && isShadowLabel(payload?.label)) {
-                const source = labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation);
+                const source = payload?.source === "inferred"
+                  ? "inferred"
+                  : labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation);
                 applyShadowLabel(db, auth.deviceId, {
                   proposalId: String(payload.proposal_id),
                   label: payload.label,
@@ -974,7 +913,9 @@ export const server = createServer(async (req, res) => {
       }
       const label = rawLabel;
 
-      const source = labelSource(db, auth.deviceId, proposalId, label, payloadObj.attestation);
+      const source = payloadObj.source === "inferred"
+        ? "inferred"
+        : labelSource(db, auth.deviceId, proposalId, label, payloadObj.attestation);
 
       let latencyMs: number | null = null;
       if (payloadObj.latency_ms !== undefined) {
@@ -1396,6 +1337,7 @@ export const server = createServer(async (req, res) => {
 server.on("close", () => {
   defaultPushNotifier.stop();
   defaultRepoHealthWatcher.stop();
+  defaultInferredOutcomeScheduler.stop();
 });
 
 // 0.0.0.0, not 127.0.0.1: this runs inside a Docker container reached by
@@ -1415,6 +1357,9 @@ if (process.env.NODE_ENV !== "test") {
   defaultPushNotifier.start();
   if (process.env.EXOCORTEX_REPO_WATCH !== "0") {
     defaultRepoHealthWatcher.start();
+  }
+  if (process.env.EXOCORTEX_INFER_SCHEDULE !== "0") {
+    defaultInferredOutcomeScheduler.start();
   }
 }
 

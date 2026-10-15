@@ -92,6 +92,7 @@ export class ShadowRecorder {
   private readonly lastRecorded = new Map<string, number>();
   private hostReady = false;
   private invariantsReady = false;
+  private hasInvariantStmt: import("node:sqlite").StatementSync | null = null;
 
   constructor(private readonly db: ExocortexDatabase, options: ShadowRecorderOptions = {}) {
     this.nowMs = options.nowMs ?? Date.now;
@@ -187,10 +188,15 @@ export class ShadowRecorder {
         },
       });
 
+      if (!this.hasInvariantStmt) {
+        this.hasInvariantStmt = this.db.raw.prepare("SELECT 1 FROM invariants WHERE invariant_id = ?");
+      }
+      const hasInv = policy.invariantId ? Boolean(this.hasInvariantStmt.get(policy.invariantId)) : false;
+
       const row: ProposalRecord = {
         proposal_id: policy.id,
         created_seq: event.seq,
-        invariant_id: null,
+        invariant_id: hasInv ? policy.invariantId : null,
         policy_type: policy.type,
         tier: tierForRisk(policy.estimatedRisk),
         summary: policy.title,
