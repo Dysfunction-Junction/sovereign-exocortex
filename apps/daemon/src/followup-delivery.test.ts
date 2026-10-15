@@ -36,8 +36,9 @@ function proposal(
   state: "SURFACED" | "STAGED" | "SUPPRESSED" = "SURFACED",
   expiresIn = 3_600_000,
   shadow: 0 | 1 = 1,
+  sourceDeviceId = "dev_a",
 ) {
-  const ev = db.ingestEvent("dev_a", { event_id: `evt_${id}`, kind: "observation", ts_device: Date.now(), schema_ver: 1, payload: {} });
+  const ev = db.ingestEvent(sourceDeviceId, { event_id: `evt_${id}`, kind: "observation", ts_device: Date.now(), schema_ver: 1, payload: {} });
   db.insertProposal({
     proposal_id: id, created_seq: ev.event.seq, invariant_id: null, policy_type: "PRAGMATIC", tier: 1,
     summary: `summary ${id}`, action: "{}", action_hash: new Uint8Array([1]), efe: 1, risk_term: 0.1, ambiguity_term: 0,
@@ -114,12 +115,15 @@ test("P1: label helpers bind device, proposal, label and ts", () => {
 test("P1: tap source requires a valid signed attestation (labels endpoint and /v3/events)", async () => {
   const db = new ExocortexDatabase({ path: ":memory:" });
   const k = p256();
+  const otherKey = p256();
   device(db, "dev_a", k, ["telemetry:write", "approval:write"]);
+  device(db, "dev_b", otherKey, ["telemetry:write", "approval:write"]);
   setDatabase(db);
   proposal(db, "pl1");
   proposal(db, "pl2");
   proposal(db, "pl3");
   proposal(db, "pl4");
+  proposal(db, "pl_cross_device", "SURFACED", 3_600_000, 1, "dev_b");
   await withServer(async (base) => {
     const post = (b: Record<string, unknown>) =>
       fetch(`${base}/v3/shadow/labels`, { method: "POST", headers: bearer("dev_a"), body: JSON.stringify(b) });
@@ -141,6 +145,16 @@ test("P1: tap source requires a valid signed attestation (labels endpoint and /v
     r = await (await post({ proposal_id: "pl3", label: "wanted", attestation: att("pl3", "wanted") })).json();
     assert.equal(r.source, "tap");
     assert.equal(JSON.parse(db.getShadowLabels("pl3")[0]!.actual!).source, "tap");
+    assert.equal(db.getProposal("pl3")?.state, "APPROVED");
+    r = await (await post({
+      proposal_id: "pl_cross_device",
+      label: "wanted",
+      source: "tap",
+      attestation: att("pl_cross_device", "wanted"),
+    })).json();
+    assert.equal(r.source, "inferred", "a device cannot attest a tap for another device's proposal");
+    assert.equal(JSON.parse(db.getShadowLabels("pl_cross_device")[0]!.actual!).source, "inferred");
+    assert.equal(db.getProposal("pl_cross_device")?.state, "SURFACED", "inferred labels must not advance proposal state");
     // a later inferred label does not overwrite the tap label
     await post({ proposal_id: "pl3", label: "ignored", source: "inferred" });
     assert.equal(db.getShadowLabels("pl3")[0]!.label, "wanted");
@@ -164,10 +178,13 @@ test("P1: verified approve whose triad forward is ok records the tap 'wanted' la
   process.env.SHADOW = "0";
   const db = new ExocortexDatabase({ path: ":memory:" });
   const k = p256();
+  const otherKey = p256();
   device(db, "dev_a", k, ["telemetry:write", "approval:write"]);
+  device(db, "dev_b", otherKey, ["telemetry:write", "approval:write"]);
   setDatabase(db);
   proposal(db, "pa1", "SURFACED", 3_600_000, 0);
   proposal(db, "pa2", "SURFACED", 3_600_000, 0);
+  proposal(db, "pa3", "SURFACED", 3_600_000, 0, "dev_b");
   let triadOk = true;
   const triad = createServer((rq, rs) => {
     rq.resume();
@@ -191,6 +208,8 @@ test("P1: verified approve whose triad forward is ok records the tap 'wanted' la
       assert.equal(l.length, 1);
       assert.equal(l[0]!.label, "wanted");
       assert.equal(JSON.parse(l[0]!.actual!).source, "tap");
+      assert.equal((await approve("pa3", true)).status, 200);
+      assert.equal(JSON.parse(db.getShadowLabels("pa3")[0]!.actual!).source, "inferred");
       // rejected by the attestation check: no label
       assert.equal((await approve("pa2", false)).status, 422);
       assert.equal(db.getShadowLabels("pa2").length, 0);

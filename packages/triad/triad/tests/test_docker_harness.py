@@ -12,6 +12,7 @@ from triad.bench.docker_harness import (
     checkout_argv,
     destination_bare_repo,
     django_test_labels,
+    DOCKER_SANDBOX_ARGS,
     docker_outcome,
     native_test_argv,
     resolve_bare_repo,
@@ -88,15 +89,25 @@ class TestDockerHarness(unittest.TestCase):
 
     def test_docker_outcome_trusts_only_a_clean_pass(self):
         self.assertEqual(docker_outcome(0, "OK\nRan 1 test in 0.1s"), "pass")
-        self.assertEqual(docker_outcome(0, "OK (skipped=1)\nRan 1 test in 0.1s"), "fallback")
+        self.assertEqual(docker_outcome(0, "OK (skipped=0)\nRan 1 test in 0.1s"), "pass")
+        self.assertEqual(docker_outcome(0, "OK (skipped=1)\nRan 1 test in 0.1s"), "incomplete")
+        self.assertEqual(docker_outcome(0, "1 passed, 1 skipped"), "incomplete")
+        self.assertEqual(docker_outcome(0, "Ran 0 tests in 0.1s\nOK"), "unavailable")
         self.assertEqual(
             docker_outcome(1, "FAILED (failures=1)\nRan 1 test in 0.1s"),
-            "fallback",
+            "failed",
         )
+        self.assertEqual(docker_outcome(2, "ERROR: file or directory not found"), "unavailable")
+
+    def test_docker_sandbox_restricts_network_and_privileges(self):
+        self.assertIn("--network=none", DOCKER_SANDBOX_ARGS)
+        self.assertIn("--cap-drop=ALL", DOCKER_SANDBOX_ARGS)
+        self.assertIn("--security-opt=no-new-privileges", DOCKER_SANDBOX_ARGS)
 
     def test_runner_executed_ignores_harness_failures(self):
         self.assertFalse(runner_executed(1, "ImportError: No module named django"))
         self.assertFalse(runner_executed(2, "ERROR: file or directory not found"))
+        self.assertFalse(runner_executed(0, "Ran 0 tests in 0.1s\nOK"))
         self.assertTrue(runner_executed(1, "FAIL: test_ascii\n\nFAILED (failures=1)\nRan 1 test in 0.1s"))
         self.assertTrue(runner_executed(0, "OK\nRan 1 test in 0.1s"))
         self.assertFalse(

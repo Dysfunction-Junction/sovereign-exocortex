@@ -307,7 +307,7 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
     const pendingMergedData = await pendingMergedRes.json();
     assert.ok(pendingMergedData.proposals.some((p: any) => p.proposalId === "prop_shadow_pending_test"));
 
-    // Labeling it wanted should advance state to APPROVED and remove from pending
+    // An unsigned label is inferred; it cannot advance the proposal state.
     const labelShadowRes = await fetch(`${baseUrl}/v3/shadow/labels`, {
       method: "POST",
       headers: authHeaders,
@@ -319,9 +319,10 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
       }),
     });
     assert.equal(labelShadowRes.status, 200);
-    assert.equal(memoryDb.getProposal("prop_shadow_pending_test")?.state, "APPROVED");
+    assert.equal(memoryDb.getProposal("prop_shadow_pending_test")?.state, "SURFACED");
+    assert.equal(JSON.parse(memoryDb.getShadowLabels("prop_shadow_pending_test")[0]!.actual!).source, "inferred");
 
-    // Must no longer appear in /v3/shadow/pending
+    // The pending endpoint omits labeled proposals even though the state did not advance.
     const pendingAfterLabelRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
       method: "GET",
       headers: authHeaders,

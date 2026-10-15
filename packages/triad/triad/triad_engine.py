@@ -2276,13 +2276,13 @@ def get_recovery_patch_path(repo_root: Path, unique: bool = False) -> Path:
         return git_dir / filename
     return Path(repo_root) / f".{filename}"
 
-PROPOSED_FIX_PATCH_NAME = "triad_proposed_fix.patch"
+PROPOSED_FIX_PATCH_NAME = "triad-review/triad_proposed_fix.patch"
 
 
 def write_proposed_fix_patch(repo_root: Path, text: str) -> Optional[Path]:
     """Persist an advisor-proposed fix under the repo's git dir (never the working tree).
 
-    The destination is ``<git dir>/triad_proposed_fix.patch``. The data is written to an
+    The destination is ``<git dir>/triad-review/triad_proposed_fix.patch``. The data is written to an
     exclusively-created temp file (O_EXCL|O_NOFOLLOW) in the same directory and moved into
     place with ``os.replace``, so a pre-planted symlink at the destination is replaced
     rather than followed. Returns the path, or None if the git dir cannot be resolved.
@@ -3213,8 +3213,8 @@ def _handle_validation_failure(
       * If the retry budget is exhausted the gate fails closed (exit 1).
       * Otherwise the Advisory Council is asked for a surgical unified diff.
           - Direct (non-worktree) execution never mutates the user's files: the proposed
-            patch is persisted to ``<git dir>/triad_proposed_fix.patch`` (never the working
-            tree) and the gate exits 1.
+            patch is persisted to ``<git dir>/triad-review/triad_proposed_fix.patch``
+            (never the working tree) and the gate exits 1.
           - Worktree execution applies the patch, stages it, records it in
             ``args._self_healed_patches`` and returns the new ``(attempt, candidate_tree)``
             so the caller can restart the validation sequence.
@@ -4118,7 +4118,7 @@ def cmd_bench(args):
             judge_engine=getattr(args, "judge_engine", "claude"),
             workers=getattr(args, "workers", 2),
             verbose=args.verbose,
-            docker_mode=getattr(args, "docker", "off"),
+            docker_mode=getattr(args, "docker", "auto"),
         )
         return
 
@@ -5934,7 +5934,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_bench.add_argument("--cases-dir", default="", help="Path to cases directory (defaults to triad/bench/cases)")
     p_bench.add_argument("--engine", default="auto", help="Advisor engine override (e.g. auto, claude, codex, bare_single, mock)")
     p_bench.add_argument("--judge-engine", choices=["claude", "auto", "codex", "asymmetric"], default="claude", help="Judge engine (default: claude, then Codex if Claude cannot answer)")
-    p_bench.add_argument("--docker", choices=["off", "auto", "on"], default="off", help="Repo-native tests in Docker when a local clone exists (default: off)")
+    p_bench.add_argument("--docker", choices=["off", "auto", "on"], default="auto", help="Run untrusted benchmark tests only in the restricted Docker sandbox (default: auto; off disables test execution)")
     p_bench.add_argument("--workers", type=int, choices=[1, 2], default=2, help="Number of concurrent evaluation workers (1 or 2, default: 2)")
     p_bench.add_argument("--limit", type=int, default=0, help="Limit number of cases to test")
     p_bench.add_argument("--case", default="", help="Run single case ID (e.g. case_001 or astropy__astropy-12907)")
