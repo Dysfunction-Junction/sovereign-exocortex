@@ -160,3 +160,25 @@ Mobile device displayed wake card status failed 401 unauthorized, invalid signat
   - Readiness Score: 100%.
   - Urgency state: DEFAULT / CASUAL.
   - Zero 401 / 404 / signature errors.
+
+---
+
+## 8. Mobile Screen Context Accessibility Resolution & Android CLI Screen Capture
+
+### Commit: `f58468e` — `fix(mobile): robust multi-source accessibility detection and lifecycle resume refresh`
+- Remote: Synced and pushed to `origin/main` (`a97c0c9..f58468e`).
+
+### Root Cause Analysis:
+1. **False Negative A11y Permission Banner:**
+   - On Android (Samsung One UI), `Settings.Secure.getString(..., ENABLED_ACCESSIBILITY_SERVICES)` does not always immediately reflect service bound state for non-system apps and formats component strings into short form (`pkg/.PiecesAccessibilityService`). Simple substring match for the full class name failed.
+   - `Status.tsx` originally only queried accessibility state once on initial mount (`useEffect(..., [])`). When the user toggled the service on in Android Settings and resumed the app, the UI never refreshed.
+2. **Autonomous Triad Review Insights (`advisor.py`):**
+   - Corrected potential latching bug where in-memory flag `isRunning` wasn't reset on `onUnbind(Intent)` or `onDestroy()`.
+   - Replaced fragile string containment with exact `ComponentName.unflattenFromString()` matching.
+   - Re-ordered query hierarchy to prioritize authoritative OS services (`AccessibilityManager` -> `Settings.Secure` -> `isRunning` fallback).
+   - Added resume listeners (`App.addListener('appStateChange')` and gated `visibilitychange`) with unhandled promise catches.
+
+### Verification:
+1. `pnpm -r typecheck`: 0 errors across all 11 monorepo packages.
+2. `android layout --device=192.168.55.93:37725 --pretty`: Confirmed `⚠️ Accessibility permission is inactive` warning is gone and Screen Context displays active with 1063 apps selected.
+3. `android screen capture -a`: Successfully captured on-device screen with annotated bounding boxes.
