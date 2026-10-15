@@ -182,3 +182,26 @@ Mobile device displayed wake card status failed 401 unauthorized, invalid signat
 1. `pnpm -r typecheck`: 0 errors across all 11 monorepo packages.
 2. `android layout --device=192.168.55.93:37725 --pretty`: Confirmed `⚠️ Accessibility permission is inactive` warning is gone and Screen Context displays active with 1063 apps selected.
 3. `android screen capture -a`: Successfully captured on-device screen with annotated bounding boxes.
+
+---
+
+## 9. Lead Architect Architectural Audit & Monorepo Hardening
+
+### Commit: `78644f7` — `feat(core, daemon, mobile, triad): apply Lead Architect hardening and projection recovery`
+- Remote: Synced and pushed to `origin/main` (`716458d..78644f7`).
+
+### Audit & Hardening Matrix:
+1. **Pre-Cognitive Calibration Hygiene:**
+   - Filtered out `synthetic = true` probe telemetry markers in SQLite calibration window query and in-memory row groupers ([`apps/daemon/src/precognitive-host.ts`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/daemon/src/precognitive-host.ts#L144-L175)), ensuring simulated Probe Pulses never skew the empirical $p_{20}$ quantile.
+2. **Living Life Graph Projection Recovery:**
+   - Added automatic event replay on daemon startup ([`apps/daemon/src/world-model-host.ts`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/daemon/src/world-model-host.ts#L112-L135)), replaying recent unlinked events into `LivingLifeGraph` so graph connectivity, document links, and person nodes survive daemon reboots.
+3. **Mobile Touch Dwell Pointer Capture:**
+   - Added pointer capture (`setPointerCapture`/`releasePointerCapture`/`onLostPointerCapture`) to the dwell probe target in [`apps/mobile/src/components/AnticipationRing.tsx`](file:///C:/Users/micha/projects/sovereign-exocortex/apps/mobile/src/components/AnticipationRing.tsx#L89-L395), preventing touch-drift cancellations on 120Hz screens.
+4. **Morphogenetic Test & Invariant Immutability:**
+   - Guarded Darwinian mutation evaluations ([`packages/triad/triad/morphogenetic.py`](file:///C:/Users/micha/projects/sovereign-exocortex/packages/triad/triad/morphogenetic.py#L118-L135)) against mutating test files (`*.test.ts`, `*_test.py`), invariants, or workflows.
+5. **Monorepo Verification:**
+   - `pnpm -r typecheck`: 0 errors across 11 packages.
+   - `pnpm --filter exocortexd test`: 9 suites passing 100%.
+   - `pnpm --filter @exocortex/mobile test`: 18 suites / 143 tests passing 100%.
+   - `pytest packages/triad/triad/tests`: 391 passed (100%).
+
