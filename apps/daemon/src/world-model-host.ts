@@ -111,6 +111,28 @@ export class WorldModelHost {
         if (latestSnapshot) {
           this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
         }
+
+        // Replay events into living life graph to restore projection across restarts
+        const recentEvents = db.listEvents({ limit: 1000 });
+        for (const ev of recentEvents) {
+          try {
+            const autoCreate = this.lifeGraph.entityCount < 20000;
+            const linkCtx = linkEventToGraph(
+              {
+                event_id: ev.event_id,
+                kind: ev.kind,
+                ts_device: ev.ts_device,
+                ts_server: ev.ts_server,
+                payload: ev.payload,
+              },
+              this.lifeGraph,
+              { autoCreate, createMissingTopics: autoCreate },
+            );
+            this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
+          } catch {
+            // Ignore unparsable legacy payloads during replay
+          }
+        }
       } catch {
         // Database not ready or in-memory
       }

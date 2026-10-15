@@ -144,6 +144,9 @@ export class PreCognitiveHost {
                     ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY ts_server DESC) as rn
                FROM events
               WHERE ts_server >= ?
+                AND (CASE WHEN json_valid(payload)
+                          THEN json_extract(payload, '$.synthetic') END IS NULL
+                     OR json_extract(payload, '$.synthetic') != 1)
                 AND (kind IN ('wake', 'touch', 'vibration')
                      OR (kind = 'telemetry'
                          AND CASE WHEN json_valid(payload)
@@ -164,6 +167,9 @@ export class PreCognitiveHost {
           payload = JSON.parse(r.payload);
         } catch {
           payload = null;
+        }
+        if (payload?.synthetic === true || payload?.synthetic === 1) {
+          continue;
         }
         const list = byDevice.get(r.device_id) ?? [];
         list.push({

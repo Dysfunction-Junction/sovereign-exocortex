@@ -89,7 +89,12 @@ export function AnticipationRing({
     return () => clearInterval(interval);
   }, [autoPoll, pollIntervalMs, fetchStatus]);
 
-  const handlePointerDown = () => {
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (typeof e.currentTarget.setPointerCapture === "function") {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+    }
     const now = Date.now();
     holdStartRef.current = now;
     setIsHolding(true);
@@ -369,9 +374,24 @@ export function AnticipationRing({
       <div
         className={`dwell-probe-target ${isHolding ? "active" : ""}`}
         onPointerDown={handlePointerDown}
-        onPointerUp={() => void endHold(true)}
+        onPointerUp={(e) => {
+          if (typeof e.currentTarget.releasePointerCapture === "function") {
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            } catch {}
+          }
+          void endHold(true);
+        }}
         onPointerLeave={() => void endHold(false)}
-        onPointerCancel={() => void endHold(false)}
+        onPointerCancel={(e) => {
+          if (typeof e.currentTarget.releasePointerCapture === "function") {
+            try {
+              e.currentTarget.releasePointerCapture(e.pointerId);
+            } catch {}
+          }
+          void endHold(false);
+        }}
+        onLostPointerCapture={() => void endHold(false)}
         role="button"
         tabIndex={0}
         aria-label="Hold to measure touch dwell duration"

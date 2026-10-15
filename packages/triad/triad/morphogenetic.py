@@ -118,6 +118,22 @@ class MorphogeneticEngine:
                     candidate.verification_output = f"Darwinian Rejection: target {err}"
                     return False
 
+                # Protected files check: Never allow mutations to test suites, harnesses, or invariants
+                norm_target = candidate.target_file.replace("\\", "/").lower()
+                if (
+                    norm_target.endswith(".test.ts")
+                    or norm_target.endswith(".test.tsx")
+                    or norm_target.endswith(".test.js")
+                    or norm_target.endswith("_test.py")
+                    or norm_target.endswith("test.py")
+                    or "/test/" in norm_target
+                    or "/tests/" in norm_target
+                    or "invariants" in norm_target
+                    or ".github/" in norm_target
+                ):
+                    candidate.verification_output = f"Darwinian Rejection: target file is protected from mutation: {candidate.target_file}"
+                    return False
+
                 # 1. Apply mutation in the ephemeral sandbox
                 original_content = target_file_path.read_text(encoding="utf-8")
                 candidate.original_code = original_content
