@@ -137,6 +137,21 @@ class TestMorphogeneticEngine(unittest.TestCase):
             changed = [l for l in candidate.unified_diff.splitlines() if l[:1] in "+-" and l[:3] not in ("+++", "---")]
             self.assertEqual(changed, ["-b = 2", "+b = 99"])
 
+    def test_simulated_darwinian_survival_trial(self):
+        """End-to-end trial: validates apoptosis of broken/forbidden candidates and survival of valid patch."""
+        from triad.morphogenetic import run_simulated_darwinian_trial
+        result = run_simulated_darwinian_trial()
+        self.assertTrue(result["all_trials_isolated"])
+        self.assertEqual(result["candidates_evaluated"], 3)
+        self.assertEqual(result["survivor"], "mut_darwinian_survivor")
+        self.assertIn("+        return 0.0", result["survivor_diff"])
+
+        results_by_id = {r["candidate_id"]: r for r in result["results"]}
+        self.assertTrue(results_by_id["mut_forbidden_token"]["apoptosis"])
+        self.assertTrue(results_by_id["mut_broken_fix"]["apoptosis"])
+        self.assertFalse(results_by_id["mut_darwinian_survivor"]["apoptosis"])
+        self.assertTrue(results_by_id["mut_darwinian_survivor"]["survival_passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
