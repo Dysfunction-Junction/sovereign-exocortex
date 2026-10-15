@@ -48,6 +48,30 @@ describe("shared validated observations", () => {
     expect(factor.bCounts[0]).not.toEqual(after[0]);
     expect(factor.bCounts.slice(1)).toEqual(after.slice(1));
   });
+
+  it("validates custom registered factor observations during replay without freezing support to defaults", () => {
+    const definition = {
+      name: "custom_health", states: ["ready", "broken"],
+      observations: ["green", "red"], actions: ["repair", "no_op"],
+    };
+    const live = new LearnedActiveInferenceEngine();
+    const replay = new LearnedActiveInferenceEngine();
+    live.registerFactor(definition);
+    replay.registerFactor(definition);
+    const events = [
+      event({ factor: "custom_health", observation: "red" }),
+      event({ factor: "custom_health", observation: "red", action: "invented" }),
+      event({ factor: "custom_health", observation: "green", action: "repair" }),
+    ].map((e, i) => ({ ...e, seq: i + 1 }));
+    expect(eventToObservation(events[0])).toBeNull(); // callers without a model know only defaults
+    expect(eventToObservation(events[0], (name) => live.getFactor(name))?.obs).toBe("red");
+    expect(eventToObservation(events[1], (name) => live.getFactor(name))).toBeNull();
+    live.processObservation("custom_health", "red");
+    live.processObservation("custom_health", "green", "repair");
+    replay.replayEventStream(events);
+    expect(replay.exportModelParams(0)).toEqual(live.exportModelParams(0));
+    expect(replay.createBeliefSnapshot(0)).toEqual(live.createBeliefSnapshot(0));
+  });
 });
 
 describe("DiscreteGenerativeFactor", () => {

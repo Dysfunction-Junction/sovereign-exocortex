@@ -316,7 +316,8 @@ export class WorldModelHost {
         throw new TypeError("invalid observation: observedAt must be a finite timestamp");
       }
     }
-    const extracted = invariantObservation(obs);
+    const extracted = invariantObservation(obs, (name) => this.learnedEngine.getFactor(name));
+    const forceShadow = obs.metadata?.source === "local_vision";
     if (options.db) this.preferenceDb = options.db;
     const timestamp = obs.observedAt ?? Date.now();
     this.lifeGraph.decay(timestamp);
@@ -357,7 +358,7 @@ export class WorldModelHost {
       }
 
       // Executor re-check: actuate only if allowlisted, SHADOW=0 and the breaker is clear; else record only.
-      if (this.autoExecutor && options.allowAutoExecute !== false) {
+      if (this.autoExecutor && options.allowAutoExecute !== false && !forceShadow) {
         let db: ExocortexDatabase | null = null;
         try {
           db = hasDatabase() ? getDatabase() : null;
@@ -375,7 +376,7 @@ export class WorldModelHost {
 
       // Persistence must never break observation ingest.
       try {
-        this.shadowRecorder?.record(policy, proposal, gateDecision);
+        this.shadowRecorder?.record(policy, proposal, gateDecision, { forceShadow });
         this.recorderFailures = 0;
       } catch (err) {
         console.error(`[shadow-recorder] failed to record ${policy.id}:`, err instanceof Error ? err.message : err);
@@ -462,12 +463,15 @@ export class WorldModelHost {
 
     for (const ev of events) {
       try {
-        const extracted = eventToObservation(ev);
+        const extracted = eventToObservation(ev, (name) => this.learnedEngine.getFactor(name));
         if (extracted && this.learnedEngine.getFactor(extracted.factor)) {
           const systemObservation = systemObservationFromEvent(ev, extracted);
           if (systemObservation) {
             // ingestObservation updates the same learned factor and also runs active inference.
-            this.ingestObservation(systemObservation, targetDb ? { db: targetDb } : {});
+            this.ingestObservation(systemObservation, {
+              ...(targetDb ? { db: targetDb } : {}),
+              allowAutoExecute: systemObservation.metadata?.source !== "local_vision",
+            });
           } else {
             this.learnedEngine.processObservation(extracted.factor, extracted.obs, extracted.action);
           }

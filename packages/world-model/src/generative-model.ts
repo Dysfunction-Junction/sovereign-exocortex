@@ -44,9 +44,11 @@ const SUPPORTED_SIGNALS: Record<string, { observations: string[]; actions: strin
   },
 };
 
-export function isSupportedObservation(value: ExtractedObservation): boolean {
-  if (!Object.hasOwn(SUPPORTED_SIGNALS, value.factor)) return false;
-  const supported = SUPPORTED_SIGNALS[value.factor];
+export type ObservationSupport = (factor: string) => { observations: readonly string[]; actions: readonly string[] } | undefined;
+
+export function isSupportedObservation(value: ExtractedObservation, support?: ObservationSupport): boolean {
+  const supported = support ? support(value.factor)
+    : Object.hasOwn(SUPPORTED_SIGNALS, value.factor) ? SUPPORTED_SIGNALS[value.factor] : undefined;
   return !!supported && supported.observations.includes(value.obs)
     && (value.action === undefined || supported.actions.includes(value.action));
 }
@@ -57,30 +59,28 @@ export function foregroundObservation(payload: Record<string, unknown>): Extract
   return { factor: "user_mode", obs: /(?:vscode|code\.exe|\bantigravity\b)/i.test(app) ? "typing_burst" : "window_switch" };
 }
 
-export function invariantObservation(obs: SystemObservation): ExtractedObservation | null {
+export function invariantObservation(obs: SystemObservation, support?: ObservationSupport): ExtractedObservation | null {
   const signal = Object.hasOwn(INVARIANT_SIGNALS, obs.invariantId) ? INVARIANT_SIGNALS[obs.invariantId] : undefined;
   const metadata = obs.metadata;
   const explicit = metadata?.factor !== undefined || metadata?.observation !== undefined || metadata?.action !== undefined;
   if (explicit) {
-    if (typeof obs.observedState !== "boolean") {
-      throw new TypeError("invalid observation: mapped invariant state must be boolean");
-    }
     const extracted = { factor: metadata?.factor, obs: metadata?.observation, action: metadata?.action };
     if (typeof extracted.factor !== "string" || typeof extracted.obs !== "string"
       || (extracted.action !== undefined && typeof extracted.action !== "string")
-      || !isSupportedObservation(extracted as ExtractedObservation)) {
+      || !isSupportedObservation(extracted as ExtractedObservation, support)) {
       throw new TypeError("invalid observation: unsupported factor, observation or action");
     }
     const value = extracted as ExtractedObservation;
+    if (!signal || typeof obs.observedState !== "boolean") return value;
     const allowed = signal && value.factor === signal.factor && (
-      value.obs === (obs.observedState ? signal.positive : signal.negative)
+      value.obs === (obs.observedState === true ? signal.positive : signal.negative)
       || (obs.invariantId === "inv_bridge_connected" && obs.observedState === true && value.obs === "ping_slow")
     );
     if (!allowed) throw new TypeError("invalid observation: inconsistent invariant mapping");
     return value;
   }
   return signal && typeof obs.observedState === "boolean"
-    ? { factor: signal.factor, obs: obs.observedState ? signal.positive : signal.negative }
+    ? { factor: signal.factor, obs: obs.observedState === true ? signal.positive : signal.negative }
     : null;
 }
 
@@ -108,7 +108,11 @@ export function systemObservationFromEvent(event: EventRecord, extracted: Extrac
       invariantId, observedState: positive,
       observedAt: typeof payload.observedAt === "number" ? payload.observedAt : event.ts_device,
       confidence: typeof payload.confidence === "number" ? payload.confidence : 1,
-      metadata: { factor: extracted.factor, observation: extracted.obs, ...(extracted.action ? { action: extracted.action } : {}) },
+      metadata: {
+        factor: extracted.factor, observation: extracted.obs,
+        ...(extracted.action ? { action: extracted.action } : {}),
+        ...(typeof payload.source === "string" ? { source: payload.source } : {}),
+      },
     };
   }
   return null;
@@ -117,7 +121,7 @@ export function systemObservationFromEvent(event: EventRecord, extracted: Extrac
 /**
  * Pure function to extract factor observation and optional action from an immutable EventRecord.
  */
-export function eventToObservation(event: EventRecord): ExtractedObservation | null {
+export function eventToObservation(event: EventRecord, support?: ObservationSupport): ExtractedObservation | null {
   if (!event || typeof event !== "object") return null;
   if (event.kind !== "observation" && event.kind !== "telemetry") return null;
 
@@ -136,14 +140,20 @@ export function eventToObservation(event: EventRecord): ExtractedObservation | n
   }
   if (typeof payload.confidence === "number" && (payload.confidence < 0 || payload.confidence > 1)) return null;
   if (!Number.isFinite(event.ts_device)) return null;
+  if (payload.invariantId !== undefined && typeof payload.invariantId !== "string") return null;
+  if (payload.observedState !== undefined && typeof payload.observedState !== "boolean"
+    && typeof payload.observedState !== "string"
+    && !(typeof payload.observedState === "number" && Number.isFinite(payload.observedState))) return null;
 
   // 1. Explicit factor and observation payload
   if (payload.factor !== undefined || payload.observation !== undefined || payload.action !== undefined) {
     if (typeof payload.factor !== "string" || typeof payload.observation !== "string"
       || (payload.action !== undefined && typeof payload.action !== "string")) return null;
     const extracted = { factor: payload.factor, obs: payload.observation, action: payload.action as string | undefined };
-    if (!isSupportedObservation(extracted)) return null;
-    if (payload.invariantId !== undefined || payload.observedState !== undefined) {
+    if (!isSupportedObservation(extracted, support)) return null;
+    if ((payload.invariantId !== undefined || payload.observedState !== undefined)
+      && (payload.observedState === undefined || typeof payload.observedState === "boolean")
+      && (payload.invariantId === undefined || Object.hasOwn(INVARIANT_SIGNALS, String(payload.invariantId)))) {
       const system = systemObservationFromEvent(event, extracted);
       if (!system) return null;
     }
@@ -152,7 +162,7 @@ export function eventToObservation(event: EventRecord): ExtractedObservation | n
 
   if (payload.invariantId !== undefined || payload.observedState !== undefined) {
     if (typeof payload.invariantId !== "string" || typeof payload.observedState !== "boolean") return null;
-    return invariantObservation(payload as unknown as SystemObservation);
+    return invariantObservation(payload as unknown as SystemObservation, support);
   }
 
   const foreground = foregroundObservation(payload);
@@ -812,7 +822,7 @@ export class LearnedActiveInferenceEngine {
 
     for (const event of events) {
       count++;
-      const extracted = eventToObservation(event);
+      const extracted = eventToObservation(event, (name) => this.factors.get(name));
       if (extracted && this.factors.has(extracted.factor)) {
         try {
           this.processObservation(extracted.factor, extracted.obs, extracted.action);

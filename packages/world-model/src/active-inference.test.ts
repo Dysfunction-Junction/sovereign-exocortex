@@ -64,6 +64,26 @@ describe('ActiveInferenceEngine (Pillar 3)', () => {
     expect(graph.edgeCount).toBe(1);
   });
 
+  it('retains the genuine baseline after no-op training ties EFE, while verified preference evidence can rerank independently', () => {
+    const learned = new LearnedActiveInferenceEngine();
+    for (let i = 0; i < 10; i++) learned.processObservation("repo_health", "tests_fail");
+    const factor = learned.getFactor("repo_health")!;
+    expect(factor.version).toBeGreaterThan(1);
+    const mapped = factor.evaluatePolicies().filter((e) => ["self_heal_patch", "run_diagnostics"].includes(e.actionName));
+    expect(mapped[0].expectedFreeEnergy).toBe(mapped[1].expectedFreeEnergy);
+    const candidates = engine.generatePolicies([engine.evaluateObservation({
+      invariantId: "inv_clean_test_suite", observedState: false, observedAt: 100, confidence: 1,
+    })]);
+    const baseline = rankInferencePolicies(candidates, learned, graph, new Map(), 100, 100);
+    expect(baseline.map((p) => p.id)).toEqual(candidates.map((p) => p.id));
+    expect(baseline.every((p) => p.ranking?.method === "baseline")).toBe(true);
+    const preferences = new Map([[preferenceKey("inv_clean_test_suite", "EPISTEMIC"), { wanted: 1, notWanted: 0 }]]);
+    const ranked = rankInferencePolicies(candidates, learned, graph, preferences, 100, 100);
+    expect(ranked[0].type).toBe("EPISTEMIC");
+    expect(ranked[0].ranking?.method).toBe("learned");
+    expect(ranked[0].ranking?.wantedProbability).toBe(2 / 3);
+  });
+
   it('initializes with default sovereign invariants', () => {
     expect(engine.registeredInvariants.length).toBeGreaterThanOrEqual(5);
   });

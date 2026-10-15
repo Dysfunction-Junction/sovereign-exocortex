@@ -142,7 +142,7 @@ export class LivingLifeGraph {
     const entity = this.entities.get(entityId);
     if (!entity) return;
     entity.activation = Math.min(1.0, entity.activation + amount);
-    entity.lastActive = Math.max(entity.lastActive, observedAt);
+    entity.lastActive = Math.max(observedAt, this.decayedAt.get(entity) ?? -Infinity);
     this.decayedAt.delete(entity);
   }
 
@@ -184,7 +184,8 @@ export class LivingLifeGraph {
     sourceIds: string[],
     initialEnergy: number = 1.0,
     retentionRate: number = 0.6,
-    depthLimit: number = 3
+    depthLimit: number = 3,
+    edgeVisitBudget: number = Infinity,
   ): Map<string, number> {
     const activationLevels = new Map<string, number>();
     const queue: Array<{ id: string; energy: number; depth: number }> = [];
@@ -196,12 +197,16 @@ export class LivingLifeGraph {
       }
     }
 
-    while (queue.length > 0) {
-      const current = queue.shift()!;
+    let cursor = 0;
+    let edgeVisits = 0;
+    while (cursor < queue.length && edgeVisits < edgeVisitBudget) {
+      const current = queue[cursor++];
       if (current.depth >= depthLimit || current.energy < 0.05) continue;
 
       const outgoingEdgeIds = this.adjacency.get(current.id) || new Set();
       for (const edgeId of outgoingEdgeIds) {
+        if (edgeVisits >= edgeVisitBudget) break;
+        edgeVisits++;
         const edge = this.edges.get(edgeId);
         if (!edge) continue;
 

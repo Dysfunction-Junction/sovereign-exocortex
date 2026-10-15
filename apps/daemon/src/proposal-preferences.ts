@@ -4,8 +4,10 @@ import { HOST_DEVICE_ID } from "./shadow-recorder.js";
 
 export interface PreferenceMetrics {
   baseline: "fixed-0.5";
+  eligibleLabels: number;
   evaluated: number;
   excluded: number;
+  predictionCoverage: number | null;
   brier: number | null;
   baselineBrier: number | null;
   brierImprovement: number | null;
@@ -21,7 +23,7 @@ export function loadProposalPreferences(db: ExocortexDatabase | null, asOfMs: nu
 } {
   const preferences = new Map<string, PolicyPreference>();
   const metrics: PreferenceMetrics = {
-    baseline: "fixed-0.5", evaluated: 0, excluded: 0,
+    baseline: "fixed-0.5", eligibleLabels: 0, evaluated: 0, excluded: 0, predictionCoverage: null,
     brier: null, baselineBrier: null, brierImprovement: null,
     logLoss: null, baselineLogLoss: null, logLossImprovement: null,
   };
@@ -49,6 +51,7 @@ export function loadProposalPreferences(db: ExocortexDatabase | null, asOfMs: nu
       if (label.label === "wanted") counts.wanted++;
       else counts.notWanted++;
       preferences.set(key, counts);
+      metrics.eligibleLabels++;
       const ranking = payload.ranking;
       const probability = ranking?.wantedProbability;
       if (ranking?.version !== 1 || ranking.baselinePredictor !== "fixed-0.5"
@@ -67,6 +70,7 @@ export function loadProposalPreferences(db: ExocortexDatabase | null, asOfMs: nu
       // Malformed historical rows cannot train or score the projection.
     }
   }
+  if (metrics.eligibleLabels > 0) metrics.predictionCoverage = metrics.evaluated / metrics.eligibleLabels;
   if (metrics.evaluated > 0) {
     metrics.brier = brier / metrics.evaluated;
     metrics.baselineBrier = 0.25;

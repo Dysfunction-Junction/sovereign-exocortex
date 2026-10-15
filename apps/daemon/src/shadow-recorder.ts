@@ -152,7 +152,12 @@ export class ShadowRecorder {
    * Throws on non-finite numeric inputs rather than storing guesses.
    * Clocks: row timestamps use `nowMs`; the event `ts_device` and gate `ts` use the gate's `evaluatedAt`.
    */
-  public record(policy: InferencePolicy, proposal: ProposalEnvelope, gate: GateDecision): ProposalRecord | null {
+  public record(
+    policy: InferencePolicy,
+    proposal: ProposalEnvelope,
+    gate: GateDecision,
+    options: { forceShadow?: boolean } = {},
+  ): ProposalRecord | null {
     for (const [name, v] of [
       ["estimatedRisk", policy.estimatedRisk],
       ["expectedFreeEnergyScore", policy.expectedFreeEnergyScore],
@@ -167,6 +172,7 @@ export class ShadowRecorder {
     if (this.db.getProposal(policy.id)) return null;
 
     const now = this.nowMs();
+    const shadow = this.shadow || options.forceShadow === true;
     const action = canonicalJsonStringify(policy.actionPayload ?? {});
     const dedupeKey = `${policy.invariantId}|${policy.type}|${action}`;
     const last = this.lastRecorded.get(dedupeKey);
@@ -187,7 +193,7 @@ export class ShadowRecorder {
           invariant_id: policy.invariantId,
           policy_type: policy.type,
           summary: policy.title,
-          shadow: this.shadow,
+          shadow,
           ...(policy.ranking ? { ranking: policy.ranking } : {}),
         },
       });
@@ -205,7 +211,7 @@ export class ShadowRecorder {
         risk_term: policy.estimatedRisk,
         ambiguity_term: Math.min(1, Math.max(0, 1 - proposal.confidence)),
         state,
-        shadow: this.shadow ? 1 : 0,
+        shadow: shadow ? 1 : 0,
         expires_at: now + this.ttlMs,
         updated_at: now,
       };

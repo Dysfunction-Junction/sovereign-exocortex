@@ -8,6 +8,33 @@ describe('LivingLifeGraph (Pillar 1)', () => {
     graph = new LivingLifeGraph();
   });
 
+  it('bounds spreading work on broad cyclic context without changing unbudgeted callers', () => {
+    graph.addEntity({ id: "source", name: "Source", type: "PROJECT" });
+    for (let i = 0; i < 200; i++) {
+      const id = `context:${i}`;
+      graph.addEntity({ id, name: id, type: "TOPIC" });
+      graph.addEdge("source", id, "DEPENDS_ON", 1);
+      graph.addEdge(id, "source", "DEPENDS_ON", 1);
+    }
+    expect(graph.spreadActivation(["source"], 0.5, 0.6, 2, 32).size).toBe(33);
+    expect(graph.spreadActivation(["source"], 0.5, 0.6, 2).size).toBe(201);
+    expect(graph.spreadActivation(["source"], 0.5, 0.6, 2, 0).size).toBe(1);
+  });
+
+  it('anchors stimulation to observation time rather than construction wall time', () => {
+    const entity = graph.addEntity({ id: "historic", name: "Historic", type: "PROJECT", activation: 0.2 });
+    graph.decay(100);
+    graph.stimulate(entity.id, 0.3, 100);
+    expect(entity.lastActive).toBe(100);
+    graph.decay(100 + 7 * 86_400_000);
+    expect(entity.activation).toBeCloseTo(0.25);
+    const decayedAt = 100 + 7 * 86_400_000;
+    graph.stimulate(entity.id, 0.1, 99); // late delivery cannot rewind applied decay
+    expect(entity.lastActive).toBe(decayedAt);
+    graph.decay(decayedAt);
+    expect(entity.activation).toBeCloseTo(0.35);
+  });
+
   it('adds entities and tracks activation and timestamps', () => {
     const entity = graph.addEntity({
       id: 'person_frank',

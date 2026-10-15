@@ -15,6 +15,25 @@ test("WorldModelHost: singleton initialization and seeded ecosystem graph", () =
   assert.equal(status.registeredInvariantsCount >= 5, true);
 });
 
+test("WorldModelHost: custom scalar observations remain valid and only explicit supported mappings learn", () => {
+  const host = WorldModelHost.createIsolatedForTest();
+  host.activeInference.registerInvariant({
+    id: "inv_custom", name: "Custom mode", targetEntityId: "project_sovereign_exocortex",
+    preferredState: "ready", priorProbability: 0.95, toleranceThreshold: 0.05, category: "PROJECT_GOAL",
+  });
+  const observation = { invariantId: "inv_custom", observedState: "ready", observedAt: 100, confidence: 1 };
+  const before = host.learnedEngine.exportModelParams(0);
+  assert.equal(host.ingestObservation(observation).isAnomaly, false);
+  assert.deepEqual(host.learnedEngine.exportModelParams(0), before);
+  host.ingestObservation({ ...observation, metadata: { factor: "repo_health", observation: "tests_pass" } });
+  assert.notDeepEqual(host.learnedEngine.exportModelParams(0), before);
+  const after = host.learnedEngine.exportModelParams(0);
+  assert.throws(() => host.ingestObservation({
+    ...observation, metadata: { factor: "repo_health", observation: "invented" },
+  }), /unsupported/);
+  assert.deepEqual(host.learnedEngine.exportModelParams(0), after);
+});
+
 test("WorldModelHost: explicit event actions, timestamps and confidence survive the shared live/replay mapping", () => {
   const db = new ExocortexDatabase({ path: ":memory:" });
   try {
@@ -92,6 +111,16 @@ test("WorldModelHost: verified preferences are immediate, replaceable, restart-s
     host.onEventAppended(spoof, db);
     assert.deepEqual(host.learnedEngine.exportModelParams(0), paramsBeforeFeedback);
     assert.equal(loadProposalPreferences(db, Date.now()).preferences.size, 0);
+    const cutoff = Date.now();
+    db.recordShadowLabel({
+      proposal_id: firstIds[0], label: "wanted", actual: JSON.stringify({ source: "tap" }), ts: cutoff + 1_000,
+    });
+    const beforeFutureFeedback = loadProposalPreferences(db, cutoff);
+    assert.equal(beforeFutureFeedback.preferences.size, 0);
+    assert.equal(beforeFutureFeedback.metrics.eligibleLabels, 0);
+    assert.equal(beforeFutureFeedback.metrics.predictionCoverage, null);
+    assert.equal(beforeFutureFeedback.metrics.brier, null);
+    assert.equal(beforeFutureFeedback.metrics.logLoss, null);
     label(firstIds[0], false, "inferred");
     assert.equal(loadProposalPreferences(db, Date.now()).preferences.size, 0);
     label(firstIds[0], false);
@@ -99,6 +128,7 @@ test("WorldModelHost: verified preferences are immediate, replaceable, restart-s
     const projection = loadProposalPreferences(db, Date.now());
     assert.deepEqual(loadProposalPreferences(db, Date.now()), projection); // delivery is idempotent
     assert.equal(projection.metrics.evaluated, 2);
+    assert.equal(projection.metrics.predictionCoverage, 1);
     assert.equal(projection.metrics.brier, 0.25);
     assert.equal(projection.metrics.brierImprovement, 0);
     assert.equal(projection.metrics.logLossImprovement, 0);
@@ -143,6 +173,8 @@ test("WorldModelHost: verified preferences are immediate, replaceable, restart-s
     const excluded = loadProposalPreferences(db, Date.now()).metrics;
     assert.equal(excluded.evaluated, 3);
     assert.equal(excluded.excluded, 3);
+    assert.equal(excluded.eligibleLabels, 6);
+    assert.equal(excluded.predictionCoverage, 0.5);
     assert.equal(excluded.baselineBrier, metrics.baselineBrier);
     assert.equal(excluded.brier, metrics.brier); // same scoring population, no retroactive predictions
   } finally {

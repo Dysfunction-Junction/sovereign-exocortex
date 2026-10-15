@@ -12,21 +12,20 @@ export function preferenceKey(invariantId: string, policyType: string): string {
 }
 
 /** Model action names are planning analogues, never executable commands. */
+const MODEL_ACTIONS: Record<string, { factor: string; action: string; command: string }> = {
+  "inv_clean_test_suite:PRAGMATIC": { factor: "repo_health", action: "self_heal_patch", command: "self_heal_restore" },
+  "inv_clean_test_suite:EPISTEMIC": { factor: "repo_health", action: "run_diagnostics", command: "diagnostic_probe" },
+  "inv_zero_broken_commits:PRAGMATIC": { factor: "repo_health", action: "self_heal_patch", command: "self_heal_restore" },
+  "inv_zero_broken_commits:EPISTEMIC": { factor: "repo_health", action: "run_diagnostics", command: "diagnostic_probe" },
+  "inv_bridge_connected:PRAGMATIC": { factor: "link_health", action: "reconnect_ws", command: "self_heal_restore" },
+};
+
 function modelAction(policy: InferencePolicy): { factor: string; action: string } | null {
-  if (["inv_clean_test_suite", "inv_zero_broken_commits"].includes(policy.invariantId)) {
-    if (policy.type === "PRAGMATIC" && policy.actionPayload.command === "self_heal_restore") {
-      return { factor: "repo_health", action: "self_heal_patch" };
-    }
-    if (policy.type === "EPISTEMIC" && policy.actionPayload.command === "diagnostic_probe") {
-      return { factor: "repo_health", action: "run_diagnostics" };
-    }
-  }
-  // No diagnostic link action exists; do not substitute an unrelated command.
-  if (policy.invariantId === "inv_bridge_connected" && policy.type === "PRAGMATIC"
-    && policy.actionPayload.command === "self_heal_restore") {
-    return { factor: "link_health", action: "reconnect_ws" };
-  }
-  return null;
+  const key = preferenceKey(policy.invariantId, policy.type);
+  const mapping = Object.hasOwn(MODEL_ACTIONS, key) ? MODEL_ACTIONS[key] : undefined;
+  // No diagnostic link action exists; do not substitute no_op or another command.
+  return mapping && policy.actionPayload.command === mapping.command
+    ? { factor: mapping.factor, action: mapping.action } : null;
 }
 
 export function rankInferencePolicies(
@@ -46,7 +45,7 @@ export function rankInferencePolicies(
       if (factor && factor.version > 1) {
         const values = [...factor.aCounts.flat(), ...factor.bCounts.flat(2), ...factor.dCounts, ...factor.currentBelief];
         if (values.every((v) => Number.isFinite(v) && v >= 0) && factor.cPreferences.every(Number.isFinite)) {
-          evaluation = factor.evaluatePolicies().find((e) => e.actionName === mapping.action);
+          evaluation = factor.evaluatePolicies(factor.currentBelief).find((e) => e.actionName === mapping.action);
           if (evaluation && ![evaluation.expectedFreeEnergy, evaluation.riskTerm, evaluation.ambiguityTerm].every(Number.isFinite)) {
             evaluation = undefined;
           }
@@ -59,7 +58,7 @@ export function rankInferencePolicies(
     const samples = preference ? preference.wanted + preference.notWanted : 0;
     const wantedProbability = preference ? (1 + preference.wanted) / (2 + samples) : 0.5;
     const associations = [...graph.spreadActivation(
-      [policy.targetEntityId], graph.getEntity(policy.targetEntityId)?.activation ?? 0, 0.6, 2,
+      [policy.targetEntityId], graph.getEntity(policy.targetEntityId)?.activation ?? 0, 0.6, 2, 128,
     )].filter(([id]) => id !== policy.targetEntityId)
       .map(([entityId, activation]) => ({ entityId, activation }))
       .sort((a, b) => b.activation - a.activation || a.entityId.localeCompare(b.entityId));
