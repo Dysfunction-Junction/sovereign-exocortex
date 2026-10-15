@@ -11,6 +11,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import { Switch } from "../components/Switch";
 import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
+import { AnticipationRing } from "../components/AnticipationRing";
 
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
 
@@ -342,6 +343,8 @@ export default function Status() {
               </div>
             </div>
           </div>
+
+          <AnticipationRing />
 
           {!contextEnabled && (
             <p className="hint setup-note">

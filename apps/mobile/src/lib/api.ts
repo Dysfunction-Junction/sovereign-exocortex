@@ -498,3 +498,78 @@ export async function getShadowMetrics(query?: ShadowMetricsQuery): Promise<Shad
 }
 
 
+
+export interface PreCognitiveStatus {
+  deviceId: string;
+  wakeThresholdMs: number;
+  urgencyIntent: "CASUAL" | "PREPARED" | "HIGH_URGENCY" | (string & {});
+  wakeupLatencyMs: number;
+  hesitationScore: number;
+  isPreStaged: boolean;
+  preStagedProposalId?: string;
+  calibrated: boolean;
+  sampleCount: number;
+  source: "device" | "global" | "default";
+  futureSkewDrops?: number;
+}
+
+export interface PreCognitiveTelemetryPayload {
+  timestamp?: number;
+  screen_state?: "SCREEN_ON" | "SCREEN_OFF";
+  vibration?: boolean;
+  dwell_ms?: number;
+  touch_duration_ms?: number;
+  synthetic?: boolean;
+}
+
+export interface PreCognitiveCalibrateResult {
+  wakeThresholdMs: number;
+  sampleCount: number;
+  calibrated: boolean;
+  minSamples: number;
+  error?: string;
+}
+
+export async function getPrecognitiveStatus(): Promise<PreCognitiveStatus> {
+  const res = await authedFetch("/v3/precognitive/status");
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Precognitive status failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as { ok?: boolean; status?: PreCognitiveStatus };
+  if (!body.status) throw new Error("Malformed precognitive status response");
+  return body.status;
+}
+
+export async function sendPrecognitiveTelemetry(
+  payload: PreCognitiveTelemetryPayload
+): Promise<PreCognitiveStatus> {
+  const res = await authedFetch("/v3/precognitive/telemetry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Precognitive telemetry failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as { ok?: boolean; status?: PreCognitiveStatus };
+  if (!body.status) throw new Error("Malformed precognitive telemetry response");
+  return body.status;
+}
+
+export async function calibratePrecognitive(minSamples?: number): Promise<PreCognitiveCalibrateResult> {
+  const payload = minSamples !== undefined ? { min_samples: minSamples } : {};
+  const res = await authedFetch("/v3/precognitive/calibrate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Precognitive calibration failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as { ok?: boolean; result?: PreCognitiveCalibrateResult };
+  if (!body.result) throw new Error("Malformed precognitive calibration response");
+  return body.result;
+}

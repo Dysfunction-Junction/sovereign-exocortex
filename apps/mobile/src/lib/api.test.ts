@@ -4,7 +4,16 @@ vi.mock("./config", () => ({
   getConnectionTargets: vi.fn().mockResolvedValue([{ baseUrl: "http://pc:1", token: "t", mode: "lan" }]),
 }));
 
-import { getPendingProposals, getPendingShadowProposals, postPushToken, submitShadowLabel, postApprovalKey } from "./api";
+import {
+  getPendingProposals,
+  getPendingShadowProposals,
+  postPushToken,
+  submitShadowLabel,
+  postApprovalKey,
+  getPrecognitiveStatus,
+  sendPrecognitiveTelemetry,
+  calibratePrecognitive,
+} from "./api";
 
 const fetchMock = vi.fn();
 beforeEach(() => {
@@ -101,5 +110,71 @@ describe("api contracts", () => {
     const out = await getPendingShadowProposals();
     expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/shadow/pending");
     expect(out[0].shadow).toBe(true);
+  });
+
+  describe("precognitive endpoints", () => {
+    it("getPrecognitiveStatus GETs /v3/precognitive/status and returns status", async () => {
+      const mockStatus = {
+        deviceId: "test-device",
+        wakeThresholdMs: 400,
+        urgencyIntent: "CASUAL",
+        wakeupLatencyMs: 380,
+        hesitationScore: 0.12,
+        isPreStaged: false,
+        calibrated: true,
+        sampleCount: 20,
+        source: "device",
+      };
+      fetchMock.mockResolvedValue(json({ ok: true, status: mockStatus }));
+
+      const res = await getPrecognitiveStatus();
+      expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/precognitive/status");
+      expect(res).toEqual(mockStatus);
+    });
+
+    it("getPrecognitiveStatus throws on HTTP error", async () => {
+      fetchMock.mockResolvedValue(json({ error: "server error" }, 500));
+      await expect(getPrecognitiveStatus()).rejects.toThrow(/500/);
+    });
+
+    it("sendPrecognitiveTelemetry POSTs payload to /v3/precognitive/telemetry", async () => {
+      const mockUpdated = {
+        deviceId: "test-device",
+        wakeThresholdMs: 350,
+        urgencyIntent: "HIGH_URGENCY",
+        wakeupLatencyMs: 320,
+        hesitationScore: 0.05,
+        isPreStaged: true,
+        preStagedProposalId: "prop-123",
+        calibrated: true,
+        sampleCount: 21,
+        source: "device",
+      };
+      fetchMock.mockResolvedValue(json({ ok: true, status: mockUpdated }));
+
+      const res = await sendPrecognitiveTelemetry({ dwell_ms: 120, screen_state: "SCREEN_ON" });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://pc:1/v3/precognitive/telemetry");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body)).toEqual({ dwell_ms: 120, screen_state: "SCREEN_ON" });
+      expect(res).toEqual(mockUpdated);
+    });
+
+    it("calibratePrecognitive POSTs to /v3/precognitive/calibrate and returns result", async () => {
+      const mockResult = {
+        wakeThresholdMs: 380,
+        sampleCount: 25,
+        calibrated: true,
+        minSamples: 5,
+      };
+      fetchMock.mockResolvedValue(json({ ok: true, result: mockResult }));
+
+      const res = await calibratePrecognitive(5);
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://pc:1/v3/precognitive/calibrate");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body)).toEqual({ min_samples: 5 });
+      expect(res).toEqual(mockResult);
+    });
   });
 });
