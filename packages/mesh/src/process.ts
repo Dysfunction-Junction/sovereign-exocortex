@@ -182,6 +182,7 @@ export function startLineProcess(options: StartProcessOptions): RunningProcess {
 
   let terminatePromise: Promise<void> | undefined;
   let completion!: Promise<ProcessOutcome>;
+  let rejectCompletion!: (error: Error) => void;
   const waitForExit = async (milliseconds: number) => {
     await Promise.race([
       completion.catch(() => undefined),
@@ -211,9 +212,17 @@ export function startLineProcess(options: StartProcessOptions): RunningProcess {
   };
 
   completion = new Promise<ProcessOutcome>((resolve, reject) => {
+    rejectCompletion = reject;
     const timer = setTimeout(() => {
       cancelled = true;
-      void terminate();
+      void terminate().catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        rejectCompletion(
+          new Error(
+            `Timed out and could not terminate ${options.command}: ${detail}${stderr ? `\n${stderr}` : ""}`,
+          ),
+        );
+      });
     }, options.timeoutMs);
     timer.unref();
 

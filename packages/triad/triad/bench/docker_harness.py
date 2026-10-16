@@ -45,6 +45,32 @@ def resolve_bare_repo(repos_dir: Path, repo: str) -> Optional[Path]:
     return None
 
 
+def cleanup_timed_out_container(container: str) -> Optional[str]:
+    """Stop and confirm removal of a timed-out container; return an error if uncertain."""
+    errors = []
+    try:
+        killed = subprocess.run(["docker", "kill", container], capture_output=True, text=True, timeout=30)
+        if killed.returncode != 0:
+            errors.append((killed.stderr or killed.stdout or "docker kill failed").strip())
+        waited = subprocess.run(["docker", "wait", container], capture_output=True, text=True, timeout=30)
+        if waited.returncode != 0:
+            errors.append((waited.stderr or waited.stdout or "docker wait failed").strip())
+        else:
+            return None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        errors.append(str(exc))
+    if errors:
+        try:
+            removed = subprocess.run(["docker", "rm", "-f", container], capture_output=True, text=True, timeout=30)
+            if removed.returncode == 0:
+                return None
+            errors.append((removed.stderr or removed.stdout or "docker rm failed").strip())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(str(exc))
+        return "; ".join(errors[-2:])
+    return None
+
+
 def destination_bare_repo(repos_dir: Path, repo: str) -> Path:
     """Where a new clone should be written. Keeps an existing legacy clone."""
     existing = resolve_bare_repo(repos_dir, repo)
@@ -283,14 +309,15 @@ def try_native_docker_tests(
         try:
             ran = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
-            try:
-                subprocess.run(["docker", "kill", container], capture_output=True, timeout=30)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            cleanup_error = cleanup_timed_out_container(container)
             skipped.update(
                 executed=True,
                 method="DOCKER_TESTS_TIMEOUT",
-                message=f"Docker test run timed out after {timeout}s; host execution is disabled",
+                message=(
+                    f"Docker test run timed out after {timeout}s; container cleanup failed: {cleanup_error}"
+                    if cleanup_error else
+                    f"Docker test run timed out after {timeout}s; container termination was confirmed; host execution is disabled"
+                ),
             )
             return skipped
         except OSError as exc:

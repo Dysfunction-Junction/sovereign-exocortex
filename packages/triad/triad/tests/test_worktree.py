@@ -14,6 +14,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from triad.worktree import (
     create_worktree,
@@ -29,6 +30,22 @@ REPO_ROOT = get_repo_root(Path(__file__).resolve())
 
 
 class TestGitWorktreeIsolation(unittest.TestCase):
+    def test_cached_base_file_failure_never_falls_back_to_network(self):
+        from triad.bench import swebench_runner
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            bare = cache / "repos" / "owner__repo.git"
+            with patch.object(swebench_runner, "CACHE_DIR", cache), \
+                 patch("triad.bench.docker_harness.resolve_bare_repo", return_value=bare), \
+                 patch.object(swebench_runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 128, b"", b"missing object")), \
+                 patch.object(swebench_runner.urllib.request, "urlopen", side_effect=AssertionError("network fallback")) as urlopen:
+                path, error = swebench_runner.ensure_base_file("owner/repo", "deadbeef", "src/file.py")
+
+            self.assertIsNone(path)
+            self.assertIn("local bare repository", error)
+            urlopen.assert_not_called()
+
     def setUp(self):
         # Ensure any leftover test worktrees are pruned before each test
         prune_worktrees(REPO_ROOT)

@@ -5,6 +5,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from triad.bench.docker_harness import (
@@ -14,6 +15,7 @@ from triad.bench.docker_harness import (
     django_test_labels,
     DOCKER_SANDBOX_ARGS,
     docker_outcome,
+    cleanup_timed_out_container,
     native_test_argv,
     resolve_bare_repo,
     runner_executed,
@@ -21,6 +23,25 @@ from triad.bench.docker_harness import (
 
 
 class TestDockerHarness(unittest.TestCase):
+    @patch("triad.bench.docker_harness.subprocess.run")
+    def test_timeout_cleanup_reports_failed_kill_and_remove(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1, "", "kill denied"),
+            subprocess.CompletedProcess([], 1, "", "container still running"),
+            subprocess.CompletedProcess([], 1, "", "remove denied"),
+        ]
+        self.assertIn("remove denied", cleanup_timed_out_container("triad-eval-test"))
+        self.assertEqual(run.call_count, 3)
+
+    @patch("triad.bench.docker_harness.subprocess.run")
+    def test_timeout_cleanup_confirms_force_removal(self, run):
+        run.side_effect = [
+            subprocess.CompletedProcess([], 1, "", "kill denied"),
+            subprocess.CompletedProcess([], 1, "", "wait failed"),
+            subprocess.CompletedProcess([], 0, "triad-eval-test", ""),
+        ]
+        self.assertIsNone(cleanup_timed_out_container("triad-eval-test"))
+
     def test_dirname_includes_owner(self):
         self.assertEqual(bare_repo_dirname("django/django"), "django__django.git")
         self.assertEqual(bare_repo_dirname("other/django"), "other__django.git")

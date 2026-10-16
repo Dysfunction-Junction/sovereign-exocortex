@@ -51,3 +51,13 @@ Focus: async error paths, child and container cleanup, worktree lifecycle, narro
 2. Make cache-backed SWE-bench base-file retrieval strictly local.
 3. Make Docker timeout cleanup observable and verified.
 4. Fail closed on Git staging, commit, and retry-reset failures.
+
+## Resolution (2026-10-15)
+
+- P1: timeout-triggered process termination now has an explicit rejection handler. If escalation fails, `completion` rejects with the command, termination diagnostic, and captured stderr instead of leaving a detached rejection.
+- P2: base-file retrieval returns a local cache error when a discovered bare repository lacks the requested object/file; HTTP fallback remains available only when no local bare repository exists.
+- P2: Docker timeout cleanup now checks `kill`, waits for termination, and attempts force removal if termination cannot be confirmed. The result message reports cleanup failure explicitly.
+- P3: base-file `git add` and baseline `git commit` return codes are checked. Both patch retry paths check `reset --hard` and `clean -fd`; cleanup failures stop retries and are classified as infrastructure errors.
+- Regression tests cover local-cache network isolation and Docker cleanup failure/force-removal behavior. Focused mesh process-lifecycle tests pass; the termination-escalation failure branch does not have a direct injected-signal regression test yet.
+
+Verification: `pnpm -r --stream typecheck` passed. The focused Python suite passed 16 tests, mesh process lifecycle passed 3 tests, and `git diff --check` plus Python compilation passed. A broader Triad test run stalled after a failure in a longer worktree test and was stopped; the focused changed-area tests passed independently. The required advisor diff review did not return within approximately one minute and was stopped.

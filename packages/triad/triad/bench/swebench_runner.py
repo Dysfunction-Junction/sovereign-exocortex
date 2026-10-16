@@ -519,8 +519,11 @@ def ensure_base_file(repo: str, base_commit: str, rel_path: str) -> Tuple[Option
                             os.unlink(tmp_path)
                         except OSError:
                             pass
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        except subprocess.TimeoutExpired as exc:
+            return None, f"Local bare-repository lookup timed out: {exc}"
+        except OSError as exc:
+            return None, f"Local bare-repository lookup failed: {exc}"
+        return None, f"File or commit is unavailable in local bare repository {bare_repo}"
 
     # 2. Fallback to network request if bare repo missing or object not found
     url = f"https://raw.githubusercontent.com/{repo}/{base_commit}/{rel_path}"
@@ -734,8 +737,12 @@ def evaluate_in_worktree(
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(cached_file.read_bytes())
-                    subprocess.run(["git", "-C", str(wt), "-c", "core.autocrlf=false", "add", "-f", rel], capture_output=True)
-                    files_added_to_base += 1
+                    staged = subprocess.run(["git", "-C", str(wt), "-c", "core.autocrlf=false", "add", "-f", rel], capture_output=True, text=True)
+                    if staged.returncode != 0:
+                        detail = (staged.stderr or staged.stdout or "git add failed").strip().splitlines()[0]
+                        infra_errors.append(f"git add {rel}: {detail}")
+                    else:
+                        files_added_to_base += 1
                 elif err and not rel.endswith("dev/null"):
                     # Check if file is newly introduced from /dev/null by test_patch or candidate_patch
                     is_new_file = False
@@ -750,21 +757,25 @@ def evaluate_in_worktree(
                     if not is_new_file:
                         infra_errors.append(f"{rel} ({err})")
 
+            if files_added_to_base > 0 and not infra_errors:
+                committed = subprocess.run([
+                    "git", "-C", str(wt),
+                    "-c", "core.autocrlf=false",
+                    "-c", "user.name=TriadBench", "-c", "user.email=bench@triad.local",
+                    "commit", "-m", "Initialize base files at base_commit"
+                ], capture_output=True, text=True)
+                if committed.returncode != 0:
+                    detail = (committed.stderr or committed.stdout or "git commit failed").strip().splitlines()[0]
+                    infra_errors.append(f"git commit base files: {detail}")
+
             if infra_errors:
-                exec_msg = f"Infrastructure error fetching base files: {', '.join(infra_errors[:3])}"
-                resolution_method = "INFRA_NETWORK_ERROR"
+                is_git_error = any(item.startswith("git ") for item in infra_errors)
+                exec_msg = f"Infrastructure error {'preparing baseline' if is_git_error else 'fetching base files'}: {', '.join(infra_errors[:3])}"
+                resolution_method = "INFRA_GIT_ERROR" if is_git_error else "INFRA_NETWORK_ERROR"
             elif files_added_to_base == 0 and any(not f.endswith("dev/null") for f in all_needed_files):
                 exec_msg = "No base files materialized in worktree"
                 resolution_method = "INFRA_BASE_FILES_MISSING"
             else:
-                if files_added_to_base > 0:
-                    subprocess.run([
-                        "git", "-C", str(wt),
-                        "-c", "core.autocrlf=false",
-                        "-c", "user.name=TriadBench", "-c", "user.email=bench@triad.local",
-                        "commit", "-m", "Initialize base files at base_commit"
-                    ], capture_output=True)
-
                 # Apply candidate patch via git apply using isolated temp directory outside worktree
                 with tempfile.TemporaryDirectory(prefix="triad-patch-") as patch_dir_str:
                     patch_dir = Path(patch_dir_str)
@@ -780,36 +791,45 @@ def evaluate_in_worktree(
                         str(cand_patch_file)
                     ], capture_output=True, text=True)
 
-                    if res_apply.returncode != 0:
+                    if res_apply.returncode != 0 and not (res_apply.stderr or "").startswith("Infrastructure error"):
                         # Clean up index and conflict markers before 3-way retry
-                        subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True)
-                        subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True)
+                        reset = subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True, text=True)
+                        clean = subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True, text=True)
+                        if reset.returncode != 0 or clean.returncode != 0:
+                            failed = reset if reset.returncode != 0 else clean
+                            detail = (failed.stderr or failed.stdout or "git retry cleanup failed").strip().splitlines()[0]
+                            res_apply = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=f"Infrastructure error resetting retry state: {detail}")
+                        else:
 
-                        res_apply = subprocess.run([
-                            "git", "-C", str(wt),
-                            "-c", "core.autocrlf=false",
-                            "apply",
-                            "--3way", "--recount", "--ignore-space-change", "--ignore-whitespace",
-                            str(cand_patch_file)
-                        ], capture_output=True, text=True)
+                            res_apply = subprocess.run([
+                                "git", "-C", str(wt),
+                                "-c", "core.autocrlf=false",
+                                "apply",
+                                "--3way", "--recount", "--ignore-space-change", "--ignore-whitespace",
+                                str(cand_patch_file)
+                            ], capture_output=True, text=True)
                         if res_apply.returncode == 0:
                             apply_method = "3way"
 
-                    if res_apply.returncode != 0:
+                    if res_apply.returncode != 0 and not (res_apply.stderr or "").startswith("Infrastructure error"):
                         # Clean up again before fuzzy retry
-                        subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True)
-                        subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True)
-
-                        try:
+                        reset = subprocess.run(["git", "-C", str(wt), "reset", "--hard", "-q"], capture_output=True, text=True)
+                        clean = subprocess.run(["git", "-C", str(wt), "clean", "-fd"], capture_output=True, text=True)
+                        if reset.returncode != 0 or clean.returncode != 0:
+                            failed = reset if reset.returncode != 0 else clean
+                            detail = (failed.stderr or failed.stdout or "git retry cleanup failed").strip().splitlines()[0]
+                            res_apply = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=f"Infrastructure error resetting fuzzy retry state: {detail}")
+                        else:
                             try:
-                                from triad_engine import apply_patch_text
-                            except ImportError:
-                                from triad.triad_engine import apply_patch_text
-                            if apply_patch_text(candidate_patch_text, cwd=wt, allow_3way=True):
-                                res_apply = subprocess.CompletedProcess(args=[], returncode=0, stdout="applied via fuzzy fallback", stderr="")
-                                apply_method = "fuzzy"
-                        except Exception:
-                            pass
+                                try:
+                                    from triad_engine import apply_patch_text
+                                except ImportError:
+                                    from triad.triad_engine import apply_patch_text
+                                if apply_patch_text(candidate_patch_text, cwd=wt, allow_3way=True):
+                                    res_apply = subprocess.CompletedProcess(args=[], returncode=0, stdout="applied via fuzzy fallback", stderr="")
+                                    apply_method = "fuzzy"
+                            except Exception:
+                                pass
 
                     if res_apply.returncode == 0 and test_patch:
                         tpatch_file = patch_dir / "test.patch"
@@ -879,8 +899,12 @@ def evaluate_in_worktree(
                     patch_applied = False
                     err_clean = (res_apply.stderr or res_apply.stdout or "patch does not apply").strip().splitlines()
                     first_err = err_clean[0] if err_clean else "git apply failed"
-                    exec_msg = f"Git apply failed: {first_err}"
-                    resolution_method = "GIT_APPLY_FAILED"
+                    if first_err.startswith("Infrastructure error"):
+                        exec_msg = first_err
+                        resolution_method = "INFRA_GIT_ERROR"
+                    else:
+                        exec_msg = f"Git apply failed: {first_err}"
+                        resolution_method = "GIT_APPLY_FAILED"
 
     except Exception as e:
         exec_msg = f"Worktree execution exception: {e}"

@@ -267,3 +267,11 @@ Date: 2026-10-15
 - Apply the P11 recommended patches and regression tests in a separate code-fix pass.
 - Rerun all workspace tests in a less restricted Windows environment, especially `packages/mesh`, and smoke-test the exporter against the configured read-only daemon database.
 - Collect at least 50 direct tap labels before using shadow results for the release gate; the synthetic triage benchmark is not a release evaluation.
+
+## P11 Mesh and Triad Follow-up (2026-10-15)
+
+- Addressed the four findings in `docs/P11_MESH_TRIAD_BENCH_AUDIT_2026-10-15.md`: process timeout termination failures reject with diagnostics; local bare-cache misses no longer fall through to HTTP; Docker timeout cleanup is verified and reported; Git base staging/commit and retry reset/clean failures stop evaluation.
+- Added regression tests for cache-backed no-network behavior and Docker timeout cleanup failure/force-removal paths.
+- Verification passed: `pnpm -r --stream typecheck`; mesh process lifecycle (3 tests); focused Triad Docker/cache tests (16 tests); Python compile and `git diff --check`.
+- Full Triad tests did not complete: the broader worktree suite stalled after a failure and was stopped. The focused changed-area tests pass. Advisor review also did not return within approximately one minute and was stopped.
+- Limitation: timeout escalation failure in `packages/mesh/src/process.ts` still lacks a direct signal-injection regression test; normal process lifecycle tests pass.
