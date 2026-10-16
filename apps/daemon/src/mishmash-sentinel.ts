@@ -10,7 +10,7 @@ export interface NodeHealthStatus {
   statusText: string;
 }
 
-export function checkNodeHealth(port: number, timeoutMs = 2000): Promise<{ healthy: boolean; statusText: string }> {
+export function checkNodeHealth(port: number, timeoutMs = 5000): Promise<{ healthy: boolean; statusText: string }> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: { healthy: boolean; statusText: string }) => {
