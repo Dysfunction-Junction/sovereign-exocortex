@@ -11,6 +11,8 @@
  * - REST_RECOVERY: Evening, screen-off, quiet hours -> Zero intrusive modals; silently queues tasks for morning review.
  */
 
+import type { PredictionContext } from '@exocortex/core';
+
 export type CognitiveMode =
   | 'DEEP_FOCUS'
   | 'HIGH_VELOCITY_EXECUTION'
@@ -30,6 +32,12 @@ export interface ContextualSignals {
   userDwellMs?: number;
   hesitationScore?: number; // 0.0 to 1.0 (from neuromuscular micro-telemetry)
   manualOverrideMode?: CognitiveMode | null;
+  // Native hardware signals
+  inCall?: boolean;
+  audioOutput?: 'speaker' | 'bluetooth_headset' | 'wired_headset' | string;
+  motionState?: 'still' | 'walking' | 'running' | 'in_vehicle' | 'unknown' | string;
+  thermalHeadroom?: number;
+  thermalStatus?: 'nominal' | 'elevated' | 'throttling' | string;
 }
 
 export interface ProposalEnvelope {
@@ -70,6 +78,8 @@ export interface ModeGateConfig {
   autoExecuteMaxRisk: number; // default 0.15
   deepFocusUrgencyCutoff: number; // default 0.85
   restRecoveryUrgencyCutoff: number; // default 0.95
+  emergencyUrgencyCutoff: number; // default 0.95
+  thermalThrottlingCutoff: number; // default 1.0
   queueMaxAgeMs: number; // default 8 hours (28,800,000 ms)
 }
 
@@ -107,6 +117,8 @@ const DEFAULT_CONFIG: ModeGateConfig = {
   autoExecuteMaxRisk: 0.15,
   deepFocusUrgencyCutoff: 0.85,
   restRecoveryUrgencyCutoff: 0.95,
+  emergencyUrgencyCutoff: 0.95,
+  thermalThrottlingCutoff: 1.0,
   queueMaxAgeMs: 8 * 60 * 60 * 1000,
 };
 
@@ -117,7 +129,12 @@ export class CognitiveModeGate {
   private lastSignals: ContextualSignals = {};
 
   constructor(config: Partial<ModeGateConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = {
+      ...DEFAULT_CONFIG,
+      ...config,
+      emergencyUrgencyCutoff: Number.isFinite(config.emergencyUrgencyCutoff) ? config.emergencyUrgencyCutoff! : DEFAULT_CONFIG.emergencyUrgencyCutoff,
+      thermalThrottlingCutoff: Number.isFinite(config.thermalThrottlingCutoff) ? config.thermalThrottlingCutoff! : DEFAULT_CONFIG.thermalThrottlingCutoff,
+    };
   }
 
   /**
@@ -132,24 +149,31 @@ export class CognitiveModeGate {
    */
   public classifyMode(signals: ContextualSignals): CognitiveMode {
     this.lastSignals = signals;
+    const effective = this.lastSignals;
 
     // 1. Manual override takes highest priority
-    if (signals.manualOverrideMode && VALID_MODES.includes(signals.manualOverrideMode)) {
-      this.currentMode = signals.manualOverrideMode;
+    if (effective.manualOverrideMode && VALID_MODES.includes(effective.manualOverrideMode)) {
+      this.currentMode = effective.manualOverrideMode;
       return this.currentMode;
     }
 
-    const now = new Date(signals.timestamp ?? Date.now());
-    const hour = signals.hourOfDay ?? now.getHours();
+    // Active phone call or VoIP meeting -> DEEP_FOCUS flow protection
+    if (effective.inCall) {
+      this.currentMode = 'DEEP_FOCUS';
+      return this.currentMode;
+    }
+
+    const now = new Date(effective.timestamp ?? Date.now());
+    const hour = effective.hourOfDay ?? now.getHours();
 
     // 2. Explicit screen off or prolonged idle during night hours -> REST_RECOVERY
-    if ((signals.screenState === 'OFF' || (signals.idleDurationMs ?? 0) > 300000) && (hour >= 22 || hour < 7)) {
+    if ((effective.screenState === 'OFF' || (effective.idleDurationMs ?? 0) > 300000) && (hour >= 22 || hour < 7)) {
       this.currentMode = 'REST_RECOVERY';
       return this.currentMode;
     }
 
-    const app = (signals.foregroundApp ?? '').toLowerCase();
-    const title = (signals.windowTitle ?? '').toLowerCase();
+    const app = (effective.foregroundApp ?? '').toLowerCase();
+    const title = (effective.windowTitle ?? '').toLowerCase();
 
     // 3. Deep Focus: Development environments, terminals, complex doc writing
     const isIDE =
@@ -198,8 +222,8 @@ export class CognitiveModeGate {
     }
 
     // 6. High Velocity Execution: Rapid interaction velocity (>15 actions/min) or low idle time
-    const velocity = signals.recentInteractionVelocity ?? 0;
-    if (velocity >= 15 || ((signals.idleDurationMs ?? 0) < 5000 && signals.screenState !== 'OFF')) {
+    const velocity = effective.recentInteractionVelocity ?? 0;
+    if (velocity >= 15 || ((effective.idleDurationMs ?? 0) < 5000 && effective.screenState !== 'OFF')) {
       this.currentMode = 'HIGH_VELOCITY_EXECUTION';
       return this.currentMode;
     }
@@ -213,13 +237,25 @@ export class CognitiveModeGate {
    * Filter and route a speculative proposal through the attentional gate.
    */
   public evaluateProposal(proposal: ProposalEnvelope, signals?: ContextualSignals): GateDecision {
-    const activeMode = signals ? this.classifyMode(signals) : this.currentMode;
+    const effectiveSignals: ContextualSignals = signals
+      ? { ...this.lastSignals, ...signals }
+      : this.lastSignals;
+    const activeMode = signals ? this.classifyMode(effectiveSignals) : this.currentMode;
     const now = Date.now();
 
-    // Invariant: Unacceptably high risk requires explicit approval, cannot be auto-executed
+    const urgency = Number.isFinite(proposal.urgency)
+      ? Math.max(0, Math.min(1, proposal.urgency))
+      : 0;
+    const isThrottling =
+      (typeof effectiveSignals.thermalHeadroom === 'number' && effectiveSignals.thermalHeadroom >= this.config.thermalThrottlingCutoff) ||
+      effectiveSignals.thermalStatus === 'throttling';
+
+    // Invariant: Unacceptably high risk requires explicit approval, cannot be auto-executed.
+    // Under thermal exhaustion, all speculative auto-execution is disabled.
     // Fail closed: out-of-range / non-finite scores can never authorize silent execution.
     // The allowlist (not the numeric scores) is what grants auto-execution of an actionable proposal.
     const canAutoExecute =
+      !isThrottling &&
       isAutoExecuteAllowlisted(proposal) &&
       Number.isFinite(proposal.confidence) &&
       Number.isFinite(proposal.estimatedRisk) &&
@@ -227,6 +263,85 @@ export class CognitiveModeGate {
       proposal.estimatedRisk >= 0 &&
       proposal.confidence >= this.config.autoExecuteMinConfidence &&
       proposal.estimatedRisk <= this.config.autoExecuteMaxRisk;
+
+    // Thermal Headroom Protection: Suppress speculative and background workloads under thermal exhaustion
+    if (isThrottling && urgency < this.config.emergencyUrgencyCutoff) {
+      this.queueProposal(proposal);
+      return {
+        action: 'SUPPRESS_AND_QUEUE',
+        mode: activeMode,
+        reason: `Thermal exhaustion: device throttling (${typeof effectiveSignals.thermalHeadroom === 'number' ? `headroom ${effectiveSignals.thermalHeadroom.toFixed(2)}` : 'status throttling'}). Workload staged for cooldown.`,
+        targetDelivery: 'BACKGROUND_QUEUE',
+        confidence: proposal.confidence,
+        evaluatedAt: now,
+      };
+    }
+
+    // Audio Mode & Interruption Gating: Suppress intrusive modals during phone calls & VoIP meetings
+    if (effectiveSignals.inCall) {
+      if (canAutoExecute) {
+        return {
+          action: 'SILENT_AUTO_EXECUTE',
+          mode: activeMode,
+          reason: `In-call/meeting: Safe proposal executed silently without disturbing conversation.`,
+          targetDelivery: 'SILENT_EXECUTE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      if (urgency >= this.config.emergencyUrgencyCutoff) {
+        return {
+          action: 'ALLOW_PROMPT',
+          mode: activeMode,
+          reason: `In-call/meeting: Critical emergency urgency ${urgency.toFixed(2)} breaches call suppression gate.`,
+          targetDelivery: 'GLASS_MODAL',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      this.queueProposal(proposal);
+      return {
+        action: 'SUPPRESS_AND_QUEUE',
+        mode: activeMode,
+        reason: `In-call/meeting active: non-emergency interruptions suppressed to preserve conversation flow.`,
+        targetDelivery: 'BACKGROUND_QUEUE',
+        confidence: proposal.confidence,
+        evaluatedAt: now,
+      };
+    }
+
+    // Low-Power Motion Prior: In-vehicle driving safety gating
+    if (effectiveSignals.motionState === 'in_vehicle') {
+      if (canAutoExecute) {
+        return {
+          action: 'SILENT_AUTO_EXECUTE',
+          mode: activeMode,
+          reason: `In-vehicle: Safe routine action executed silently without visual distraction.`,
+          targetDelivery: 'SILENT_EXECUTE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      if (urgency >= this.config.emergencyUrgencyCutoff) {
+        return {
+          action: 'ALLOW_PROMPT',
+          mode: activeMode,
+          reason: `In-vehicle: Critical emergency urgency ${urgency.toFixed(2)} allowed.`,
+          targetDelivery: 'GLASS_MODAL',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      this.queueProposal(proposal);
+      return {
+        action: 'SUPPRESS_AND_QUEUE',
+        mode: activeMode,
+        reason: `In-vehicle motion detected: visual modals suppressed for driving safety.`,
+        targetDelivery: 'BACKGROUND_QUEUE',
+        confidence: proposal.confidence,
+        evaluatedAt: now,
+      };
+    }
 
     switch (activeMode) {
       case 'DEEP_FOCUS': {
@@ -242,11 +357,11 @@ export class CognitiveModeGate {
           };
         }
 
-        if (proposal.urgency >= this.config.deepFocusUrgencyCutoff) {
+        if (urgency >= this.config.deepFocusUrgencyCutoff) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
-            reason: `Deep Focus: Urgency ${proposal.urgency.toFixed(2)} exceeds critical cutoff (${this.config.deepFocusUrgencyCutoff}). Breaching gate.`,
+            reason: `Deep Focus: Urgency ${urgency.toFixed(2)} exceeds critical cutoff (${this.config.deepFocusUrgencyCutoff}). Breaching gate.`,
             targetDelivery: 'GLASS_MODAL',
             confidence: proposal.confidence,
             evaluatedAt: now,
@@ -258,7 +373,7 @@ export class CognitiveModeGate {
         return {
           action: 'SUPPRESS_AND_QUEUE',
           mode: activeMode,
-          reason: `Deep Focus: Preserving flow state. Urgency ${proposal.urgency.toFixed(2)} is below cutoff. Queued for post-focus review.`,
+          reason: `Deep Focus: Preserving flow state. Urgency ${urgency.toFixed(2)} is below cutoff. Queued for post-focus review.`,
           targetDelivery: 'BACKGROUND_QUEUE',
           confidence: proposal.confidence,
           evaluatedAt: now,
@@ -278,7 +393,7 @@ export class CognitiveModeGate {
           };
         }
 
-        if (proposal.confidence >= 0.5 || proposal.urgency >= 0.6) {
+        if (proposal.confidence >= 0.5 || urgency >= 0.6) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
@@ -302,7 +417,7 @@ export class CognitiveModeGate {
 
       case 'EXPLORATORY_LEARNING': {
         // Exploratory Learning: Allow helpful context and insights
-        if (proposal.confidence >= 0.6 || proposal.urgency >= 0.5) {
+        if (proposal.confidence >= 0.6 || urgency >= 0.5) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
@@ -337,7 +452,7 @@ export class CognitiveModeGate {
           };
         }
 
-        if (proposal.urgency >= 0.3 || proposal.confidence >= 0.4) {
+        if (urgency >= 0.3 || proposal.confidence >= 0.4) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
@@ -360,11 +475,11 @@ export class CognitiveModeGate {
 
       case 'REST_RECOVERY': {
         // Rest & Recovery: Strict zero intrusive alerts unless life/critical security emergency
-        if (proposal.urgency >= this.config.restRecoveryUrgencyCutoff) {
+        if (urgency >= this.config.restRecoveryUrgencyCutoff) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
-            reason: `Rest Recovery: Life/critical threshold exceeded (${proposal.urgency.toFixed(2)}). Emergency glass alert allowed.`,
+            reason: `Rest Recovery: Life/critical threshold exceeded (${urgency.toFixed(2)}). Emergency glass alert allowed.`,
             targetDelivery: 'GLASS_MODAL',
             confidence: proposal.confidence,
             evaluatedAt: now,
@@ -401,6 +516,7 @@ export class CognitiveModeGate {
    * Queue a proposal for delayed execution or batched morning surfacing.
    */
   private queueProposal(proposal: ProposalEnvelope): void {
+    if (this.queuedProposals.some(p => p.id === proposal.id)) return;
     proposal.stagedAt = proposal.stagedAt ?? Date.now();
     this.queuedProposals.push(proposal);
     if (this.queuedProposals.length > MAX_QUEUED_PROPOSALS) {
@@ -434,4 +550,29 @@ export class CognitiveModeGate {
   public get queueSize(): number {
     return this.getPendingQueue().length; // evicts TTL-expired entries so the size is not stale
   }
+}
+
+/**
+ * Map a PredictionContext snapshot to ContextualSignals for the CognitiveModeGate.
+ */
+export function contextToSignals(ctx: PredictionContext | undefined): ContextualSignals {
+  if (!ctx) return {};
+  const screenUpper = ctx.device?.screen_state?.toUpperCase();
+  const screenState: 'ON' | 'OFF' | 'UNLOCKED' | undefined =
+    screenUpper === 'ON' ? 'ON' : screenUpper === 'OFF' ? 'OFF' : screenUpper === 'UNLOCKED' ? 'UNLOCKED' : undefined;
+
+  return {
+    foregroundApp: ctx.app?.package,
+    windowTitle: ctx.app?.screen ?? ctx.app?.label,
+    timestamp: ctx.time?.ts,
+    hourOfDay: ctx.time?.hour,
+    isWeekend: ctx.time?.is_weekend,
+    screenState,
+    idleDurationMs: ctx.device?.idle_ms,
+    inCall: ctx.audio?.in_call,
+    audioOutput: ctx.audio?.output_type,
+    motionState: ctx.motion?.state,
+    thermalHeadroom: ctx.thermal?.headroom,
+    thermalStatus: ctx.thermal?.status,
+  };
 }

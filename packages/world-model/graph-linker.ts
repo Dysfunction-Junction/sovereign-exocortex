@@ -32,6 +32,7 @@ export interface LinkableEvent {
   persons?: string[];
   extracted_entities?: ExtractedEntityInput[];
   contextual_suggestions?: string[];
+  notification_actions?: Array<{ action_id: string; title: string }>;
 }
 
 export interface ActivatedEntityScore {
@@ -422,6 +423,30 @@ export function linkEventToGraph(
         ...docEntity.properties,
         contextual_suggestions: actions,
       };
+    }
+
+    // 4d. Record native notification actions on document properties
+    const rawNotificationActions: unknown[] = [
+      ...(Array.isArray(event.notification_actions) ? event.notification_actions : []),
+      ...(Array.isArray(payload.notification_actions) ? (payload.notification_actions as unknown[]) : []),
+    ];
+    if (rawNotificationActions.length > 0) {
+      const parsedActions = rawNotificationActions
+        .filter((a): a is Record<string, unknown> => Boolean(a && typeof a === 'object'))
+        .map((a) => {
+          const action_id = typeof a.action_id === 'string' ? a.action_id.trim() : '';
+          const title = typeof a.title === 'string' ? a.title.trim().slice(0, 64) : '';
+          return { action_id, title };
+        })
+        .filter((a) => a.action_id.length > 0 && a.title.length > 0)
+        .slice(0, 8);
+      if (parsedActions.length > 0) {
+        docEntity.properties = {
+          ...docEntity.properties,
+          notification_actions: parsedActions,
+          notification_actions_expires_at: timestamp + 120_000,
+        };
+      }
     }
   }
 

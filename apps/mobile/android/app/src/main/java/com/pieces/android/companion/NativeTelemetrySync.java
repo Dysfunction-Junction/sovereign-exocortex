@@ -533,6 +533,11 @@ public class NativeTelemetrySync {
                     event.put("sys_suggest", contextualSuggestions.optString(0));
                 }
 
+                JSONObject hw = NativeHardwareTelemetry.collect(appContext);
+                if (hw != null && hw.length() > 0) {
+                    event.put("hardware_telemetry", hw);
+                }
+
                 appendEvent(appContext, event);
                 flushAsync(appContext);
             } catch (Exception e) {
@@ -581,6 +586,13 @@ public class NativeTelemetrySync {
      * Queues a notification event to the native durable outbox.
      */
     public static void queueNotification(Context context, String packageName, String appLabel, String title, String text, long postedAt) {
+        queueNotification(context, packageName, appLabel, title, text, postedAt, null);
+    }
+
+    /**
+     * Queues a notification event with native actionable PendingIntent buttons to the native durable outbox.
+     */
+    public static void queueNotification(Context context, String packageName, String appLabel, String title, String text, long postedAt, JSONArray actions) {
         final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         final long captureTime = postedAt > 0 ? postedAt : System.currentTimeMillis();
         final String safePkg = truncate(packageName, MAX_PKG_CHARS);
@@ -600,6 +612,15 @@ public class NativeTelemetrySync {
                 event.put("app_label", safeLabel);
                 event.put("timestamp", formatIsoUtc(captureTime));
                 event.put("triaged", false);
+
+                if (actions != null && actions.length() > 0) {
+                    event.put("notification_actions", actions);
+                }
+
+                JSONObject hw = NativeHardwareTelemetry.collect(appContext);
+                if (hw != null && hw.length() > 0) {
+                    event.put("hardware_telemetry", hw);
+                }
 
                 appendEvent(appContext, event);
                 flushAsync(appContext);

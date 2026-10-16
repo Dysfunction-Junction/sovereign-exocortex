@@ -46,6 +46,15 @@ export type UsageEvent = (
       // inference while this app is foreground, never true during a real
       // background capture). triageQueue() is the only writer of this field.
       triaged?: boolean;
+      audio?: Record<string, unknown>;
+      thermal?: Record<string, unknown>;
+      battery_micro?: Record<string, unknown>;
+      motion?: Record<string, unknown>;
+      notification_actions?: Array<{ action_id: string; title: string }>;
+      extracted_entities?: unknown;
+      contextual_suggestions?: unknown;
+      sys_suggest?: string;
+      hardware_telemetry?: Record<string, unknown>;
     }
 ) & {
   id?: string;

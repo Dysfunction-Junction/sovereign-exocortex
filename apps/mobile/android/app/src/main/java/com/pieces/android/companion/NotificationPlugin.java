@@ -91,4 +91,21 @@ public class NotificationPlugin extends Plugin {
         getContext().startActivity(intent);
         call.resolve();
     }
+
+    /**
+     * Executes a registered notification action PendingIntent (1-tap notification execution).
+     */
+    @PluginMethod
+    public void executeNotificationAction(PluginCall call) {
+        String actionId = call.getString("actionId");
+        if (actionId == null || actionId.isEmpty()) {
+            call.reject("Must provide actionId string");
+            return;
+        }
+        boolean success = NotificationActionRegistry.execute(actionId);
+        JSObject ret = new JSObject();
+        ret.put("success", success);
+        ret.put("actionId", actionId);
+        call.resolve(ret);
+    }
 }

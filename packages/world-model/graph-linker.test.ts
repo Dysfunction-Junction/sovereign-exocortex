@@ -259,5 +259,25 @@ describe('GraphEventLinker (Graph-to-Event Linkage)', () => {
       expect(neighborIds).toContain(contact!.id);
       expect(neighborIds).toContain(goal!.id);
     });
+
+    it('records native notification actions on document properties', () => {
+      const event: LinkableEvent = {
+        event_id: 'notif_event_1',
+        summary_id: 'notif_slack_dm',
+        notification_actions: [
+          { action_id: 'act_101', title: 'Reply' },
+          { action_id: 'act_102', title: 'Mark as read' },
+        ],
+      };
+
+      linkEventToGraph(event, graph, { autoCreate: true });
+
+      const doc = graph.getEntity('doc_notif_slack_dm');
+      expect(doc).toBeDefined();
+      expect(doc?.properties?.notification_actions).toEqual([
+        { action_id: 'act_101', title: 'Reply' },
+        { action_id: 'act_102', title: 'Mark as read' },
+      ]);
+    });
   });
 });

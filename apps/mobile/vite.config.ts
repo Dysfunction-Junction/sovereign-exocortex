@@ -18,6 +18,7 @@ export default defineConfig({
   test: {
     testTimeout: 15000,
     environment: 'jsdom',
+    fileParallelism: false,
     setupFiles: [path.resolve(__dirname, 'src/test/setup.ts')],
     globals: true,
   },

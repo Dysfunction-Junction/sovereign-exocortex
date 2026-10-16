@@ -262,6 +262,22 @@ describe("contextFeatures", () => {
     const f = contextFeatures(ctx);
     expect(f.sys_suggest).toBe("open_url");
   });
+
+  it("extracts audio_mode and motion features from PredictionContext", () => {
+    const ctx: PredictionContext = {
+      audio: {
+        mode: "in_call",
+        in_call: true,
+      },
+      motion: {
+        state: "walking",
+        confidence: 0.9,
+      },
+    };
+    const f = contextFeatures(ctx);
+    expect(f.audio_mode).toBe("in_call");
+    expect(f.motion).toBe("walking");
+  });
 });
 
 describe("benchmarkAgainstSystemSuggestion", () => {

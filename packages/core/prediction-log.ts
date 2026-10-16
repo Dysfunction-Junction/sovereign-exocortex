@@ -109,6 +109,35 @@ export interface PredictionContext {
     entities?: Array<{ type: string; value: string; confidence?: number }>;
     observed_ts?: number;
   };
+  /** Native Android audio mode & headset routing */
+  audio?: {
+    mode?: "normal" | "in_call" | "in_communication" | "ringtone" | string;
+    in_call?: boolean;
+    music_active?: boolean;
+    output_type?: "speaker" | "bluetooth_headset" | "wired_headset" | string;
+  };
+  /** Native Android proactive thermal throttling forecast and headroom */
+  thermal?: {
+    headroom?: number;
+    status?: "nominal" | "elevated" | "throttling" | string;
+  };
+  /** Native Android battery micro-telemetry */
+  battery_micro?: {
+    temp_c?: number;
+    voltage_mv?: number;
+    plugged?: "unplugged" | "ac" | "usb" | "wireless" | string;
+    current_ma?: number;
+  };
+  /** Low-power physical motion state classification */
+  motion?: {
+    state?: "still" | "walking" | "running" | "in_vehicle" | "unknown" | string;
+    confidence?: number;
+  };
+  /** 1-Tap actionable notification actions extracted from posted notifications */
+  notification_actions?: Array<{
+    action_id: string;
+    title: string;
+  }>;
   /** Expected signals that were not available when this snapshot was taken, e.g. "ambient.temp_c". */
   missing?: string[];
   [extra: string]: unknown;

@@ -144,5 +144,143 @@ describe("buildScreenExamples", () => {
     // Past TTL (5 minutes and 1 second later)
     expect(t.snapshot("dev-1", T0 + 5 * 60_000 + 1000).system_suggestions).toBeUndefined();
   });
+
+  it("captures audio mode, in_call, music_active, and audio output routing in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const audioEvent = ev("dev-1", "telemetry", {
+      audio: {
+        mode: "in_communication",
+        in_call: true,
+        music_active: false,
+        output_type: "bluetooth_headset",
+      },
+    }, T0);
+    t.update(audioEvent);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.audio).toEqual({
+      mode: "in_communication",
+      in_call: true,
+      music_active: false,
+      output_type: "bluetooth_headset",
+    });
+  });
+
+  it("captures thermal headroom and throttling status in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const thermalEvent = ev("dev-1", "telemetry", {
+      thermal: {
+        headroom: 1.05,
+        status: "throttling",
+      },
+    }, T0);
+    t.update(thermalEvent);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.thermal).toEqual({
+      headroom: 1.05,
+      status: "throttling",
+    });
+  });
+
+  it("captures battery micro-telemetry (temp, voltage, charging type, current) in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const batteryEvent = ev("dev-1", "telemetry", {
+      battery_micro: {
+        temp_c: 32.5,
+        voltage_mv: 4120,
+        plugged: "ac",
+        current_ma: -450,
+      },
+    }, T0);
+    t.update(batteryEvent);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.battery_micro).toEqual({
+      temp_c: 32.5,
+      voltage_mv: 4120,
+      plugged: "ac",
+      current_ma: -450,
+    });
+  });
+
+  it("captures low-power motion state prior in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const motionEvent = ev("dev-1", "telemetry", {
+      motion: {
+        state: "in_vehicle",
+        confidence: 0.95,
+      },
+    }, T0);
+    t.update(motionEvent);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.motion).toEqual({
+      state: "in_vehicle",
+      confidence: 0.95,
+    });
+  });
+
+  it("captures actionable notification actions in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const notifEvent = ev("dev-1", "telemetry", {
+      notification_actions: [
+        { action_id: "act_101", title: "Archive" },
+        { action_id: "act_102", title: "Reply" },
+      ],
+    }, T0);
+    t.update(notifEvent);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.notification_actions).toEqual([
+      { action_id: "act_101", title: "Archive" },
+      { action_id: "act_102", title: "Reply" },
+    ]);
+  });
+
+  it("excludes hardware signals when snapshot ts is before observed_ts (negative delta)", () => {
+    const t = new ContextTracker(utc);
+    const audioEvent = ev("dev-1", "telemetry", {
+      audio: { in_call: true, mode: "in_call" },
+    }, T0);
+    t.update(audioEvent);
+
+    // Snapshot before event was observed should not leak future state
+    const pastSnap = t.snapshot("dev-1", T0 - 1000);
+    expect(pastSnap.audio).toBeUndefined();
+
+    // Snapshot at or after observation contains it
+    const presentSnap = t.snapshot("dev-1", T0);
+    expect(presentSnap.audio?.in_call).toBe(true);
+  });
+
+  it("expires hardware signals past their respective TTLs", () => {
+    const t = new ContextTracker(utc);
+    const hwEvent = ev("dev-1", "telemetry", {
+      audio: { in_call: true },
+      thermal: { headroom: 1.1, status: "throttling" },
+      motion: { state: "in_vehicle" },
+    }, T0);
+    t.update(hwEvent);
+
+    // At T0 + 29s (within audio 30s TTL)
+    expect(t.snapshot("dev-1", T0 + 29_000).audio?.in_call).toBe(true);
+
+    // At T0 + 31s (audio expired, but motion 60s still active)
+    const snap31 = t.snapshot("dev-1", T0 + 31_000);
+    expect(snap31.audio).toBeUndefined();
+    expect(snap31.motion?.state).toBe("in_vehicle");
+
+    // At T0 + 61s (motion expired)
+    expect(t.snapshot("dev-1", T0 + 61_000).motion).toBeUndefined();
+  });
+
+  it("replaces audio and battery data cleanly on partial updates without stale accumulation", () => {
+    const t = new ContextTracker(utc);
+    // Event 1: in call
+    t.update(ev("dev-1", "telemetry", { audio: { in_call: true, mode: "in_call" } }, T0));
+    expect(t.snapshot("dev-1", T0).audio?.in_call).toBe(true);
+
+    // Event 2: call ended, normal mode, in_call not set
+    t.update(ev("dev-1", "telemetry", { audio: { mode: "normal" } }, T0 + 1000));
+    const snap = t.snapshot("dev-1", T0 + 1000);
+    expect(snap.audio?.mode).toBe("normal");
+    expect(snap.audio?.in_call).toBeUndefined(); // Old in_call: true was not leaked
+  });
 });
 

@@ -91,6 +91,8 @@ export const FEATURE_NAMES = [
   "temp",
   "place",
   "sys_suggest",
+  "audio_mode",
+  "motion",
 ] as const;
 
 /** Unigram, bigram, and the current action paired with each context feature, plus three joint contexts. */
@@ -151,6 +153,14 @@ export function contextFeatures(ctx: PredictionContext | undefined, prev?: strin
     (typeof ctx?.suggested_action === "string" ? ctx.suggested_action : undefined);
   if (sysSuggest) {
     f.sys_suggest = sysSuggest;
+  }
+  const audioMode = ctx?.audio?.mode ?? (typeof ctx?.audio_mode === "string" ? ctx.audio_mode : undefined);
+  if (audioMode) {
+    f.audio_mode = audioMode;
+  }
+  const motion = ctx?.motion?.state ?? (typeof ctx?.motion_state === "string" ? ctx.motion_state : undefined);
+  if (motion && motion !== "unknown") {
+    f.motion = motion;
   }
   return f;
 }

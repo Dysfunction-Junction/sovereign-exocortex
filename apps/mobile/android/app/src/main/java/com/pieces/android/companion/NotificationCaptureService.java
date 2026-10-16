@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.service.notification.NotificationListenerService;
 import android.service.notification.StatusBarNotification;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
@@ -96,11 +98,32 @@ public class NotificationCaptureService extends NotificationListenerService {
         recentHashes.addLast(hash);
         while (recentHashes.size() > DEDUPE_HISTORY_SIZE) recentHashes.removeFirst();
 
+        JSONArray actionsArray = new JSONArray();
+        if (n.actions != null) {
+            int maxActions = Math.min(n.actions.length, 8);
+            for (int i = 0; i < maxActions; i++) {
+                Notification.Action action = n.actions[i];
+                if (action == null || action.actionIntent == null) continue;
+                CharSequence actionTitle = action.title;
+                if (actionTitle == null || actionTitle.length() == 0) continue;
+                String actTitle = actionTitle.toString().trim();
+                if (actTitle.length() > 64) actTitle = actTitle.substring(0, 64);
+                String actionId = "act_" + java.util.UUID.randomUUID().toString().substring(0, 12);
+                NotificationActionRegistry.register(actionId, action.actionIntent);
+                try {
+                    JSONObject actObj = new JSONObject();
+                    actObj.put("action_id", actionId);
+                    actObj.put("title", actTitle);
+                    actionsArray.put(actObj);
+                } catch (Exception ignored) {}
+            }
+        }
+
         final NotificationCaptureListener l = listener;
         if (l != null) l.onNotification(pkg, label, title, body, sbn.getPostTime());
 
         // Native durable outbox + background HTTP sync (independent of whether UI app is open)
-        NativeTelemetrySync.queueNotification(this, pkg, label, title, body, sbn.getPostTime());
+        NativeTelemetrySync.queueNotification(this, pkg, label, title, body, sbn.getPostTime(), actionsArray);
     }
 
     @Override

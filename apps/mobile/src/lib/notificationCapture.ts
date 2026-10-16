@@ -1,7 +1,16 @@
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { recordEvent } from "./usage";
 
-const NotificationCapture = registerPlugin<any>("NotificationCapture");
+export interface NotificationCapturePlugin {
+  isListenerEnabled(): Promise<{ enabled: boolean }>;
+  setCaptureEnabled(options: { enabled: boolean; allApps?: boolean }): Promise<{ status: string }>;
+  getCaptureConfig(): Promise<{ enabled: boolean; allApps: boolean }>;
+  openSettings(): Promise<void>;
+  executeNotificationAction(options: { actionId: string }): Promise<{ success: boolean; actionId: string }>;
+  addListener(eventName: "notification", listenerFunc: (data: { package: string; appLabel: string; title: string; text: string; postedAt: number }) => void): Promise<{ remove: () => Promise<void> }>;
+}
+
+const NotificationCapture = registerPlugin<NotificationCapturePlugin>("NotificationCapture");
 
 export type LastNotificationCapture = { pkg: string; appLabel: string; at: string };
 
@@ -81,3 +90,17 @@ export async function setNotificationCapture(enabled: boolean, allApps?: boolean
 export async function openNotificationListenerSettings(): Promise<void> {
   await NotificationCapture.openSettings();
 }
+
+/**
+ * Executes a native notification action (1-tap actuation for shadow/glass proposals).
+ */
+export async function executeNotificationAction(actionId: string): Promise<boolean> {
+  try {
+    const res = await NotificationCapture.executeNotificationAction({ actionId });
+    return Boolean(res?.success);
+  } catch (err) {
+    console.warn("Failed to execute notification action:", err);
+    return false;
+  }
+}
+

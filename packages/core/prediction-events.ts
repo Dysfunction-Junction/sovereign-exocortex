@@ -49,12 +49,25 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v.leng
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 const bool = (v: unknown): boolean | undefined => (typeof v === "boolean" ? v : undefined);
 
+export const HARDWARE_SIGNAL_TTL_MS = {
+  audio: 30_000,          // 30 seconds for call & VoIP meeting state
+  thermal: 30_000,        // 30 seconds for thermal throttling
+  battery_micro: 120_000, // 2 minutes for battery micro-telemetry
+  motion: 60_000,         // 60 seconds for motion prior
+  notification_actions: 120_000, // 2 minutes for 1-tap notification actions
+} as const;
+
 interface DeviceState {
   app: { package?: string; label?: string; screen?: string };
   device: NonNullable<PredictionContext["device"]>;
   ambient: NonNullable<PredictionContext["ambient"]>;
   location: NonNullable<PredictionContext["location"]>;
   system_suggestions?: NonNullable<PredictionContext["system_suggestions"]>;
+  audio?: { data: NonNullable<PredictionContext["audio"]>; observed_ts: number };
+  thermal?: { data: NonNullable<PredictionContext["thermal"]>; observed_ts: number };
+  battery_micro?: { data: NonNullable<PredictionContext["battery_micro"]>; observed_ts: number };
+  motion?: { data: NonNullable<PredictionContext["motion"]>; observed_ts: number };
+  notification_actions?: { data: NonNullable<PredictionContext["notification_actions"]>; observed_ts: number };
 }
 
 /** Running per-device context. Feed it every event in order, then ask for a snapshot at a moment. */
@@ -168,6 +181,94 @@ export class ContextTracker {
       // Clear suggestions when transitioning to a new screen context that lacks them
       delete s.system_suggestions;
     }
+
+    // Hardware telemetry container support
+    const hw = (p.hardware_telemetry && typeof p.hardware_telemetry === "object" ? p.hardware_telemetry : null) as Record<string, unknown> | null;
+
+    // Native Android audio mode & headset routing
+    const rawAudio = ((hw?.audio && typeof hw.audio === "object" ? hw.audio : null) ?? (p.audio && typeof p.audio === "object" ? p.audio : null)) as Record<string, unknown> | null;
+    const audioMode = str(rawAudio?.mode) ?? str(p.audio_mode);
+    const inCall = bool(rawAudio?.in_call) ?? bool(p.in_call);
+    const musicActive = bool(rawAudio?.music_active) ?? bool(p.music_active);
+    const outputType = str(rawAudio?.output_type) ?? str(p.audio_output_type);
+    if (audioMode || inCall !== undefined || musicActive !== undefined || outputType) {
+      s.audio = {
+        data: {
+          ...(audioMode ? { mode: audioMode } : {}),
+          ...(inCall !== undefined ? { in_call: inCall } : {}),
+          ...(musicActive !== undefined ? { music_active: musicActive } : {}),
+          ...(outputType ? { output_type: outputType } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
+
+    // Native Android thermal headroom & throttling
+    const rawThermal = ((hw?.thermal && typeof hw.thermal === "object" ? hw.thermal : null) ?? (p.thermal && typeof p.thermal === "object" ? p.thermal : null)) as Record<string, unknown> | null;
+    const headroom = num(rawThermal?.headroom) ?? num(p.thermal_headroom);
+    const thermalStatus = str(rawThermal?.status) ?? str(p.thermal_status);
+    if (headroom !== undefined || thermalStatus) {
+      s.thermal = {
+        data: {
+          ...(headroom !== undefined ? { headroom } : {}),
+          ...(thermalStatus ? { status: thermalStatus } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
+
+    // Native Android battery micro-telemetry
+    const rawBattery = ((hw?.battery_micro && typeof hw.battery_micro === "object" ? hw.battery_micro : null) ?? (p.battery_micro && typeof p.battery_micro === "object" ? p.battery_micro : null)) as Record<string, unknown> | null;
+    const bTemp = num(rawBattery?.temp_c) ?? num(p.battery_temp_c);
+    const bVolt = num(rawBattery?.voltage_mv) ?? num(p.battery_voltage_mv);
+    const bPlugged = str(rawBattery?.plugged) ?? str(p.battery_plugged);
+    const bCurrent = num(rawBattery?.current_ma) ?? num(p.battery_current_ma);
+    if (bTemp !== undefined || bVolt !== undefined || bPlugged || bCurrent !== undefined) {
+      s.battery_micro = {
+        data: {
+          ...(bTemp !== undefined ? { temp_c: bTemp } : {}),
+          ...(bVolt !== undefined ? { voltage_mv: bVolt } : {}),
+          ...(bPlugged ? { plugged: bPlugged } : {}),
+          ...(bCurrent !== undefined ? { current_ma: bCurrent } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
+
+    // Physical motion prior
+    const rawMotion = ((hw?.motion && typeof hw.motion === "object" ? hw.motion : null) ?? (p.motion && typeof p.motion === "object" ? p.motion : null)) as Record<string, unknown> | null;
+    const motionState = str(rawMotion?.state) ?? str(p.motion_state);
+    const motionConf = num(rawMotion?.confidence) ?? num(p.motion_confidence);
+    if (motionState) {
+      s.motion = {
+        data: {
+          state: motionState,
+          ...(motionConf !== undefined ? { confidence: motionConf } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
+
+    // Actionable notification actions
+    const rawNotifActions = Array.isArray(p.notification_actions) ? p.notification_actions : null;
+    if (rawNotifActions && rawNotifActions.length > 0) {
+      const actionsList: Array<{ action_id: string; title: string }> = [];
+      for (const item of rawNotifActions) {
+        if (item && typeof item === "object") {
+          const aId = str((item as Record<string, unknown>).action_id);
+          const aTitle = str((item as Record<string, unknown>).title);
+          if (aId && aTitle) {
+            actionsList.push({ action_id: aId, title: aTitle.slice(0, 64) });
+          }
+        }
+      }
+      if (actionsList.length > 0) {
+        s.notification_actions = {
+          data: actionsList.slice(0, 8),
+          observed_ts: ts,
+        };
+      }
+    }
   }
 
   /** Context at `ts` for a device: wall clock plus the latest tracked signals. */
@@ -185,14 +286,45 @@ export class ContextTracker {
     if (Object.keys(s.location).length > 0) ctx.location = { ...s.location };
     if (s.system_suggestions && (s.system_suggestions.actions?.length || s.system_suggestions.entities?.length || s.system_suggestions.primary_action)) {
       const observed = s.system_suggestions.observed_ts ?? ts;
-      // Stale suggestion guard: discard suggestions older than 5 minutes
-      if (ts - observed <= 5 * 60_000) {
+      const d = ts - observed;
+      // Stale suggestion guard: discard suggestions older than 5 minutes or from the future
+      if (d >= 0 && d <= 5 * 60_000) {
         ctx.system_suggestions = {
           primary_action: s.system_suggestions.primary_action,
           actions: s.system_suggestions.actions ? [...s.system_suggestions.actions] : undefined,
           entities: s.system_suggestions.entities ? s.system_suggestions.entities.map((e) => ({ ...e })) : undefined,
           observed_ts: s.system_suggestions.observed_ts,
         };
+      }
+    }
+    if (s.audio) {
+      const d = ts - s.audio.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.audio) {
+        ctx.audio = { ...s.audio.data };
+      }
+    }
+    if (s.thermal) {
+      const d = ts - s.thermal.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.thermal) {
+        ctx.thermal = { ...s.thermal.data };
+      }
+    }
+    if (s.battery_micro) {
+      const d = ts - s.battery_micro.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.battery_micro) {
+        ctx.battery_micro = { ...s.battery_micro.data };
+      }
+    }
+    if (s.motion) {
+      const d = ts - s.motion.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.motion) {
+        ctx.motion = { ...s.motion.data };
+      }
+    }
+    if (s.notification_actions) {
+      const d = ts - s.notification_actions.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.notification_actions) {
+        ctx.notification_actions = s.notification_actions.data.map((a) => ({ ...a }));
       }
     }
     return ctx;
