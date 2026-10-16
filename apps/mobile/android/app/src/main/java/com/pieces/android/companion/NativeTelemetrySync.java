@@ -536,6 +536,14 @@ public class NativeTelemetrySync {
                 JSONObject hw = NativeHardwareTelemetry.collect(appContext);
                 if (hw != null && hw.length() > 0) {
                     event.put("hardware_telemetry", hw);
+                    JSONObject surface = hw.optJSONObject("physical_surface");
+                    if (surface != null) {
+                        event.put("physical_surface", surface);
+                    }
+                    JSONObject net = hw.optJSONObject("network");
+                    if (net != null) {
+                        event.put("network_telemetry", net);
+                    }
                 }
 
                 appendEvent(appContext, event);
@@ -620,6 +628,14 @@ public class NativeTelemetrySync {
                 JSONObject hw = NativeHardwareTelemetry.collect(appContext);
                 if (hw != null && hw.length() > 0) {
                     event.put("hardware_telemetry", hw);
+                    JSONObject surface = hw.optJSONObject("physical_surface");
+                    if (surface != null) {
+                        event.put("physical_surface", surface);
+                    }
+                    JSONObject net = hw.optJSONObject("network");
+                    if (net != null) {
+                        event.put("network_telemetry", net);
+                    }
                 }
 
                 appendEvent(appContext, event);

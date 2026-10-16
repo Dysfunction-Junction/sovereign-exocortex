@@ -38,6 +38,8 @@ export interface ContextualSignals {
   motionState?: 'still' | 'walking' | 'running' | 'in_vehicle' | 'unknown' | string;
   thermalHeadroom?: number;
   thermalStatus?: 'nominal' | 'elevated' | 'throttling' | string;
+  physicalState?: 'in_pocket' | 'face_down' | 'desk_ambient' | 'handheld' | 'at_ear' | 'unknown' | string;
+  networkMetered?: boolean;
 }
 
 export interface ProposalEnvelope {
@@ -48,7 +50,12 @@ export interface ProposalEnvelope {
   confidence: number; // 0.0 to 1.0
   estimatedRisk: number; // 0.0 (safe/read-only) to 1.0 (destructive)
   category?: string;
-  suggestedAction?: Record<string, unknown>;
+  suggestedAction?: {
+    command?: unknown;
+    requiresNetwork?: boolean;
+    heavyNetwork?: boolean;
+    [key: string]: unknown;
+  } | Record<string, unknown> | null;
   stagedAt?: number;
 }
 
@@ -277,6 +284,27 @@ export class CognitiveModeGate {
       };
     }
 
+    // Metered Network Gating: Suppress heavy background data sync on metered connections
+    // Evaluated before call/pocket auto-execution to prevent silent cellular data exhaustion
+    if (effectiveSignals.networkMetered && urgency < this.config.emergencyUrgencyCutoff) {
+      const isSyncOrNetworkHeavy =
+        proposal.category === 'sync' ||
+        proposal.category === 'download' ||
+        proposal.category === 'backup' ||
+        Boolean(proposal.suggestedAction && proposal.suggestedAction.heavyNetwork);
+      if (isSyncOrNetworkHeavy) {
+        this.queueProposal(proposal);
+        return {
+          action: 'SUPPRESS_AND_QUEUE',
+          mode: activeMode,
+          reason: `Metered network connection: network-intensive proposal (${proposal.category ?? 'network_sync'}) queued until unmetered Wi-Fi/Ethernet is available.`,
+          targetDelivery: 'BACKGROUND_QUEUE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+    }
+
     // Audio Mode & Interruption Gating: Suppress intrusive modals during phone calls & VoIP meetings
     if (effectiveSignals.inCall) {
       if (canAutoExecute) {
@@ -337,6 +365,43 @@ export class CognitiveModeGate {
         action: 'SUPPRESS_AND_QUEUE',
         mode: activeMode,
         reason: `In-vehicle motion detected: visual modals suppressed for driving safety.`,
+        targetDelivery: 'BACKGROUND_QUEUE',
+        confidence: proposal.confidence,
+        evaluatedAt: now,
+      };
+    }
+
+    // Physical Surface & Pocket Gating: Suppress intrusive modals when phone is in pocket or face down
+    // (Bypassed if the screen is already ON and interactive)
+    if (
+      effectiveSignals.screenState !== 'ON' &&
+      (effectiveSignals.physicalState === 'in_pocket' || effectiveSignals.physicalState === 'face_down')
+    ) {
+      if (canAutoExecute) {
+        return {
+          action: 'SILENT_AUTO_EXECUTE',
+          mode: activeMode,
+          reason: `Physical surface (${effectiveSignals.physicalState}): Safe routine proposal executed silently without activating display.`,
+          targetDelivery: 'SILENT_EXECUTE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      if (urgency >= this.config.emergencyUrgencyCutoff) {
+        return {
+          action: 'ALLOW_PROMPT',
+          mode: activeMode,
+          reason: `Physical surface (${effectiveSignals.physicalState}): Critical emergency urgency ${urgency.toFixed(2)} breaches pocket suppression gate.`,
+          targetDelivery: 'GLASS_MODAL',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      this.queueProposal(proposal);
+      return {
+        action: 'SUPPRESS_AND_QUEUE',
+        mode: activeMode,
+        reason: `Device is ${effectiveSignals.physicalState === 'in_pocket' ? 'in pocket' : 'face down'}: visual modals suppressed to prevent phantom touches and save power.`,
         targetDelivery: 'BACKGROUND_QUEUE',
         confidence: proposal.confidence,
         evaluatedAt: now,
@@ -574,5 +639,8 @@ export function contextToSignals(ctx: PredictionContext | undefined): Contextual
     motionState: ctx.motion?.state,
     thermalHeadroom: ctx.thermal?.headroom,
     thermalStatus: ctx.thermal?.status,
+    physicalState: (ctx.physical_surface?.state && ctx.physical_surface.state !== 'unknown' ? ctx.physical_surface.state : undefined) ??
+      (ctx.ambient?.physical_state && ctx.ambient.physical_state !== 'unknown' ? ctx.ambient.physical_state : undefined),
+    networkMetered: ctx.network_telemetry?.connected === false ? undefined : (ctx.network_telemetry?.metered ?? ctx.device?.metered),
   };
 }

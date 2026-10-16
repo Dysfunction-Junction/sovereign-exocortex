@@ -93,6 +93,8 @@ export const FEATURE_NAMES = [
   "sys_suggest",
   "audio_mode",
   "motion",
+  "physical_state",
+  "metered",
 ] as const;
 
 /** Unigram, bigram, and the current action paired with each context feature, plus three joint contexts. */
@@ -161,6 +163,22 @@ export function contextFeatures(ctx: PredictionContext | undefined, prev?: strin
   const motion = ctx?.motion?.state ?? (typeof ctx?.motion_state === "string" ? ctx.motion_state : undefined);
   if (motion && motion !== "unknown") {
     f.motion = motion;
+  }
+  const legacy = ctx as (PredictionContext & { physical_state?: unknown; metered?: unknown }) | undefined;
+  const surfaceState = ctx?.physical_surface?.state;
+  const ambientState = ctx?.ambient?.physical_state;
+  const rawState = typeof legacy?.physical_state === "string" ? legacy.physical_state : undefined;
+  const validState = (s: string | undefined) => (s && s !== "unknown" ? s : undefined);
+  const physicalState = validState(surfaceState) ?? validState(ambientState) ?? validState(rawState);
+  if (physicalState) {
+    f.physical_state = physicalState;
+  }
+  const metered =
+    ctx?.network_telemetry?.metered ??
+    ctx?.device?.metered ??
+    (typeof legacy?.metered === "boolean" ? legacy.metered : undefined);
+  if (metered !== undefined) {
+    f.metered = metered ? "1" : "0";
   }
   return f;
 }

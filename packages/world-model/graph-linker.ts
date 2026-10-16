@@ -33,6 +33,9 @@ export interface LinkableEvent {
   extracted_entities?: ExtractedEntityInput[];
   contextual_suggestions?: string[];
   notification_actions?: Array<{ action_id: string; title: string }>;
+  physical_surface?: Record<string, unknown>;
+  network_telemetry?: Record<string, unknown>;
+  hardware_telemetry?: Record<string, unknown>;
 }
 
 export interface ActivatedEntityScore {
@@ -447,6 +450,45 @@ export function linkEventToGraph(
           notification_actions_expires_at: timestamp + 120_000,
         };
       }
+    }
+
+    // 4e. Record physical surface & network telemetry properties on document
+    const isRecord = (x: unknown): x is Record<string, unknown> =>
+      Boolean(x && typeof x === 'object' && !Array.isArray(x));
+
+    const rawHw = isRecord(event.hardware_telemetry)
+      ? event.hardware_telemetry
+      : isRecord(payload.hardware_telemetry)
+        ? payload.hardware_telemetry
+        : null;
+    const surfaceObj = isRecord(event.physical_surface)
+      ? event.physical_surface
+      : isRecord(payload.physical_surface)
+        ? payload.physical_surface
+        : isRecord(rawHw?.physical_surface)
+          ? (rawHw!.physical_surface as Record<string, unknown>)
+          : null;
+    const netObj = isRecord(event.network_telemetry)
+      ? event.network_telemetry
+      : isRecord(payload.network_telemetry)
+        ? payload.network_telemetry
+        : isRecord(rawHw?.network)
+          ? (rawHw!.network as Record<string, unknown>)
+          : null;
+
+    if (surfaceObj && typeof surfaceObj.state === 'string' && surfaceObj.state !== 'unknown') {
+      docEntity.properties = {
+        ...docEntity.properties,
+        physical_state: surfaceObj.state,
+        physical_state_captured_at: timestamp,
+        physical_state_expires_at: timestamp + 60_000,
+      };
+    }
+    if (netObj && typeof netObj.metered === 'boolean') {
+      docEntity.properties = {
+        ...docEntity.properties,
+        network_metered: netObj.metered,
+      };
     }
   }
 

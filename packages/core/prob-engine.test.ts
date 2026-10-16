@@ -273,10 +273,29 @@ describe("contextFeatures", () => {
         state: "walking",
         confidence: 0.9,
       },
+      physical_surface: {
+        state: "desk_ambient",
+        proximity_cm: 5.0,
+        lux: 120,
+        gravity_z: 9.8,
+      },
+      network_telemetry: {
+        transport: "wifi",
+        metered: false,
+      },
     };
     const f = contextFeatures(ctx);
     expect(f.audio_mode).toBe("in_call");
     expect(f.motion).toBe("walking");
+    expect(f.physical_state).toBe("desk_ambient");
+    expect(f.metered).toBe("0");
+
+    // Unknown surface state cleanly falls through to ambient fallback
+    const fallbackCtx: PredictionContext = {
+      physical_surface: { state: "unknown" },
+      ambient: { physical_state: "handheld" },
+    };
+    expect(contextFeatures(fallbackCtx).physical_state).toBe("handheld");
   });
 });
 

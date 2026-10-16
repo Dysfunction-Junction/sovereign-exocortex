@@ -469,6 +469,7 @@ public class PiecesAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         isRunning = true;
+        NativeHardwareTelemetry.initSensors(this);
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
         syncHandler.postDelayed(periodicSyncRunnable, PERIODIC_SYNC_INTERVAL_MS);
@@ -483,6 +484,7 @@ public class PiecesAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         isRunning = false;
+        NativeHardwareTelemetry.stopSensors();
         syncHandler.removeCallbacks(periodicSyncRunnable);
         super.onDestroy();
     }

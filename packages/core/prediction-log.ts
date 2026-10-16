@@ -98,8 +98,24 @@ export type Daypart = "night" | "morning" | "afternoon" | "evening";
 export interface PredictionContext {
   time?: { ts: number; hour: number; minute: number; dow: number; is_weekend: boolean; daypart: Daypart; tz_offset_min: number };
   app?: { package?: string; label?: string; screen?: string };
-  device?: { screen_state?: string; mode?: string; battery_pct?: number; charging?: boolean; network?: string; idle_ms?: number };
-  ambient?: { temp_c?: number; humidity_pct?: number; source?: string };
+  device?: {
+    screen_state?: string;
+    mode?: string;
+    battery_pct?: number;
+    charging?: boolean;
+    network?: string;
+    idle_ms?: number;
+    metered?: boolean;
+    network_bandwidth_kbps?: number;
+  };
+  ambient?: {
+    temp_c?: number;
+    humidity_pct?: number;
+    source?: string;
+    lux?: number;
+    proximity_cm?: number;
+    physical_state?: "in_pocket" | "face_down" | "desk_ambient" | "handheld" | "at_ear" | "unknown" | string;
+  };
   /** Coarse only: lat/lon are rounded to 2 decimals (about 1 km) before storage. */
   location?: { place?: string; lat?: number; lon?: number; accuracy_m?: number };
   /** Native Android system contextual suggestions and on-device ML priors (TextClassifier) */
@@ -132,6 +148,23 @@ export interface PredictionContext {
   motion?: {
     state?: "still" | "walking" | "running" | "in_vehicle" | "unknown" | string;
     confidence?: number;
+  };
+  /** Hardware physical surface & pocket detection */
+  physical_surface?: {
+    state?: "in_pocket" | "face_down" | "desk_ambient" | "handheld" | "at_ear" | "unknown" | string;
+    proximity_cm?: number;
+    lux?: number;
+    gravity_z?: number;
+  };
+  /** Hardware network telemetry & metering */
+  network_telemetry?: {
+    connected?: boolean;
+    transport?: "wifi" | "cellular" | "ethernet" | "vpn" | "other" | "none" | "unknown" | string;
+    metered?: boolean;
+    vpn?: boolean;
+    downstream_kbps?: number;
+    upstream_kbps?: number;
+    validated?: boolean;
   };
   /** 1-Tap actionable notification actions extracted from posted notifications */
   notification_actions?: Array<{

@@ -55,6 +55,8 @@ export const HARDWARE_SIGNAL_TTL_MS = {
   battery_micro: 120_000, // 2 minutes for battery micro-telemetry
   motion: 60_000,         // 60 seconds for motion prior
   notification_actions: 120_000, // 2 minutes for 1-tap notification actions
+  physical_surface: 30_000, // 30 seconds for physical surface state
+  network: 60_000,        // 60 seconds for network quality & metering
 } as const;
 
 interface DeviceState {
@@ -68,6 +70,8 @@ interface DeviceState {
   battery_micro?: { data: NonNullable<PredictionContext["battery_micro"]>; observed_ts: number };
   motion?: { data: NonNullable<PredictionContext["motion"]>; observed_ts: number };
   notification_actions?: { data: NonNullable<PredictionContext["notification_actions"]>; observed_ts: number };
+  physical_surface?: { data: NonNullable<PredictionContext["physical_surface"]>; observed_ts: number };
+  network_telemetry?: { data: NonNullable<PredictionContext["network_telemetry"]>; observed_ts: number };
 }
 
 /** Running per-device context. Feed it every event in order, then ask for a snapshot at a moment. */
@@ -269,6 +273,50 @@ export class ContextTracker {
         };
       }
     }
+
+    // Native Android physical surface / pocket detection
+    const rawSurface = ((hw?.physical_surface && typeof hw.physical_surface === "object" ? hw.physical_surface : null) ??
+      (p.physical_surface && typeof p.physical_surface === "object" ? p.physical_surface : null)) as Record<string, unknown> | null;
+    const surfaceState = str(rawSurface?.state) ?? str(p.physical_state);
+    const proxCm = num(rawSurface?.proximity_cm) ?? num(p.proximity_cm);
+    const lux = num(rawSurface?.lux) ?? num(p.lux);
+    const gravityZ = num(rawSurface?.gravity_z) ?? num(p.gravity_z);
+    if ((surfaceState && surfaceState !== "unknown") || proxCm !== undefined || lux !== undefined || gravityZ !== undefined) {
+      s.physical_surface = {
+        data: {
+          ...(surfaceState ? { state: surfaceState } : {}),
+          ...(proxCm !== undefined ? { proximity_cm: proxCm } : {}),
+          ...(lux !== undefined ? { lux } : {}),
+          ...(gravityZ !== undefined ? { gravity_z: gravityZ } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
+
+    // Native Android network quality & metered gating
+    const rawNet = ((hw?.network && typeof hw.network === "object" ? hw.network : null) ??
+      (p.network_telemetry && typeof p.network_telemetry === "object" ? p.network_telemetry : null)) as Record<string, unknown> | null;
+    const connected = bool(rawNet?.connected) ?? bool(p.network_connected);
+    const vpn = bool(rawNet?.vpn) ?? bool(p.network_vpn);
+    const transport = str(rawNet?.transport) ?? str(p.network_transport);
+    const metered = bool(rawNet?.metered) ?? bool(p.metered);
+    const downKbps = num(rawNet?.downstream_kbps) ?? num(p.downstream_kbps);
+    const upKbps = num(rawNet?.upstream_kbps) ?? num(p.upstream_kbps);
+    const validated = bool(rawNet?.validated) ?? bool(p.network_validated);
+    if (connected !== undefined || vpn !== undefined || transport || metered !== undefined || downKbps !== undefined || upKbps !== undefined || validated !== undefined) {
+      s.network_telemetry = {
+        data: {
+          ...(connected !== undefined ? { connected } : {}),
+          ...(vpn !== undefined ? { vpn } : {}),
+          ...(transport ? { transport } : {}),
+          ...(metered !== undefined ? { metered } : {}),
+          ...(downKbps !== undefined ? { downstream_kbps: downKbps } : {}),
+          ...(upKbps !== undefined ? { upstream_kbps: upKbps } : {}),
+          ...(validated !== undefined ? { validated } : {}),
+        },
+        observed_ts: ts,
+      };
+    }
   }
 
   /** Context at `ts` for a device: wall clock plus the latest tracked signals. */
@@ -325,6 +373,36 @@ export class ContextTracker {
       const d = ts - s.notification_actions.observed_ts;
       if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.notification_actions) {
         ctx.notification_actions = s.notification_actions.data.map((a) => ({ ...a }));
+      }
+    }
+    if (s.physical_surface) {
+      const d = ts - s.physical_surface.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.physical_surface) {
+        ctx.physical_surface = { ...s.physical_surface.data };
+        if (ctx.physical_surface.state && ctx.physical_surface.state !== "unknown") {
+          ctx.ambient = { ...ctx.ambient, physical_state: ctx.physical_surface.state };
+        }
+        if (typeof ctx.physical_surface.proximity_cm === "number") {
+          ctx.ambient = { ...ctx.ambient, proximity_cm: ctx.physical_surface.proximity_cm };
+        }
+        if (typeof ctx.physical_surface.lux === "number") {
+          ctx.ambient = { ...ctx.ambient, lux: ctx.physical_surface.lux };
+        }
+      }
+    }
+    if (s.network_telemetry) {
+      const d = ts - s.network_telemetry.observed_ts;
+      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.network) {
+        ctx.network_telemetry = { ...s.network_telemetry.data };
+        if (typeof ctx.network_telemetry.metered === "boolean") {
+          ctx.device = { ...ctx.device, metered: ctx.network_telemetry.metered };
+        }
+        if (typeof ctx.network_telemetry.downstream_kbps === "number") {
+          ctx.device = { ...ctx.device, network_bandwidth_kbps: ctx.network_telemetry.downstream_kbps };
+        }
+        if (ctx.network_telemetry.transport && !ctx.device?.network) {
+          ctx.device = { ...ctx.device, network: ctx.network_telemetry.transport };
+        }
       }
     }
     return ctx;

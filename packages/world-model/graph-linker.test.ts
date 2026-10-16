@@ -279,5 +279,29 @@ describe('GraphEventLinker (Graph-to-Event Linkage)', () => {
         { action_id: 'act_102', title: 'Mark as read' },
       ]);
     });
+
+    it('records physical surface and network telemetry properties on document entity', () => {
+      const event: LinkableEvent = {
+        event_id: 'screen_event_hw',
+        summary_id: 'screen_ambient_read',
+        physical_surface: {
+          state: 'desk_ambient',
+          proximity_cm: 5.0,
+          lux: 100,
+        },
+        network_telemetry: {
+          transport: 'wifi',
+          metered: false,
+        },
+      };
+
+      linkEventToGraph(event, graph, { autoCreate: true });
+
+      const doc = graph.getEntity('doc_screen_ambient_read');
+      expect(doc).toBeDefined();
+      expect(doc?.properties?.physical_state).toBe('desk_ambient');
+      expect(doc?.properties?.network_metered).toBe(false);
+      expect(typeof doc?.properties?.physical_state_expires_at).toBe('number');
+    });
   });
 });

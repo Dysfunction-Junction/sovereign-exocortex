@@ -99,6 +99,8 @@ export function usageEventToV3(e: UsageEvent): V3EventIn {
             ...(e.extracted_entities ? { extracted_entities: e.extracted_entities } : {}),
             ...(e.contextual_suggestions ? { contextual_suggestions: e.contextual_suggestions } : {}),
             ...(e.sys_suggest ? { sys_suggest: e.sys_suggest } : {}),
+            ...(e.physical_surface ? { physical_surface: e.physical_surface } : {}),
+            ...(e.network_telemetry ? { network_telemetry: e.network_telemetry } : {}),
             ...(e.hardware_telemetry ? { hardware_telemetry: e.hardware_telemetry } : {}),
           }
         : {}),

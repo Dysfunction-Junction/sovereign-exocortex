@@ -54,6 +54,8 @@ export type UsageEvent = (
       extracted_entities?: unknown;
       contextual_suggestions?: unknown;
       sys_suggest?: string;
+      physical_surface?: Record<string, unknown>;
+      network_telemetry?: Record<string, unknown>;
       hardware_telemetry?: Record<string, unknown>;
     }
 ) & {

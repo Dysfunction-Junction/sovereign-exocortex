@@ -200,6 +200,48 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     expect(decision.reason).toContain('Thermal exhaustion: device throttling');
   });
 
+  it('gates intrusive modals when phone is in pocket or face down', () => {
+    const proposal: ProposalEnvelope = {
+      id: 'prop_pocket_distract',
+      candidateId: 'cand_p',
+      summary: 'Suggest opening browser',
+      urgency: 0.5,
+      confidence: 0.8,
+      estimatedRisk: 0.1,
+    };
+
+    // When in pocket -> visual modals suppressed and queued
+    const pocketDecision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket' });
+    expect(pocketDecision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(pocketDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(pocketDecision.reason).toContain('in pocket');
+
+    // When face down -> visual modals suppressed and queued
+    const faceDownDecision = gate.evaluateProposal(proposal, { physicalState: 'face_down' });
+    expect(faceDownDecision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(faceDownDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(faceDownDecision.reason).toContain('face down');
+
+    // Safe routine auto-executable proposal executes silently without activating screen
+    const safeProposal: ProposalEnvelope = {
+      id: 'prop_pocket_safe',
+      candidateId: 'cand_ps',
+      summary: 'Background diagnostic probe',
+      urgency: 0.3,
+      confidence: 0.92,
+      estimatedRisk: 0.05,
+      suggestedAction: { command: 'diagnostic_probe' },
+    };
+    const silentDecision = gate.evaluateProposal(safeProposal, { physicalState: 'in_pocket' });
+    expect(silentDecision.action).toBe('SILENT_AUTO_EXECUTE');
+    expect(silentDecision.targetDelivery).toBe('SILENT_EXECUTE');
+
+    // Critical emergency urgency >= 0.95 breaches pocket gate
+    const emergencyDecision = gate.evaluateProposal({ ...proposal, urgency: 0.98 }, { physicalState: 'in_pocket' });
+    expect(emergencyDecision.action).toBe('ALLOW_PROMPT');
+    expect(emergencyDecision.targetDelivery).toBe('GLASS_MODAL');
+  });
+
   it('correctly maps PredictionContext to ContextualSignals via contextToSignals adapter', () => {
     const signals = contextToSignals({
       time: { ts: 1729000000, hour: 14, minute: 30, dow: 2, is_weekend: false, daypart: 'afternoon', tz_offset_min: -300 },
@@ -208,6 +250,8 @@ describe('CognitiveModeGate (Pillar 2)', () => {
       audio: { in_call: true, output_type: 'bluetooth_headset' },
       thermal: { headroom: 0.75, status: 'nominal' },
       motion: { state: 'in_vehicle', confidence: 0.9 },
+      physical_surface: { state: 'desk_ambient', proximity_cm: 5.0, lux: 150 },
+      network_telemetry: { transport: 'wifi', metered: false },
     });
 
     expect(signals.foregroundApp).toBe('com.android.chrome');
@@ -219,6 +263,8 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     expect(signals.thermalHeadroom).toBe(0.75);
     expect(signals.thermalStatus).toBe('nominal');
     expect(signals.motionState).toBe('in_vehicle');
+    expect(signals.physicalState).toBe('desk_ambient');
+    expect(signals.networkMetered).toBe(false);
   });
 
   it('merges lastSignals when partial signals are supplied to evaluateProposal', () => {
@@ -282,5 +328,115 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     gate.evaluateProposal(proposal);
     gate.evaluateProposal(proposal);
     expect(gate.queueSize).toBe(1);
+  });
+
+  it('executes auto-executable proposals silently in pocket/call/vehicle, and prompts for urgent non-auto proposals', () => {
+    const emergencyAutoProposal: ProposalEnvelope = {
+      id: 'prop_urgent_probe',
+      candidateId: 'cand_up',
+      summary: 'Critical emergency system self-heal probe',
+      urgency: 0.98,
+      confidence: 0.95,
+      estimatedRisk: 0.05,
+      suggestedAction: { command: 'diagnostic_probe' },
+    };
+
+    // Auto-executable proposals run silently without turning on screen in pocket or during call
+    const pocketAuto = gate.evaluateProposal(emergencyAutoProposal, { physicalState: 'in_pocket' });
+    expect(pocketAuto.action).toBe('SILENT_AUTO_EXECUTE');
+    expect(pocketAuto.targetDelivery).toBe('SILENT_EXECUTE');
+
+    const callAuto = gate.evaluateProposal(emergencyAutoProposal, { inCall: true });
+    expect(callAuto.action).toBe('SILENT_AUTO_EXECUTE');
+    expect(callAuto.targetDelivery).toBe('SILENT_EXECUTE');
+
+    // Non-auto emergency proposal prompts the user via GLASS_MODAL
+    const emergencyPromptProposal: ProposalEnvelope = {
+      id: 'prop_urgent_alert',
+      candidateId: 'cand_alert',
+      summary: 'Critical emergency alert requiring user confirmation',
+      urgency: 0.98,
+      confidence: 0.95,
+      estimatedRisk: 0.8, // high risk -> requires prompt
+    };
+    const pocketPrompt = gate.evaluateProposal(emergencyPromptProposal, { physicalState: 'in_pocket' });
+    expect(pocketPrompt.action).toBe('ALLOW_PROMPT');
+    expect(pocketPrompt.targetDelivery).toBe('GLASS_MODAL');
+  });
+
+  it('gates heavy network sync proposals when network is metered', () => {
+    const syncProposal: ProposalEnvelope = {
+      id: 'prop_heavy_sync',
+      candidateId: 'cand_sync',
+      summary: 'Heavy graph sync with remote exocortex',
+      category: 'sync',
+      urgency: 0.4,
+      confidence: 0.92,
+      estimatedRisk: 0.05,
+      suggestedAction: { command: 'diagnostic_probe', heavyNetwork: true },
+    };
+
+    // On unmetered network -> auto executes
+    const unmeteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: false });
+    expect(unmeteredDecision.action).toBe('SILENT_AUTO_EXECUTE');
+
+    // On metered network -> suppressed and queued to preserve cellular bandwidth
+    const meteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: true });
+    expect(meteredDecision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(meteredDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(meteredDecision.reason).toContain('Metered network connection');
+
+    // In pocket + metered network -> metered gate takes precedence over pocket auto-execute
+    const pocketMeteredDecision = gate.evaluateProposal(syncProposal, { physicalState: 'in_pocket', networkMetered: true });
+    expect(pocketMeteredDecision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(pocketMeteredDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(pocketMeteredDecision.reason).toContain('Metered network connection');
+  });
+
+  it('bypasses pocket suppression when screen is active and ON', () => {
+    const proposal: ProposalEnvelope = {
+      id: 'prop_screen_on',
+      candidateId: 'cand_so',
+      summary: 'Prompt with screen active',
+      urgency: 0.5,
+      confidence: 0.8,
+      estimatedRisk: 0.1,
+    };
+
+    // When screen is ON, user is actively holding/interacting with device -> prompt allowed
+    const decision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket', screenState: 'ON' });
+    expect(decision.action).toBe('ALLOW_PROMPT');
+    expect(decision.targetDelivery).toBe('GLASS_MODAL');
+  });
+
+  it('clears pocket suppression when physicalState transitions to undefined', () => {
+    const proposal: ProposalEnvelope = {
+      id: 'prop_latch_test',
+      candidateId: 'cand_lt',
+      summary: 'Prompt for latching test',
+      urgency: 0.5,
+      confidence: 0.8,
+      estimatedRisk: 0.1,
+    };
+
+    // Step 1: In pocket -> suppressed
+    const pocketDecision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket' });
+    expect(pocketDecision.action).toBe('SUPPRESS_AND_QUEUE');
+
+    // Step 2: ContextTracker TTL expires, emitting physicalState: undefined -> no longer suppressed
+    const expiredDecision = gate.evaluateProposal(proposal, { physicalState: undefined });
+    expect(expiredDecision.action).toBe('ALLOW_PROMPT');
+  });
+
+  it('correctly maps contextToSignals ignoring unknown state and offline network', () => {
+    const signals = contextToSignals({
+      physical_surface: { state: 'unknown' },
+      ambient: { physical_state: 'desk_ambient' },
+      network_telemetry: { connected: false, metered: false },
+    });
+    // Falls through 'unknown' to 'desk_ambient'
+    expect(signals.physicalState).toBe('desk_ambient');
+    // Offline network does not emit metered: false
+    expect(signals.networkMetered).toBeUndefined();
   });
 });

@@ -282,5 +282,67 @@ describe("buildScreenExamples", () => {
     expect(snap.audio?.mode).toBe("normal");
     expect(snap.audio?.in_call).toBeUndefined(); // Old in_call: true was not leaked
   });
+
+  it("captures physical_surface and network_telemetry with ambient and device mirroring", () => {
+    const t = new ContextTracker(utc);
+    const event = ev("dev-1", "telemetry", {
+      hardware_telemetry: {
+        physical_surface: {
+          state: "in_pocket",
+          proximity_cm: 0.0,
+          lux: 1.2,
+          gravity_z: 1.5,
+        },
+        network: {
+          transport: "wifi",
+          metered: false,
+          downstream_kbps: 150_000,
+          upstream_kbps: 45_000,
+          validated: true,
+        },
+      },
+    }, T0);
+    t.update(event);
+
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.physical_surface).toEqual({
+      state: "in_pocket",
+      proximity_cm: 0.0,
+      lux: 1.2,
+      gravity_z: 1.5,
+    });
+    expect(snap.ambient?.physical_state).toBe("in_pocket");
+    expect(snap.ambient?.proximity_cm).toBe(0.0);
+    expect(snap.ambient?.lux).toBe(1.2);
+
+    expect(snap.network_telemetry).toEqual({
+      transport: "wifi",
+      metered: false,
+      downstream_kbps: 150_000,
+      upstream_kbps: 45_000,
+      validated: true,
+    });
+    expect(snap.device?.metered).toBe(false);
+    expect(snap.device?.network_bandwidth_kbps).toBe(150_000);
+    expect(snap.device?.network).toBe("wifi");
+
+    // Surface TTL is 30s: active at +25s, expired at +35s
+    const snap25 = t.snapshot("dev-1", T0 + 25_000);
+    expect(snap25.physical_surface?.state).toBe("in_pocket");
+    expect(snap25.ambient?.physical_state).toBe("in_pocket");
+
+    const snap35 = t.snapshot("dev-1", T0 + 35_000);
+    expect(snap35.physical_surface).toBeUndefined();
+    expect(snap35.ambient?.physical_state).toBeUndefined(); // Mirrored state cleanly expired!
+
+    // Network TTL is 60s: active at +50s, expired at +65s
+    const snap50 = t.snapshot("dev-1", T0 + 50_000);
+    expect(snap50.network_telemetry?.metered).toBe(false);
+    expect(snap50.device?.metered).toBe(false);
+
+    const snap65 = t.snapshot("dev-1", T0 + 65_000);
+    expect(snap65.network_telemetry).toBeUndefined();
+    expect(snap65.device?.metered).toBeUndefined(); // Mirrored state cleanly expired!
+  });
 });
 
