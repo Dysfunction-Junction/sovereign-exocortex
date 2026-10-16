@@ -427,6 +427,20 @@ public class PiecesAccessibilityService extends AccessibilityService {
     private void extractText(AccessibilityNodeInfo node, List<String> texts, int depth, int[] charBudget, boolean[] titleFound) {
         if (node == null || depth > MAX_NODE_DEPTH || charBudget[0] >= MAX_TEXT_CHARS) return;
 
+        // Security / PII Defense: Never extract from password fields or password variations
+        if (node.isPassword()) return;
+        int it = node.getInputType();
+        int cls = it & android.text.InputType.TYPE_MASK_CLASS;
+        int var = it & android.text.InputType.TYPE_MASK_VARIATION;
+        boolean pw =
+            (cls == android.text.InputType.TYPE_CLASS_TEXT && (
+                var == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                var == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+                var == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD))
+            || (cls == android.text.InputType.TYPE_CLASS_NUMBER &&
+                var == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        if (pw) return;
+
         boolean clickable = node.isClickable();
 
         if (node.getText() != null && node.getText().length() > 0) {

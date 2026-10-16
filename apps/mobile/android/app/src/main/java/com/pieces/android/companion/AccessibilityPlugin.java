@@ -127,6 +127,21 @@ public class AccessibilityPlugin extends Plugin {
         "com.myklarnamobile",        // Klarna
         "com.onepassword.android",   // 1Password (current id; com.agilebits.onepassword above is the legacy one)
         "com.citi.citimobile",       // Citi Mobile
+        // Authenticators and 2FA / MFA generators
+        "com.google.android.apps.authenticator2", // Google Authenticator
+        "com.azure.authenticator",                // Microsoft Authenticator
+        "com.duosecurity.duomobile",              // Duo Mobile
+        "com.authy.authy",                        // Twilio Authy
+        "com.yubico.yubioath",                    // Yubico Authenticator
+        "com.authenticator.authservice2",
+        "org.fedorahosted.freeotp",               // FreeOTP
+        "org.shadowice.flocke.andotp",            // andOTP
+        "com.beemdevelopment.aegis",              // Aegis Authenticator
+        "com.twofasapp",                          // 2FAS Authenticator
+        "com.bitwarden.authenticator",            // Bitwarden Authenticator
+        "io.ente.auth",                           // Ente Auth
+        "com.samsung.android.authframework",      // Samsung Pass
+        "me.proton.android.pass",                 // Proton Pass
         // Messaging / SMS / calling
         "com.google.android.apps.messaging",
         "com.samsung.android.messaging",
@@ -209,7 +224,10 @@ public class AccessibilityPlugin extends Plugin {
         "bitwarden", "dashlane", "keeper", "nordpass", "1password",
         "acorns", "affirm", "klarna", "sezzle", "chime", "monarch money",
         "coinbase", "blockchain", "crypto", "robinhood", "uphold",
-        "rocket money", "truebill"
+        "rocket money", "truebill",
+        // Authenticator / OTP / Security keywords
+        "authenticator", "2fa", "mfa", "otp", "totp", "duo mobile",
+        "security key", "one-time password", "verification code"
     );
 
     // static + package-visible so PiecesAccessibilityService.isAllowed can
@@ -241,7 +259,11 @@ public class AccessibilityPlugin extends Plugin {
         if (appLabel != null) {
             String lower = appLabel.toLowerCase(java.util.Locale.ROOT);
             for (String keyword : EXCLUDED_LABEL_KEYWORDS) {
-                if (lower.contains(keyword)) return true;
+                if (keyword.length() <= 4) {
+                    if (lower.matches(".*\\b" + java.util.regex.Pattern.quote(keyword) + "\\b.*")) return true;
+                } else {
+                    if (lower.contains(keyword)) return true;
+                }
             }
         }
         return false;

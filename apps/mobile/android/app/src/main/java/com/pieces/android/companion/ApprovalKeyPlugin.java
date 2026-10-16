@@ -135,7 +135,18 @@ public class ApprovalKeyPlugin extends Plugin {
         final FragmentActivity activity = (FragmentActivity) getActivity();
 
         activity.runOnUiThread(() -> {
+            final boolean wasSecure = (activity.getWindow().getAttributes().flags & android.view.WindowManager.LayoutParams.FLAG_SECURE) != 0;
+            if (!wasSecure) {
+                activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+            }
+
             BiometricPrompt.AuthenticationCallback callback = new BiometricPrompt.AuthenticationCallback() {
+                private void restoreFlags() {
+                    if (!wasSecure) {
+                        activity.getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+                    }
+                }
+
                 @Override
                 public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult result) {
                     try {
@@ -146,11 +157,14 @@ public class ApprovalKeyPlugin extends Plugin {
                         call.resolve(ret);
                     } catch (Exception e) {
                         call.reject("Signing failed: " + e.getMessage(), "SIGN_ERROR");
+                    } finally {
+                        restoreFlags();
                     }
                 }
 
                 @Override
                 public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
+                    restoreFlags();
                     boolean cancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED
                         || errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
                         || errorCode == BiometricPrompt.ERROR_CANCELED;

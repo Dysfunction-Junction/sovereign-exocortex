@@ -228,7 +228,6 @@ export const defaultInferredOutcomeScheduler = new InferredOutcomeScheduler({
 
 
 export const server = createServer(async (req, res) => {
-
   // Fixed base: a malformed attacker-supplied Host header must not throw out of this async handler (unhandled rejection).
   let url: URL;
   try {
@@ -1674,6 +1673,11 @@ server.on("close", () => {
   defaultInferredOutcomeScheduler.stop();
 });
 
+// DoS & connection lifecycle protection (tuned for Caddy reverse-proxy compatibility)
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 70_000;
+server.requestTimeout = 30_000;
+
 // 0.0.0.0, not 127.0.0.1: this runs inside a Docker container reached by
 // Caddy over the compose network, not on bare metal. It is still not
 // internet-facing - only exposed (not published) in docker-compose.yml, so
@@ -1709,21 +1713,58 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 
-function readBody(req: import("node:http").IncomingMessage, limit: number): Promise<string> {
+function readBody(req: import("node:http").IncomingMessage, limit: number, timeoutMs = 30_000): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | null = setTimeout(() => {
+      timer = null;
+      if (!settled) {
+        settled = true;
+        reject(new Error("request body read timeout"));
+        req.destroy();
+      }
+    }, timeoutMs);
+
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
+      if (settled) return;
       size += chunk.length;
       if (size > limit) {
+        settled = true;
+        cleanup();
         reject(new Error("delegate body too large"));
         req.destroy();
         return;
       }
       chunks.push(chunk);
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    });
+    req.on("close", () => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(new Error("request aborted by client"));
+      }
+    });
   });
 }
 

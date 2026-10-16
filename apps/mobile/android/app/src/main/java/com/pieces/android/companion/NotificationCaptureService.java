@@ -37,6 +37,23 @@ public class NotificationCaptureService extends NotificationListenerService {
     private static final int DEDUPE_HISTORY_SIZE = 30;
     private static final int MAX_TEXT_CHARS = 4_000;
 
+    private static final java.util.regex.Pattern OTP_KEYWORD_PATTERN = java.util.regex.Pattern.compile(
+        "\\b(?:code|otp|verification|verify|pin|password|token|auth|login|security)\\b",
+        java.util.regex.Pattern.CASE_INSENSITIVE
+    );
+
+    private static final java.util.regex.Pattern OTP_CODE_PATTERN = java.util.regex.Pattern.compile(
+        "\\b(?:[Gg]-)?\\d{3,4}[- ]?\\d{3,4}\\b|\\b\\d{4,8}\\b"
+    );
+
+    private static String redactOtpIfContextMatches(String text, boolean contextHasOtpKeyword) {
+        if (text == null || text.isEmpty()) return "";
+        if (!contextHasOtpKeyword && !OTP_KEYWORD_PATTERN.matcher(text).find()) {
+            return text;
+        }
+        return OTP_CODE_PATTERN.matcher(text).replaceAll("[REDACTED_OTP]");
+    }
+
     public interface NotificationCaptureListener {
         void onNotification(String packageName, String appLabel, String title, String text, long postedAt);
     }
@@ -76,19 +93,27 @@ public class NotificationCaptureService extends NotificationListenerService {
         // honor that here too unless they flipped the "all apps" widen toggle.
         if (!captureAllApps() && !isInAllowlist(pkg)) return;
 
-        final Bundle extras = n.extras;
+        // Privacy / Lock Screen Defense: Secret notifications must NEVER be captured
+        if (n.visibility == Notification.VISIBILITY_SECRET) return;
+
+        Bundle extras = n.extras;
         if (extras == null) return;
 
-        final String title = str(extras.getCharSequence(Notification.EXTRA_TITLE));
-        String text = str(extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
-        if (text.isEmpty()) text = str(extras.getCharSequence(Notification.EXTRA_TEXT));
+        final String rawTitle = str(extras.getCharSequence(Notification.EXTRA_TITLE));
+        String rawText = str(extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
+        if (rawText.isEmpty()) rawText = str(extras.getCharSequence(Notification.EXTRA_TEXT));
         final String sub = str(extras.getCharSequence(Notification.EXTRA_SUB_TEXT));
 
-        if (title.isEmpty() && text.isEmpty()) return;
+        if (rawTitle.isEmpty() && rawText.isEmpty()) return;
 
-        String body = text;
-        if (!sub.isEmpty()) body = sub + " — " + body;
-        if (body.length() > MAX_TEXT_CHARS) body = body.substring(0, MAX_TEXT_CHARS);
+        String rawBody = rawText;
+        if (!sub.isEmpty()) rawBody = sub + " \u2014 " + rawBody;
+        if (rawBody.length() > MAX_TEXT_CHARS) rawBody = rawBody.substring(0, MAX_TEXT_CHARS);
+
+        // Security / PII Defense: Context-aware redaction of one-time passwords and verification codes
+        boolean hasOtpContext = OTP_KEYWORD_PATTERN.matcher(rawTitle).find() || OTP_KEYWORD_PATTERN.matcher(rawBody).find();
+        final String title = redactOtpIfContextMatches(rawTitle, hasOtpContext);
+        final String body = redactOtpIfContextMatches(rawBody, hasOtpContext);
 
         // Notifications re-post on every update (typing indicator, edited
         // message, +1 unread). Dedupe on (pkg, key, content) within a recent

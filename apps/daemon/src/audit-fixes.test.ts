@@ -147,3 +147,10 @@ test("shadow mode blocks /network/approve and delegation to hermes-api", async (
     setDatabase(null);
   }
 });
+
+test("server configures DoS and slowloris socket timeouts", () => {
+  assert.equal(server.headersTimeout, 70_000);
+  assert.equal(server.requestTimeout, 30_000);
+  assert.equal(server.keepAliveTimeout, 65_000);
+});
+
