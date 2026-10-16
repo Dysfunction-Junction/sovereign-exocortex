@@ -97,7 +97,7 @@ The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To ex
 
 Shadow calibration and the autonomic substrate are organized into five streams:
 
-1. **Shadow metrics evaluator** (`packages/core/src/shadow-report-cli.ts`). Shipped.
+1. **Shadow metrics evaluator** (`packages/core/shadow-report-cli.ts`). Shipped.
 2. **Daemon shadow recording & repository health** (`apps/daemon/src/shadow-recorder.ts`, `apps/daemon/src/repo-health.ts`). Explicit test-suite, clean-checkout, and bridge-health observations feed the gated inference loop. The automated `RepoHealthWatcher` tracks git checkout cleanliness (`clean_checkout` vs `uncommitted_edits`, 2-minute dirty dwell debounce, 15-minute homeostatic heartbeat, index lock isolation). Shipped.
 3. **Label capture & inferred outcomes** (`POST /v3/shadow/labels`, `apps/daemon/src/inferred-outcomes.ts`). Hardware-attested tap labels (`wanted`/`not_wanted`) advance shadow state. Background inferred outcome scheduler captures `already_did` and `ignored` for coverage analysis. Shipped.
 4. **Symbiosis Trinity: Precognitive Wake, Ambient Graph HUD & Databank Archival** (`apps/mobile`, `apps/daemon/src/databank-archival-host.ts`). Guided 5-step touch-dwell calibration (80ms–800ms window), live Ambient Living Graph HUD with cognitive mode indicators, and scheduled memory vault archival with 7-day retention safety floor and atomic backup. Shipped.

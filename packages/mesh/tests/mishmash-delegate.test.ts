@@ -5,7 +5,7 @@ import {
   _resetQuarantineForTest,
   handleMeshDelegate,
   startMeshDelegate,
-} from "../src/mishmash-delegate.js";
+} from "../mishmash-delegate.js";
 
 const envelope = {
   v: 1,

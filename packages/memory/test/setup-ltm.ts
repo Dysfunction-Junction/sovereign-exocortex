@@ -1,6 +1,6 @@
 // Import this FIRST in any test that reaches the gateway's memory.add. The
 // `localLTM` singleton resolves its file once, at import time, so the env var has
-// to be set before ../src/server.js is evaluated. ES imports evaluate in order,
+// to be set before ../server.js is evaluated. ES imports evaluate in order,
 // which is why this is a side-effect module rather than a call in the test body.
 //
 // Without it, memory.add writes to the tracked data/memories.jsonl and every test

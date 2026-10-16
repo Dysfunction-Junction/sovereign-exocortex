@@ -6,10 +6,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./life-graph": "./src/life-graph.ts",
-    "./cognitive-gate": "./src/cognitive-gate.ts",
-    "./active-inference": "./src/active-inference.ts"
+    ".": "./index.ts",
+    "./life-graph": "./life-graph.ts",
+    "./cognitive-gate": "./cognitive-gate.ts",
+    "./active-inference": "./active-inference.ts"
   },
   "scripts": {
     "build": "tsc",

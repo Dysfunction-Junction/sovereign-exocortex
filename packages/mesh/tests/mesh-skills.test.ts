@@ -7,7 +7,7 @@ import {
   getMeshSkill,
   meshSkillCatalog,
   meshSkillsDocument,
-} from "../src/mesh-skills.js";
+} from "../mesh-skills.js";
 
 describe("mesh skills", () => {
   it("stamps a version", () => {

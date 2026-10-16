@@ -13,7 +13,7 @@ import {
   startDashboard,
   type DashboardHandle,
   type DashboardSnapshotSources,
-} from "../src/dashboard.js";
+} from "../dashboard.js";
 
 const cleanupPaths: string[] = [];
 const dashboards: DashboardHandle[] = [];

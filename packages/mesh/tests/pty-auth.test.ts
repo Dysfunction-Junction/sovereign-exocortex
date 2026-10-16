@@ -16,7 +16,7 @@ import {
   type AuthExecutionOutcome,
   type AuthExecutor,
   type AuthInvocation,
-} from "../src/pty-auth.js";
+} from "../pty-auth.js";
 
 class MemoryStore implements AuthChallengeStore {
   readonly records = new Map<string, AuthChallengeRecord>();

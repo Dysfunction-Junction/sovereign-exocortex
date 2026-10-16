@@ -21,8 +21,8 @@ import { describe, expect, it } from "vitest";
 import {
   PatchPromotionService,
   type PatchPromotionRecord,
-} from "../src/patch-promotion.js";
-import type { Origin, TaskRecord } from "../src/types.js";
+} from "../patch-promotion.js";
+import type { Origin, TaskRecord } from "../types.js";
 
 const execFileAsync = promisify(execFile);
 

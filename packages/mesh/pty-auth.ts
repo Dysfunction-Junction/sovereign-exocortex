@@ -186,7 +186,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1_024;
 const SCAN_BUFFER_BYTES = 16 * 1_024;
 const MAX_INPUT_BYTES = 8 * 1_024;
 const SCRIPT_PATH = "/usr/bin/script";
-const PTY_RUNNER_PATH = fileURLToPath(new URL("../bin/pty-runner.py", import.meta.url));
+const PTY_RUNNER_PATH = fileURLToPath(new URL("./bin/pty-runner.py", import.meta.url));
 const AUTH_URL_PATTERN = /https?:\/\/[^\s<>"']+/giu;
 
 const SAFE_PROMPTS = {

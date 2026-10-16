@@ -35,11 +35,11 @@ import {
   parseMcpFilterProxyOptions,
   parseUpstreamUrlSecretPath,
   type LoadedMcpToolManifest,
-} from "../src/mcp-filter-proxy.js";
+} from "../mcp-filter-proxy.js";
 import {
   PIECES_READ_ONLY_TOOLS,
   PIECES_READONLY_TOOL_MANIFEST,
-} from "../src/mcp-profiles.js";
+} from "../mcp-profiles.js";
 
 const READ_TOOL: Tool = {
   name: "read_echo",

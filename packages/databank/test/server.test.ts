@@ -5,9 +5,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
-import { Databank } from "../src/databank.js";
-import { DatabankKeys } from "../src/crypto.js";
-import { createDatabankServer } from "../src/server.js";
+import { Databank } from "../databank.js";
+import { DatabankKeys } from "../crypto.js";
+import { createDatabankServer } from "../server.js";
 
 const TOKEN = "test-token-0123456789abcdef";
 

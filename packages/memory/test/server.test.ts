@@ -2,10 +2,10 @@ import "./setup-ltm.js"; // must stay first: redirects memory.add away from the 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
-import { createGatewayApp } from "../src/server.js";
-import { PiecesClient } from "../src/pieces.js";
-import { OpenRouterClient } from "../src/openrouter.js";
-import type { ReasoningClient } from "../src/reasoning.js";
+import { createGatewayApp } from "../server.js";
+import { PiecesClient } from "../pieces.js";
+import { OpenRouterClient } from "../openrouter.js";
+import type { ReasoningClient } from "../reasoning.js";
 
 // Ensure tests are isolated from host developer .env variables
 delete process.env.GATEWAY_TOKEN;

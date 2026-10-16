@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { DatabankKeys, FRAME_SIZE, decryptFileStream, encryptStream, parseKey } from "../src/crypto.js";
+import { DatabankKeys, FRAME_SIZE, decryptFileStream, encryptStream, parseKey } from "../crypto.js";
 
 const keys = new DatabankKeys(Buffer.alloc(32, 7));
 

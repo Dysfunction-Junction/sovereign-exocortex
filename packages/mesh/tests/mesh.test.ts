@@ -17,19 +17,19 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { TaskRegistry } from "../src/registry.js";
-import { startLineProcess } from "../src/process.js";
+import { TaskRegistry } from "../registry.js";
+import { startLineProcess } from "../process.js";
 import {
   AgentMeshRouter,
   assertTaskPatchPromotable,
-} from "../src/router.js";
+} from "../router.js";
 import {
   accumulateGrokStreamEvent,
   grokToolsForMode,
   parseGrokModels,
   validateGrokInspectReport,
   type GrokStreamAccumulator,
-} from "../src/adapters/grok.js";
+} from "../adapters/grok.js";
 import {
   ANTIGRAVITY_PROJECT_EXECUTABLE_CONFIGS,
   assertAntigravityResumeAllowed,
@@ -37,7 +37,7 @@ import {
   parseAntigravityConversationId,
   parseAntigravityModels,
   rejectAntigravityProjectExecutables,
-} from "../src/adapters/antigravity.js";
+} from "../adapters/antigravity.js";
 import {
   assertDelegationAllowed,
   assertNoActiveTaskAncestor,
@@ -45,22 +45,22 @@ import {
   canonicalizeAllowedCwd,
   redactSecrets,
   summarizeEventForLog,
-} from "../src/security.js";
+} from "../security.js";
 import type {
   ProviderAdapter,
   TaskRecord,
   ManagedPeerContext,
-} from "../src/types.js";
-import type { TaskTrafficGate } from "../src/router.js";
+} from "../types.js";
+import type { TaskTrafficGate } from "../router.js";
 import {
   cleanupWorktree,
   collectWorktreeArtifacts,
   inspectBaseFreshness,
   prepareWorktree,
   verifyWorktreeArtifacts,
-} from "../src/worktree.js";
-import { PatchPromotionService } from "../src/patch-promotion.js";
-import { runStopHook } from "../src/stop-hook-cli.js";
+} from "../worktree.js";
+import { PatchPromotionService } from "../patch-promotion.js";
+import { runStopHook } from "../stop-hook-cli.js";
 
 const execFileAsync = promisify(execFile);
 const cleanupPaths: string[] = [];

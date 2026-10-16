@@ -25,7 +25,7 @@ import {
   buildGrokMcpProfile,
   resolveMcpProfile,
   resolvePiecesMcpUrl,
-} from "../src/mcp-profiles.js";
+} from "../mcp-profiles.js";
 
 const temporaryDirectories: string[] = [];
 

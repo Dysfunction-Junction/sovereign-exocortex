@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { OpenRouterClient, OpenRouterError, sanitizeDiagnostics } from "../src/openrouter.js";
+import { OpenRouterClient, OpenRouterError, sanitizeDiagnostics } from "../openrouter.js";
 
 test("OpenRouterClient - throws if API key is missing", async () => {
   const client = new OpenRouterClient({ apiKey: "" });

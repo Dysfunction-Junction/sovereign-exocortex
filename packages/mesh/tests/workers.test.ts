@@ -17,7 +17,7 @@ import {
   type RegisterWorkerInput,
   type WorkerCompanion,
   type WorkerHeartbeatInput,
-} from "../src/workers.js";
+} from "../workers.js";
 
 const cleanupPaths: string[] = [];
 const registries: WorkerRegistry[] = [];

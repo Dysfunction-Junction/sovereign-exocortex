@@ -3,15 +3,15 @@
   "version": "1.0.0",
   "description": "Sovereign Long-Term Memory and Vector/Token overlap storage for the Exocortex",
   "type": "module",
-  "main": "dist/src/local-ltm.js",
-  "types": "dist/src/local-ltm.d.ts",
+  "main": "dist/local-ltm.js",
+  "types": "dist/local-ltm.d.ts",
   "exports": {
-    ".": "./src/local-ltm.ts",
-    "./client": "./src/pieces.ts",
-    "./server": "./src/server.ts",
-    "./embeddings": "./src/embeddings.ts",
-    "./archive-client": "./src/archive-client.ts",
-    "./memories": "./src/memories.ts"
+    ".": "./local-ltm.ts",
+    "./client": "./pieces.ts",
+    "./server": "./server.ts",
+    "./embeddings": "./embeddings.ts",
+    "./archive-client": "./archive-client.ts",
+    "./memories": "./memories.ts"
   },
   "scripts": {
     "build": "tsc",

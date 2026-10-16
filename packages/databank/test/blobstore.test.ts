@@ -4,8 +4,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { BlobStore, isBlobId } from "../src/blobstore.js";
-import { DatabankKeys } from "../src/crypto.js";
+import { BlobStore, isBlobId } from "../blobstore.js";
+import { DatabankKeys } from "../crypto.js";
 
 describe("BlobStore", () => {
   let dir: string;

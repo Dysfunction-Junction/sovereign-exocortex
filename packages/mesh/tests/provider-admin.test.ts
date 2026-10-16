@@ -12,8 +12,8 @@ import {
   type ProviderCommandExecutor,
   type ProviderCommandOperation,
   type ProviderCommandOutput,
-} from "../src/provider-admin.js";
-import type { Provider } from "../src/types.js";
+} from "../provider-admin.js";
+import type { Provider } from "../types.js";
 import {
   CLAUDE_FABLE_5_MODEL,
   CLAUDE_MAX_EFFORT,
@@ -24,7 +24,7 @@ import {
   isClaudeOpus5Model,
   isClaudeUsageOrAvailabilityError,
   planClaudeFallback,
-} from "../src/adapters/claude.js";
+} from "../adapters/claude.js";
 
 function output(
   stdout = "",

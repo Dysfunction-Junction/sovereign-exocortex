@@ -17,11 +17,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getOrchestrationPreset,
   listOrchestrationPresets,
-} from "../src/orchestration-presets.js";
-import { PlanRegistry } from "../src/plans.js";
-import { SwarmRegistry } from "../src/swarm.js";
-import { InitiativeRegistry } from "../src/initiatives.js";
-import { deriveTaskTimingMetrics } from "../src/telemetry.js";
+} from "../orchestration-presets.js";
+import { PlanRegistry } from "../plans.js";
+import { SwarmRegistry } from "../swarm.js";
+import { InitiativeRegistry } from "../initiatives.js";
+import { deriveTaskTimingMetrics } from "../telemetry.js";
 import {
   buildAntigravityMcpProfile,
   buildClaudeMcpProfile,
@@ -30,16 +30,16 @@ import {
   COORDINATION_TOOLS,
   MANAGED_PEER_TOOLS,
   isMcpProfileAllowed,
-} from "../src/mcp-profiles.js";
-import type { TaskRecord } from "../src/types.js";
-import { TaskRegistry } from "../src/registry.js";
+} from "../mcp-profiles.js";
+import type { TaskRecord } from "../types.js";
+import { TaskRegistry } from "../registry.js";
 import {
   coordinationCapability,
   managedPeerCapability,
   verifyCoordinationCapability,
   verifyManagedPeerCapability,
-} from "../src/coordination-auth.js";
-import { isProviderOutputEvent } from "../src/telemetry.js";
+} from "../coordination-auth.js";
+import { isProviderOutputEvent } from "../telemetry.js";
 import {
   BUILTIN_PLAYBOOKS,
   PLAYBOOK_POLICY_VERSION,
@@ -52,19 +52,19 @@ import {
   openFindings,
   parseStepReport,
   validatePlaybookDefinition,
-} from "../src/playbooks.js";
+} from "../playbooks.js";
 import {
   PlaybookController,
   PlaybookRunDriver,
   builtinAutoRunAllowed,
   runAdvanceDue,
-} from "../src/playbook-tools.js";
+} from "../playbook-tools.js";
 import {
   InstructionProposalStore,
   instructionProposalContentDigest,
   type InstructionFrictionEvidence,
-} from "../src/instruction-proposals.js";
-import { AgentMeshRouter } from "../src/router.js";
+} from "../instruction-proposals.js";
+import { AgentMeshRouter } from "../router.js";
 import type {
   ProviderAdapter,
   ProviderCapabilities,
@@ -72,15 +72,15 @@ import type {
   ProviderResult,
   ProviderRunHooks,
   ProviderRunRequest,
-} from "../src/types.js";
-import type { ProviderAdministration } from "../src/provider-admin.js";
+} from "../types.js";
+import type { ProviderAdministration } from "../provider-admin.js";
 import {
   MESH_WRITE_SYNCHRONIZATION_PROTOCOL,
   ORCHESTRATION_POLICY,
   ORCHESTRATION_POLICY_VERSION,
   prependWriteSynchronizationProtocol,
   taskPolicyAddendum,
-} from "../src/orchestration-policy.js";
+} from "../orchestration-policy.js";
 import {
   MAX_DIALOG_CHARACTERS,
   MAX_DETAIL_VIEWS,
@@ -90,7 +90,7 @@ import {
   requireHumanApproval,
   type ApprovalChoice,
   type ApprovalRequest,
-} from "../src/human-approval.js";
+} from "../human-approval.js";
 
 const temporary: string[] = [];
 function tempPath(name: string): string {

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
-import { OpenRouterError } from "../src/openrouter.js";
-import { resolveReasoningClient, wrapOpenRouter } from "../src/reasoning.js";
-import { OpenRouterClient } from "../src/openrouter.js";
+import { OpenRouterError } from "../openrouter.js";
+import { resolveReasoningClient, wrapOpenRouter } from "../reasoning.js";
+import { OpenRouterClient } from "../openrouter.js";
 import {
   parseAntigravityOutput,
   parseClaudeOutput,
@@ -14,7 +14,7 @@ import {
   type SpawnFn,
   type SpawnOptions,
   type SpawnStreams,
-} from "../src/subscription.js";
+} from "../subscription.js";
 
 delete process.env.CLAUDE_MODEL;
 delete process.env.CODEX_MODEL;

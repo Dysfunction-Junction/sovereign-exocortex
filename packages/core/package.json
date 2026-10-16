@@ -6,13 +6,13 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./dry-run": "./src/dry-run.ts",
-    "./event-bus": "./src/event-bus.ts",
-    "./rank": "./src/mishmash-rank.ts",
-    "./canonical": "./src/canonical.ts",
-    "./db": "./src/db.ts",
-    "./shadow-metrics": "./src/shadow-metrics.ts"
+    ".": "./index.ts",
+    "./dry-run": "./dry-run.ts",
+    "./event-bus": "./event-bus.ts",
+    "./rank": "./mishmash-rank.ts",
+    "./canonical": "./canonical.ts",
+    "./db": "./db.ts",
+    "./shadow-metrics": "./shadow-metrics.ts"
   },
 
   "scripts": {

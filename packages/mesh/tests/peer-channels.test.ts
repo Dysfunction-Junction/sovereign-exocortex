@@ -15,18 +15,18 @@ import {
   PeerWakePump,
   type ManagedPeerBinding,
   type PeerWakeJob,
-} from "../src/peer-channels.js";
+} from "../peer-channels.js";
 import {
   TrafficControlRegistry,
   resolveTrafficLocation,
   type TrafficAgentRecord,
-} from "../src/traffic-control.js";
+} from "../traffic-control.js";
 import {
   parseIntakeRequest,
   runDirectionIntake,
   intakeOrigin,
-} from "../src/direction-cli.js";
-import { agentMeshHmac } from "../src/coordination-auth.js";
+} from "../direction-cli.js";
+import { agentMeshHmac } from "../coordination-auth.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];

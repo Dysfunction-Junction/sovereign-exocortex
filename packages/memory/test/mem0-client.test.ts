@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Mem0Client } from "../src/mem0-client.js";
+import { Mem0Client } from "../mem0-client.js";
 
 const out = (results: unknown[]) => `Search results:\n ${JSON.stringify({ results })}\n`;
 

@@ -4,11 +4,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
-import { createGatewayApp } from "../src/server.js";
-import { PiecesClient, assertLocalPiecesRoute } from "../src/pieces.js";
-import { OpenRouterClient } from "../src/openrouter.js";
-import { parseDistilledMemories } from "../src/memories.js";
-import type { ReasoningClient } from "../src/reasoning.js";
+import { createGatewayApp } from "../server.js";
+import { PiecesClient, assertLocalPiecesRoute } from "../pieces.js";
+import { OpenRouterClient } from "../openrouter.js";
+import { parseDistilledMemories } from "../memories.js";
+import type { ReasoningClient } from "../reasoning.js";
 
 test("local route guard refuses qgpt", () => {
   assert.throws(() => assertLocalPiecesRoute("/qgpt/question"), /qgpt/);

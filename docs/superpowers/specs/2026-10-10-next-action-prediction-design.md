@@ -18,7 +18,7 @@ surfacing a proposal was wanted and stays tap-only; nothing here feeds it.
   in the horizon; the real action, its rank among the candidates and the context at that moment are kept),
   `EXPIRED` (the next action came after the horizon; it is still recorded).
 
-## Engine (`packages/core/src/prob-engine.ts`)
+## Engine (`packages/core/prob-engine.ts`)
 - Experts: hierarchical Dirichlet-multinomial predictors over the next action, conditioned on the current
   action plus one context feature (or two joint contexts), each backing off to the bigram then the unigram:
   `P(y|c) = (n(c,y) + alpha * P_parent(y)) / (n(c) + alpha)`. An OTHER class carries the mass of actions
@@ -38,7 +38,7 @@ surfacing a proposal was wanted and stays tap-only; nothing here feeds it.
 stay open until the next screen view; they are not expired against the server clock because device clocks drift.
 
 ## Reporting
-`npx tsx packages/core/src/prediction-report-cli.ts <db> [--days N] [--guide-by time.daypart] [--eval]`.
+`npx tsx packages/core/prediction-report-cli.ts <db> [--days N] [--guide-by time.daypart] [--eval]`.
 `--eval` replays the whole event log through the engine and the baseline and prints the paired gain.
 
 ## Known limits

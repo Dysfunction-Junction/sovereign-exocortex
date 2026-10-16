@@ -1,7 +1,7 @@
 // Synthetic latency baseline for the current LivingLifeGraph implementation.
 // Run with: node apps/neo4j-import/src/graph-benchmark.mjs [entity-count] [queries]
 import { performance } from "node:perf_hooks";
-import { LivingLifeGraph } from "../../../packages/world-model/src/life-graph.ts";
+import { LivingLifeGraph } from "../../../packages/world-model/life-graph.ts";
 
 const entityCount = Number(process.argv[2] ?? 10_000);
 const queryCount = Number(process.argv[3] ?? 500);

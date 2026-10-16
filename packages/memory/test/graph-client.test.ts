@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { GraphClient } from "../src/graph-client.js";
+import { GraphClient } from "../graph-client.js";
 
 const fakeFetch = (status: number, body: unknown, seen?: { init?: RequestInit; url?: string }) =>
   (async (url: string, init?: RequestInit) => {

@@ -7,10 +7,10 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./delegate": "./src/mishmash-delegate.ts",
-    "./patch": "./src/patch-promotion.ts",
-    "./orchestration": "./src/orchestration.ts"
+    ".": "./index.ts",
+    "./delegate": "./mishmash-delegate.ts",
+    "./patch": "./patch-promotion.ts",
+    "./orchestration": "./orchestration.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

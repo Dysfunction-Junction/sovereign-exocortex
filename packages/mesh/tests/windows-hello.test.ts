@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { requireHumanApproval, type ApprovalChoice } from "../src/human-approval.js";
+import { requireHumanApproval, type ApprovalChoice } from "../human-approval.js";
 import {
   HELLO_MESSAGE_MAX_CHARACTERS,
   HELLO_SCRIPT,
@@ -14,7 +14,7 @@ import {
   parseHelloOutput,
   windowsPowerShellPath,
   type HelloExec,
-} from "../src/windows-hello.js";
+} from "../windows-hello.js";
 
 const request = {
   title: "Apply verified patch",

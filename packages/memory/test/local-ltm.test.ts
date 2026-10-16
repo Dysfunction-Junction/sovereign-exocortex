@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rm, appendFile } from "node:fs/promises";
-import { LocalLTM } from "../src/local-ltm.js";
+import { LocalLTM } from "../local-ltm.js";
 
 const TEST_FILE = "data/test-memories.jsonl";
 

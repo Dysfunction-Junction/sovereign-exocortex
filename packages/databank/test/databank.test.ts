@@ -4,10 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Databank, type Embedder } from "../src/databank.js";
-import { archiveMemories } from "../src/archive.js";
-import { DatabankKeys } from "../src/crypto.js";
-import { chunkText } from "../src/text.js";
+import { Databank, type Embedder } from "../databank.js";
+import { archiveMemories } from "../archive.js";
+import { DatabankKeys } from "../crypto.js";
+import { chunkText } from "../text.js";
 
 /** Deterministic bag-of-words embedder: shared words give high cosine. Can be switched off. */
 class FakeEmbedder implements Embedder {

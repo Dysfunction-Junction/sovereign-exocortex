@@ -25,7 +25,7 @@ For direct database analysis, use the core read-only report CLI with the daemon 
 
 ```powershell
 $baselinePrecision = 0.0 # replace with measured baseline precision (0..1)
-pnpm exec tsx packages/core/src/shadow-report-cli.ts "$env:LOCALAPPDATA\exocortex.db" --days 14 --baseline $baselinePrecision
+pnpm exec tsx packages/core/shadow-report-cli.ts "$env:LOCALAPPDATA\exocortex.db" --days 14 --baseline $baselinePrecision
 ```
 
 When using the database-backed same-hour-yesterday comparison, omit `--baseline`; the CLI derives it from matching surfaced actions and their direct tap labels in SQLite. Add `--json shadow-report.json` to save the same metrics, including focus outcome counts, as JSON while retaining the terminal summary.

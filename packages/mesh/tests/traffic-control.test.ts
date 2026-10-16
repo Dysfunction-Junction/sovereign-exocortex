@@ -29,19 +29,19 @@ import type {
 } from "@cursor/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { TaskRegistry } from "../src/registry.js";
-import { AgentMeshRouter } from "../src/router.js";
-import { InitiativeRegistry } from "../src/initiatives.js";
+import { TaskRegistry } from "../registry.js";
+import { AgentMeshRouter } from "../router.js";
+import { InitiativeRegistry } from "../initiatives.js";
 import {
   PeerChannelRegistry,
   type PeerDirectionOutboxEntry,
   type PeerFrictionEvent,
-} from "../src/peer-channels.js";
+} from "../peer-channels.js";
 import {
   deriveSupervisionConditions,
   MeshSupervisor,
   type SupervisionConditionEvidence,
-} from "../src/supervision.js";
+} from "../supervision.js";
 import {
   assertImplementationDirectionsAcknowledged,
   TrafficControlRegistry,
@@ -53,13 +53,13 @@ import {
   parseTrafficPresence,
   resolveTrafficLocation,
   type CursorSdkFacade,
-} from "../src/traffic-control.js";
+} from "../traffic-control.js";
 import type {
   ProviderAdapter,
   ProviderRunHooks,
   ProviderRunRequest,
   TaskRecord,
-} from "../src/types.js";
+} from "../types.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];

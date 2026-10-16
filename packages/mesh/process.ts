@@ -5,7 +5,7 @@ import { finished } from "node:stream/promises";
 
 import { redactSecrets, summarizeEventForLog } from "./security.js";
 
-const SUPERVISOR_PATH = fileURLToPath(new URL("../bin/supervise.mjs", import.meta.url));
+const SUPERVISOR_PATH = fileURLToPath(new URL("./bin/supervise.mjs", import.meta.url));
 
 export function supervisedInvocation(
   command: string,

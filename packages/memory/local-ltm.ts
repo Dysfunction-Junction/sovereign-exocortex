@@ -22,7 +22,7 @@ function getDefaultLtmFile(): string {
     return process.env.LOCAL_LTM_FILE.trim();
   }
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  return resolve(currentDir, "../data/memories.jsonl");
+  return resolve(currentDir, "./data/memories.jsonl");
 }
 
 function tokenize(text: string): Set<string> {

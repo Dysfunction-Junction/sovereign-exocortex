@@ -5,10 +5,10 @@ import { createServer, request } from "node:http";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArchiveClient, archiveLocalMemoriesToRemote } from "../src/archive-client.js";
-import { createGatewayApp } from "../src/server.js";
-import { PiecesClient } from "../src/pieces.js";
-import { OpenRouterClient } from "../src/openrouter.js";
+import { ArchiveClient, archiveLocalMemoriesToRemote } from "../archive-client.js";
+import { createGatewayApp } from "../server.js";
+import { PiecesClient } from "../pieces.js";
+import { OpenRouterClient } from "../openrouter.js";
 
 const hit = (extra: Record<string, unknown> = {}) => ({
   itemId: "a".repeat(32), score: 0.8123, kind: "photo", source: "oldpc", title: "IMG_1.jpg", path: "Trip/IMG_1.jpg", ts: 5, snippet: "x".repeat(900), ...extra,

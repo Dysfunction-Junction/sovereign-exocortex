@@ -26,7 +26,7 @@ export type McpProfileProvider = "antigravity" | "claude" | "codex" | "grok";
 
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const REPO_ROOT = resolve(fileURLToPath(new URL(".", import.meta.url)));
 
 export const PERPLEXITY_MCP_LAUNCHER =
   process.env.AGENT_MESH_PERPLEXITY_MCP_LAUNCHER ??

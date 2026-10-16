@@ -25,7 +25,7 @@ import {
   readTranscript,
   toSafeMcpInteractionResponse,
   type TranscriptEntryInput,
-} from "../src/interactions.js";
+} from "../interactions.js";
 
 const cleanupPaths: string[] = [];
 

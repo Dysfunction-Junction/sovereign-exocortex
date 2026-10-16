@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { PiecesClient } from "../src/pieces.js";
+import { PiecesClient } from "../pieces.js";
 
 test("PiecesClient - checkHealth returns 'up' when health endpoint responds ok", async () => {
   const mockFetch: typeof fetch = async (url) => {

@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "description": "Encrypted cold archive and searchable index (FTS5 + int8 vectors) for overflow memories and old media",
   "type": "module",
-  "main": "src/databank.ts",
+  "main": "databank.ts",
   "exports": {
-    ".": "./src/databank.ts",
-    "./server": "./src/server.ts"
+    ".": "./databank.ts",
+    "./server": "./server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/crypto.test.ts test/blobstore.test.ts test/databank.test.ts test/server.test.ts",
-    "cli": "tsx src/cli.ts",
-    "bundle": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node24 --banner:js=\"import{createRequire as __cr}from\\\"node:module\\\";const require=__cr(import.meta.url);\" --outfile=dist/databank.mjs"
+    "cli": "tsx cli.ts",
+    "bundle": "esbuild cli.ts --bundle --platform=node --format=esm --target=node24 --banner:js=\"import{createRequire as __cr}from\\\"node:module\\\";const require=__cr(import.meta.url);\" --outfile=dist/databank.mjs"
   },
   "dependencies": {
     "@exocortex/memory": "workspace:*"

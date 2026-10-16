@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { rm, readFile, appendFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { LocalLTM } from "../src/local-ltm.js";
-import { OllamaEmbedder, VectorCache, cosine } from "../src/embeddings.js";
+import { LocalLTM } from "../local-ltm.js";
+import { OllamaEmbedder, VectorCache, cosine } from "../embeddings.js";
 
 const TEST_FILE = "data/test-embeddings-memories.jsonl";
 const CACHE_FILE = `${TEST_FILE}.vec.jsonl`;
