@@ -15,6 +15,7 @@ import {
   type ReadinessState,
   type WakeEventRecord,
   type EventRecord,
+  type SuggestionAcceptanceMetrics,
 } from "@exocortex/core";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 
@@ -55,6 +56,7 @@ export interface PreCognitiveStatus {
   sampleCount: number;
   source: "device" | "global" | "default";
   futureSkewDrops?: number;
+  suggestionMetrics?: SuggestionAcceptanceMetrics;
 }
 
 export class PreCognitiveHost {
@@ -68,6 +70,7 @@ export class PreCognitiveHost {
   private isCalibrated = false;
   private sampleCount = 0;
   private readonly futureSkewDropsByDevice = new Map<string, number>();
+  private readonly processedDecisionEventIds = new Set<string>();
 
   public constructor(private readonly nowProvider: () => number = Date.now) {}
 
@@ -90,6 +93,7 @@ export class PreCognitiveHost {
     this.isCalibrated = false;
     this.sampleCount = 0;
     this.futureSkewDropsByDevice.clear();
+    this.processedDecisionEventIds.clear();
   }
 
   public getFutureSkewDropCount(deviceId?: string): number {
@@ -302,6 +306,24 @@ export class PreCognitiveHost {
             });
           }
         }
+        if (ev.kind === "telemetry" && (payload?.event === "SUGGESTION_DECISION" || payload?.suggestion_decision)) {
+          const decision = payload?.decision ?? payload?.suggestion_decision;
+          if (decision === "ACCEPTED" || decision === "IGNORED") {
+            if (ev.event_id && this.processedDecisionEventIds.has(ev.event_id)) continue;
+            if (ev.event_id) {
+              this.processedDecisionEventIds.add(ev.event_id);
+              if (this.processedDecisionEventIds.size > 500) {
+                const oldest = this.processedDecisionEventIds.values().next().value;
+                if (oldest) this.processedDecisionEventIds.delete(oldest);
+              }
+            }
+            const rawDwell = payload?.dwell_ms ?? payload?.touch_duration_ms;
+            const dwell = isValidDwell(rawDwell) ? rawDwell : -1;
+            const suggType = typeof payload?.suggestion_type === "string" ? payload.suggestion_type : undefined;
+            const action = typeof payload?.action === "string" ? payload.action : undefined;
+            engine.recordSuggestionDecision(decision, dwell, suggType, action, ev.ts_device);
+          }
+        }
       }
     }
   }
@@ -372,6 +394,7 @@ export class PreCognitiveHost {
       sampleCount,
       source,
       futureSkewDrops: this.futureSkewDropsByDevice.get(deviceId) ?? 0,
+      suggestionMetrics: engine.getSuggestionMetrics(),
     };
   }
 }

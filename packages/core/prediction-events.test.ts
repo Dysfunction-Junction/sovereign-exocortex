@@ -90,4 +90,59 @@ describe("buildScreenExamples", () => {
     expect(ex).toHaveLength(1);
     expect(ex[0]).toMatchObject({ current: "status", actual: "ask", from_seq: a.seq, to_seq: c.seq });
   });
+
+  it("captures native Android system suggestions and extracted entities in snapshot", () => {
+    const t = new ContextTracker(utc);
+    const event = ev("dev-1", "telemetry", {
+      package: "com.google.android.apps.messaging",
+      contextual_suggestions: ["open_url", "view_map"],
+      extracted_entities: [
+        { type: "address", value: "1600 Amphitheatre Pkwy", confidence: 0.95 },
+        { type: "url", value: "https://example.com", confidence: 0.98 },
+      ],
+      sys_suggest: "open_url",
+    }, T0);
+    t.update(event);
+    const snap = t.snapshot("dev-1", T0);
+    expect(snap.system_suggestions?.primary_action).toBe("open_url");
+    expect(snap.system_suggestions?.actions).toEqual(["open_url", "view_map"]);
+    expect(snap.system_suggestions?.entities).toHaveLength(2);
+    expect(snap.system_suggestions?.entities?.[0].type).toBe("address");
+  });
+
+  it("clears system suggestions when transitioning to a screen without suggestions", () => {
+    const t = new ContextTracker(utc);
+    const eventWithSugg = ev("dev-1", "telemetry", {
+      package: "com.google.android.apps.messaging",
+      contextual_suggestions: ["open_url"],
+      sys_suggest: "open_url",
+    }, T0);
+    t.update(eventWithSugg);
+    expect(t.snapshot("dev-1", T0).system_suggestions?.primary_action).toBe("open_url");
+
+    // Transition to settings screen without suggestions
+    const eventNextScreen = ev("dev-1", "telemetry", {
+      package: "com.android.settings",
+      screen: "settings",
+    }, T0 + 1000);
+    t.update(eventNextScreen);
+    expect(t.snapshot("dev-1", T0 + 1000).system_suggestions).toBeUndefined();
+  });
+
+  it("expires system suggestions after 5-minute TTL", () => {
+    const t = new ContextTracker(utc);
+    const eventWithSugg = ev("dev-1", "telemetry", {
+      package: "com.google.android.apps.messaging",
+      contextual_suggestions: ["open_url"],
+      sys_suggest: "open_url",
+    }, T0);
+    t.update(eventWithSugg);
+
+    // Within TTL (4 minutes later)
+    expect(t.snapshot("dev-1", T0 + 4 * 60_000).system_suggestions?.primary_action).toBe("open_url");
+
+    // Past TTL (5 minutes and 1 second later)
+    expect(t.snapshot("dev-1", T0 + 5 * 60_000 + 1000).system_suggestions).toBeUndefined();
+  });
 });
+

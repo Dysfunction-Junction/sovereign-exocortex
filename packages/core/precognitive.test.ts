@@ -3,6 +3,7 @@ import {
   PreCognitiveEngine,
   computeWakeDeltaQuantile,
   extractWakeDeltasFromEvents,
+  computeSuggestionAcceptanceMetrics,
   DEFAULT_WAKE_THRESHOLD_MS,
   MIN_WAKE_THRESHOLD_MS,
   MAX_WAKE_THRESHOLD_MS,
@@ -161,6 +162,23 @@ describe('PreCognitiveEngine (Frontier 1)', () => {
       expect(engine.wakeThreshold).toBe(8000);
       engine.recordVibration(1000);
       expect(engine.handleScreenStateChange('SCREEN_ON', 6500).urgencyIntent).toBe('HIGH_URGENCY');
+    });
+
+    it('records human suggestion decisions and computes acceptance & dwell metrics', () => {
+      expect(engine.getSuggestionMetrics().sampleCount).toBe(0);
+
+      engine.recordSuggestionDecision('ACCEPTED', 1200, 'open_url', 'open_url');
+      engine.recordSuggestionDecision('ACCEPTED', 800, 'open_url', 'open_url');
+      engine.recordSuggestionDecision('IGNORED', 4000, 'view_map', 'view_map');
+
+      const metrics = engine.getSuggestionMetrics();
+      expect(metrics.sampleCount).toBe(3);
+      expect(metrics.acceptedCount).toBe(2);
+      expect(metrics.ignoredCount).toBe(1);
+      expect(metrics.acceptanceRate).toBeCloseTo(2 / 3);
+      expect(metrics.meanAcceptedDwellMs).toBe(1000); // (1200 + 800) / 2
+      expect(metrics.meanIgnoredDwellMs).toBe(4000);
+      expect(metrics.overallMeanDwellMs).toBe(2000); // (1200 + 800 + 4000) / 3
     });
   });
 });

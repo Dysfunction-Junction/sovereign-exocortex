@@ -54,6 +54,7 @@ interface DeviceState {
   device: NonNullable<PredictionContext["device"]>;
   ambient: NonNullable<PredictionContext["ambient"]>;
   location: NonNullable<PredictionContext["location"]>;
+  system_suggestions?: NonNullable<PredictionContext["system_suggestions"]>;
 }
 
 /** Running per-device context. Feed it every event in order, then ask for a snapshot at a moment. */
@@ -117,6 +118,56 @@ export class ContextTracker {
     }
     const acc = num(p.accuracy_m);
     if (acc !== undefined && acc >= 0) s.location.accuracy_m = acc;
+
+    // Native Android system contextual suggestions & on-device TextClassifier priors
+    const sysSuggest = str(p.sys_suggest) ?? str(p.suggested_action);
+    const rawSuggestions = Array.isArray(p.contextual_suggestions)
+      ? p.contextual_suggestions
+      : Array.isArray(p.suggested_actions)
+        ? p.suggested_actions
+        : null;
+    const actions: string[] = [];
+    if (sysSuggest) actions.push(sysSuggest);
+    if (rawSuggestions) {
+      for (const item of rawSuggestions) {
+        if (typeof item === "string" && item.length > 0 && item.length <= 128) {
+          if (!actions.includes(item)) actions.push(item);
+        } else if (item && typeof item === "object" && typeof (item as Record<string, unknown>).action === "string") {
+          const act = (item as Record<string, unknown>).action as string;
+          if (act.length > 0 && act.length <= 128 && !actions.includes(act)) actions.push(act);
+        }
+      }
+    }
+    const rawEntities = Array.isArray(p.extracted_entities) ? p.extracted_entities : Array.isArray(p.entities) ? p.entities : null;
+    const entities: Array<{ type: string; value: string; confidence?: number }> = [];
+    if (rawEntities) {
+      for (const ent of rawEntities) {
+        if (
+          ent &&
+          typeof ent === "object" &&
+          typeof (ent as Record<string, unknown>).type === "string" &&
+          typeof (ent as Record<string, unknown>).value === "string"
+        ) {
+          entities.push({
+            type: (ent as Record<string, unknown>).type as string,
+            value: (ent as Record<string, unknown>).value as string,
+            confidence: typeof (ent as Record<string, unknown>).confidence === "number" ? ((ent as Record<string, unknown>).confidence as number) : undefined,
+          });
+        }
+      }
+    }
+    const ts = ev.ts_device || Date.now();
+    if (actions.length > 0 || entities.length > 0) {
+      s.system_suggestions = {
+        primary_action: actions[0],
+        actions: actions.length > 0 ? [...actions] : undefined,
+        entities: entities.length > 0 ? entities.map((e) => ({ ...e })) : undefined,
+        observed_ts: ts,
+      };
+    } else if (typeof p.package === "string" || typeof p.screen === "string") {
+      // Clear suggestions when transitioning to a new screen context that lacks them
+      delete s.system_suggestions;
+    }
   }
 
   /** Context at `ts` for a device: wall clock plus the latest tracked signals. */
@@ -132,6 +183,18 @@ export class ContextTracker {
     const ambient = Object.keys(s.ambient).length > 0 ? s.ambient : Object.keys(this.externalAmbient).length > 0 ? this.externalAmbient : null;
     if (ambient) ctx.ambient = { ...ambient };
     if (Object.keys(s.location).length > 0) ctx.location = { ...s.location };
+    if (s.system_suggestions && (s.system_suggestions.actions?.length || s.system_suggestions.entities?.length || s.system_suggestions.primary_action)) {
+      const observed = s.system_suggestions.observed_ts ?? ts;
+      // Stale suggestion guard: discard suggestions older than 5 minutes
+      if (ts - observed <= 5 * 60_000) {
+        ctx.system_suggestions = {
+          primary_action: s.system_suggestions.primary_action,
+          actions: s.system_suggestions.actions ? [...s.system_suggestions.actions] : undefined,
+          entities: s.system_suggestions.entities ? s.system_suggestions.entities.map((e) => ({ ...e })) : undefined,
+          observed_ts: s.system_suggestions.observed_ts,
+        };
+      }
+    }
     return ctx;
   }
 }

@@ -8,6 +8,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { GateDecisionAction, ShadowLabel } from "./schema-types.js";
+import { computeSuggestionAcceptanceMetrics, type SuggestionDecisionRecord } from "./precognitive.js";
 
 export const SHADOW_LABELS: readonly ShadowLabel[] = ["wanted", "not_wanted", "already_did", "ignored"] as const;
 
@@ -419,4 +420,44 @@ export function formatShadowReport(m: ShadowMetrics): string {
     `  Verdict:             ${m.verdict}  (threshold ${pct(m.threshold)}, min labels ${m.minLabels})`,
     `  Circuit breaker:     ${m.breakerTripped ? "TRIPPED" : "ok"}`,
   ].join("\n");
+}
+
+export interface SystemSuggestionEvaluation {
+  sampleCount: number;
+  acceptedCount: number;
+  ignoredCount: number;
+  acceptanceRate: number | null;
+  wilsonLower: number | null;
+  meanAcceptedDwellMs: number;
+  meanIgnoredDwellMs: number;
+}
+
+/**
+ * Evaluates human decisions on Android system suggestions, calculating empirical
+ * acceptance rates, Wilson lower bounds, and comparative dwell latencies.
+ */
+export function evaluateSystemSuggestionDecisions(
+  records: readonly SuggestionDecisionRecord[]
+): SystemSuggestionEvaluation {
+  const base = computeSuggestionAcceptanceMetrics(records);
+  if (base.sampleCount === 0) {
+    return {
+      sampleCount: 0,
+      acceptedCount: 0,
+      ignoredCount: 0,
+      acceptanceRate: null,
+      wilsonLower: null,
+      meanAcceptedDwellMs: 0,
+      meanIgnoredDwellMs: 0,
+    };
+  }
+  return {
+    sampleCount: base.sampleCount,
+    acceptedCount: base.acceptedCount,
+    ignoredCount: base.ignoredCount,
+    acceptanceRate: base.acceptanceRate,
+    wilsonLower: wilsonLowerBound(base.acceptedCount, base.sampleCount),
+    meanAcceptedDwellMs: base.meanAcceptedDwellMs,
+    meanIgnoredDwellMs: base.meanIgnoredDwellMs,
+  };
 }

@@ -499,6 +499,14 @@ public class NativeTelemetrySync {
      * Queues a screen-context event to the native durable outbox.
      */
     public static void queueScreenCapture(Context context, String packageName, String appLabel, String textNodes) {
+        queueScreenCapture(context, packageName, appLabel, textNodes, null, null);
+    }
+
+    /**
+     * Queues a screen-context event with native on-device TextClassifier extracted entities
+     * and contextual suggestions to the native durable outbox.
+     */
+    public static void queueScreenCapture(Context context, String packageName, String appLabel, String textNodes, JSONArray extractedEntities, JSONArray contextualSuggestions) {
         final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
         final long captureTime = System.currentTimeMillis();
         final String safePkg = truncate(packageName, MAX_PKG_CHARS);
@@ -517,11 +525,54 @@ public class NativeTelemetrySync {
                 event.put("timestamp", formatIsoUtc(captureTime));
                 event.put("triaged", false);
 
+                if (extractedEntities != null && extractedEntities.length() > 0) {
+                    event.put("extracted_entities", extractedEntities);
+                }
+                if (contextualSuggestions != null && contextualSuggestions.length() > 0) {
+                    event.put("contextual_suggestions", contextualSuggestions);
+                    event.put("sys_suggest", contextualSuggestions.optString(0));
+                }
+
                 appendEvent(appContext, event);
                 flushAsync(appContext);
             } catch (Exception e) {
                 droppedEventsCount.incrementAndGet();
                 Log.e(TAG, "Failed to queue screen capture", e);
+            }
+        });
+    }
+
+    /**
+     * Queues a system suggestion human decision event (ACCEPTED vs IGNORED with dwell latency).
+     */
+    public static void queueSuggestionDecision(Context context, String packageName, String appLabel, String suggestion, String decision, long dwellMs) {
+        final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        final long eventTime = System.currentTimeMillis();
+        final String safePkg = truncate(packageName, MAX_PKG_CHARS);
+        final String safeLabel = truncate(appLabel, MAX_LABEL_CHARS);
+
+        DISK_EXECUTOR.execute((CaptureTask) () -> {
+            try {
+                JSONObject event = new JSONObject();
+                event.put("id", "native-sugg-" + eventTime + "-" + UUID.randomUUID().toString().substring(0, 8));
+                event.put("type", "system_telemetry");
+                event.put("screen", "background");
+                event.put("package", safePkg);
+                event.put("app_label", safeLabel);
+                event.put("timestamp", formatIsoUtc(eventTime));
+                event.put("event", "SUGGESTION_DECISION");
+                event.put("decision", decision);
+                event.put("suggestion_type", suggestion);
+                event.put("action", suggestion);
+                event.put("dwell_ms", dwellMs);
+                event.put("telemetry", "Suggestion " + decision + ": " + suggestion + " (dwell: " + dwellMs + "ms)");
+                event.put("triaged", false);
+
+                appendEvent(appContext, event);
+                flushAsync(appContext);
+            } catch (Exception e) {
+                droppedEventsCount.incrementAndGet();
+                Log.e(TAG, "Failed to queue suggestion decision", e);
             }
         });
     }

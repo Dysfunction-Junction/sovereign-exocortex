@@ -239,4 +239,112 @@ export class PreCognitiveEngine {
     }
     return this.preStagedProposal;
   }
+
+  private suggestionRecords: SuggestionDecisionRecord[] = [];
+  private static readonly MAX_SUGGESTION_RECORDS = 500;
+
+  /**
+   * Record human decision (acceptance vs ignore) and dwell time when system suggestions are presented.
+   */
+  public recordSuggestionDecision(
+    decision: SuggestionDecision,
+    dwellMs: number,
+    suggestionType?: string,
+    action?: string,
+    timestamp: number = Date.now()
+  ): SuggestionAcceptanceMetrics {
+    const record: SuggestionDecisionRecord = { decision, dwellMs, suggestionType, action, timestamp };
+    this.suggestionRecords.push(record);
+    if (this.suggestionRecords.length > PreCognitiveEngine.MAX_SUGGESTION_RECORDS) {
+      this.suggestionRecords.shift();
+    }
+    return computeSuggestionAcceptanceMetrics(this.suggestionRecords);
+  }
+
+  /**
+   * Returns empirical acceptance rate and dwell time metrics across recorded suggestion decisions.
+   */
+  public getSuggestionMetrics(): SuggestionAcceptanceMetrics {
+    return computeSuggestionAcceptanceMetrics(this.suggestionRecords);
+  }
+}
+
+export type SuggestionDecision = 'ACCEPTED' | 'IGNORED';
+
+export interface SuggestionDecisionRecord {
+  decision: SuggestionDecision;
+  dwellMs: number;
+  suggestionType?: string;
+  action?: string;
+  timestamp?: number;
+}
+
+export interface SuggestionAcceptanceMetrics {
+  sampleCount: number;
+  acceptedCount: number;
+  ignoredCount: number;
+  acceptanceRate: number;
+  meanAcceptedDwellMs: number;
+  meanIgnoredDwellMs: number;
+  overallMeanDwellMs: number;
+}
+
+/**
+ * Computes acceptance rate and dwell time distributions when system suggestions were presented.
+ */
+export function computeSuggestionAcceptanceMetrics(
+  records: readonly SuggestionDecisionRecord[]
+): SuggestionAcceptanceMetrics {
+  const sampleCount = records.length;
+  if (sampleCount === 0) {
+    return {
+      sampleCount: 0,
+      acceptedCount: 0,
+      ignoredCount: 0,
+      acceptanceRate: 0,
+      meanAcceptedDwellMs: 0,
+      meanIgnoredDwellMs: 0,
+      overallMeanDwellMs: 0,
+    };
+  }
+
+  let acceptedCount = 0;
+  let ignoredCount = 0;
+  let totalAcceptedDwell = 0;
+  let totalIgnoredDwell = 0;
+  let totalDwell = 0;
+  let acceptedDwellCount = 0;
+  let ignoredDwellCount = 0;
+  let validDwellCount = 0;
+
+  for (const r of records) {
+    const hasValidDwell = Number.isFinite(r.dwellMs) && r.dwellMs >= 0;
+    if (r.decision === 'ACCEPTED') {
+      acceptedCount++;
+      if (hasValidDwell) {
+        totalAcceptedDwell += r.dwellMs;
+        acceptedDwellCount++;
+        totalDwell += r.dwellMs;
+        validDwellCount++;
+      }
+    } else {
+      ignoredCount++;
+      if (hasValidDwell) {
+        totalIgnoredDwell += r.dwellMs;
+        ignoredDwellCount++;
+        totalDwell += r.dwellMs;
+        validDwellCount++;
+      }
+    }
+  }
+
+  return {
+    sampleCount,
+    acceptedCount,
+    ignoredCount,
+    acceptanceRate: acceptedCount / sampleCount,
+    meanAcceptedDwellMs: acceptedDwellCount > 0 ? totalAcceptedDwell / acceptedDwellCount : 0,
+    meanIgnoredDwellMs: ignoredDwellCount > 0 ? totalIgnoredDwell / ignoredDwellCount : 0,
+    overallMeanDwellMs: validDwellCount > 0 ? totalDwell / validDwellCount : 0,
+  };
 }

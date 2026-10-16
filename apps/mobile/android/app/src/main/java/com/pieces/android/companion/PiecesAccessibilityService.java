@@ -4,10 +4,18 @@ import android.accessibilityservice.AccessibilityService;
 import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.textclassifier.TextClassification;
+import android.view.textclassifier.TextClassificationManager;
+import android.view.textclassifier.TextClassifier;
+import android.view.textclassifier.TextLinks;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.security.MessageDigest;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -15,6 +23,7 @@ import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class PiecesAccessibilityService extends AccessibilityService {
@@ -24,6 +33,12 @@ public class PiecesAccessibilityService extends AccessibilityService {
     // A static buffer to hold the most recently extracted text blocks across the OS
     public static List<String> lastCapturedText = new ArrayList<>();
     public static String lastCapturedPackage = "";
+
+    // Tracking state for system suggestion decisions (acceptance rate and dwell latency)
+    private volatile long lastSuggestionShownAt = 0;
+    private volatile String lastSuggestedAction = null;
+    private volatile String lastSuggestionPackage = null;
+    private final Set<String> lastSuggestedEntityValues = new HashSet<>();
 
     // Debounce settle time for passive mode: wait this long after the last
     // accessibility event before treating the screen as "settled" and
@@ -73,6 +88,58 @@ public class PiecesAccessibilityService extends AccessibilityService {
         String packageName = event.getPackageName() != null ? event.getPackageName().toString() : "";
         if (!isAllowed(packageName)) return;
 
+        // If this is a click event, check whether it constitutes accepting an active suggestion
+        if (event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+            AccessibilityNodeInfo source = event.getSource();
+            if (source != null && source.isPassword()) {
+                source.recycle();
+                return;
+            }
+            if (source != null) {
+                source.recycle();
+            }
+
+            if (lastSuggestionShownAt > 0 && lastSuggestedAction != null && lastSuggestionPackage != null) {
+                long dwellMs = SystemClock.elapsedRealtime() - lastSuggestionShownAt;
+                if (dwellMs >= 0 && dwellMs < 300_000 && lastSuggestionPackage.equals(packageName)) {
+                    CharSequence eventText = (event.getText() != null && !event.getText().isEmpty()) ? event.getText().get(0) : null;
+                    String cd = event.getContentDescription() != null ? event.getContentDescription().toString() : "";
+                    boolean matched = false;
+                    synchronized (lastSuggestedEntityValues) {
+                        for (String val : lastSuggestedEntityValues) {
+                            if (val != null && !val.isEmpty()) {
+                                String lowerVal = val.toLowerCase(Locale.ROOT);
+                                if ((eventText != null && eventText.toString().toLowerCase(Locale.ROOT).contains(lowerVal))
+                                        || cd.toLowerCase(Locale.ROOT).contains(lowerVal)) {
+                                    matched = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (matched) {
+                        String appLabel = labelCache.get(packageName);
+                        if (appLabel == null) appLabel = packageName;
+                        NativeTelemetrySync.queueSuggestionDecision(
+                            this,
+                            lastSuggestionPackage,
+                            appLabel,
+                            lastSuggestedAction,
+                            "ACCEPTED",
+                            dwellMs
+                        );
+                        lastSuggestedAction = null;
+                        lastSuggestionShownAt = 0;
+                        synchronized (lastSuggestedEntityValues) {
+                            lastSuggestedEntityValues.clear();
+                        }
+                    }
+                }
+            }
+            // Return immediately for clicks to prevent walking entire node hierarchy on every touch
+            return;
+        }
+
         AccessibilityNodeInfo rootNode = event.getSource();
         List<String> extractedTexts = new ArrayList<>();
         try {
@@ -107,13 +174,167 @@ public class PiecesAccessibilityService extends AccessibilityService {
             String appLabel = labelCache.get(packageName);
             if (appLabel == null) appLabel = packageName;
 
+            // Prior suggestion expired or replaced without acceptance
+            if (lastSuggestionShownAt > 0 && lastSuggestedAction != null) {
+                long dwellMs = SystemClock.elapsedRealtime() - lastSuggestionShownAt;
+                if (dwellMs >= 3000 && dwellMs < 300_000) {
+                    NativeTelemetrySync.queueSuggestionDecision(
+                        PiecesAccessibilityService.this,
+                        lastSuggestionPackage != null ? lastSuggestionPackage : packageName,
+                        appLabel,
+                        lastSuggestedAction,
+                        "IGNORED",
+                        dwellMs
+                    );
+                }
+                lastSuggestedAction = null;
+                lastSuggestionShownAt = 0;
+                synchronized (lastSuggestedEntityValues) {
+                    lastSuggestedEntityValues.clear();
+                }
+            }
+
+            // Extract on-device entities & system suggestions via TextClassifier
+            ClassifierResult result = extractEntitiesAndSuggestions(text);
+            JSONArray extractedEntities = result != null ? result.entities : null;
+            JSONArray contextualSuggestions = result != null ? result.suggestions : null;
+
+            if (contextualSuggestions != null && contextualSuggestions.length() > 0) {
+                lastSuggestionShownAt = SystemClock.elapsedRealtime();
+                lastSuggestedAction = contextualSuggestions.optString(0);
+                lastSuggestionPackage = packageName;
+                synchronized (lastSuggestedEntityValues) {
+                    lastSuggestedEntityValues.clear();
+                    if (result.rawEntityValues != null) {
+                        lastSuggestedEntityValues.addAll(result.rawEntityValues);
+                    }
+                }
+            }
+
             // Native durable outbox + background HTTP sync (runs independently of whether UI app is open)
-            NativeTelemetrySync.queueScreenCapture(PiecesAccessibilityService.this, packageName, appLabel, text);
+            NativeTelemetrySync.queueScreenCapture(
+                PiecesAccessibilityService.this,
+                packageName,
+                appLabel,
+                text,
+                extractedEntities,
+                contextualSuggestions
+            );
 
             PassiveCaptureListener listener = passiveListener;
             if (listener != null) listener.onCapture(packageName, text);
         };
         debounceHandler.postDelayed(pendingPush, DEBOUNCE_MS);
+    }
+
+    private static class ClassifierResult {
+        final JSONArray entities;
+        final JSONArray suggestions;
+        final Set<String> rawEntityValues;
+
+        ClassifierResult(JSONArray entities, JSONArray suggestions, Set<String> rawEntityValues) {
+            this.entities = entities;
+            this.suggestions = suggestions;
+            this.rawEntityValues = rawEntityValues;
+        }
+    }
+
+    private static final int MAX_ENTITIES = 16;
+    private static final int MAX_ENTITY_VALUE_LENGTH = 128;
+
+    private ClassifierResult extractEntitiesAndSuggestions(String text) {
+        if (text == null || text.trim().isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            return null;
+        }
+        try {
+            TextClassificationManager tcm = (TextClassificationManager) getSystemService(Context.TEXT_CLASSIFICATION_SERVICE);
+            if (tcm == null) return null;
+            TextClassifier classifier = tcm.getTextClassifier();
+            if (classifier == null) return null;
+
+            String sample = text.length() > 1500 ? text.substring(0, 1500) : text;
+            TextLinks.Request request = new TextLinks.Request.Builder(sample).build();
+            TextLinks links = classifier.generateLinks(request);
+            if (links == null || links.getLinks().isEmpty()) return null;
+
+            JSONArray entitiesJson = new JSONArray();
+            JSONArray suggestionsJson = new JSONArray();
+            Set<String> suggestionSet = new HashSet<>();
+            Set<String> rawValues = new HashSet<>();
+            int count = 0;
+
+            for (TextLinks.TextLink link : links.getLinks()) {
+                if (count >= MAX_ENTITIES) break;
+                int start = link.getStart();
+                int end = link.getEnd();
+                if (start < 0 || end > sample.length() || start >= end) continue;
+                String value = sample.substring(start, end).trim();
+                if (value.isEmpty() || value.length() > MAX_ENTITY_VALUE_LENGTH) continue;
+
+                for (int i = 0; i < link.getEntityCount(); i++) {
+                    if (count >= MAX_ENTITIES) break;
+                    String entityType = link.getEntity(i);
+                    float confidence = link.getConfidenceScore(entityType);
+                    if (confidence < 0.6f) continue;
+
+                    rawValues.add(value);
+
+                    JSONObject entObj = new JSONObject();
+                    entObj.put("type", entityType);
+                    // PII Protection: hash sensitive values before appending to immutable outbox/event log
+                    if (TextClassifier.TYPE_PHONE.equals(entityType)
+                            || TextClassifier.TYPE_EMAIL.equals(entityType)
+                            || TextClassifier.TYPE_ADDRESS.equals(entityType)) {
+                        entObj.put("value", hashPii(value));
+                        entObj.put("is_redacted", true);
+                    } else {
+                        entObj.put("value", value);
+                    }
+                    entObj.put("confidence", (double) confidence);
+                    entitiesJson.put(entObj);
+                    count++;
+
+                    // Map entity directly to canonical action recommendation
+                    String action = mapEntityToAction(entityType);
+                    if (action != null && !suggestionSet.contains(action)) {
+                        suggestionSet.add(action);
+                        suggestionsJson.put(action);
+                    }
+                }
+            }
+
+            if (entitiesJson.length() == 0 && suggestionsJson.length() == 0) return null;
+            return new ClassifierResult(
+                entitiesJson.length() > 0 ? entitiesJson : null,
+                suggestionsJson.length() > 0 ? suggestionsJson : null,
+                rawValues
+            );
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String mapEntityToAction(String entityType) {
+        if (TextClassifier.TYPE_URL.equals(entityType)) return "open_url";
+        if (TextClassifier.TYPE_PHONE.equals(entityType)) return "call_phone";
+        if (TextClassifier.TYPE_ADDRESS.equals(entityType)) return "view_map";
+        if (TextClassifier.TYPE_FLIGHT_NUMBER.equals(entityType)) return "track_flight";
+        if (TextClassifier.TYPE_DATE.equals(entityType) || TextClassifier.TYPE_DATE_TIME.equals(entityType)) return "view_calendar";
+        return null;
+    }
+
+    private static String hashPii(String raw) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hashBytes = digest.digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder("sha256:");
+            for (int i = 0; i < Math.min(hashBytes.length, 8); i++) {
+                sb.append(String.format("%02x", hashBytes[i]));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "[REDACTED]";
+        }
     }
 
     // Collapses whitespace and sorts text nodes so that content re-ordering

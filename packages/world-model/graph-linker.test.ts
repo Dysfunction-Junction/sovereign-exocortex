@@ -193,5 +193,71 @@ describe('GraphEventLinker (Graph-to-Event Linkage)', () => {
       const ctx2 = GraphEventLinker.link(event, graph);
       expect(ctx2.matchedEntities.length).toBeGreaterThanOrEqual(1);
     });
+
+    it('hydrates on-device TextClassifier extracted entities and suggested actions into LivingLifeGraph', () => {
+      // Pre-seed an existing goal to verify that matching action suggestions link to existing goals
+      graph.addEntity({
+        id: 'goal_view_map',
+        type: 'GOAL',
+        name: 'View Map Destination',
+        activation: 0.5,
+        lastActive: 1000,
+      });
+
+      const event: LinkableEvent = {
+        event_id: 'screen_event_1',
+        summary_id: 'screen_order_confirmation',
+        extracted_entities: [
+          { type: 'address', value: '1600 Amphitheatre Pkwy Mountain View', confidence: 0.95 },
+          { type: 'date_time', value: 'Tomorrow at 3pm', confidence: 0.9 },
+          { type: 'flight_number', value: 'UA 829', confidence: 0.92 },
+          { type: 'phone', value: '+1-555-0199', confidence: 0.88 },
+        ],
+        contextual_suggestions: ['view_map', 'view_calendar'],
+      };
+
+      const ctx = linkEventToGraph(event, graph, { autoCreate: true });
+
+      // Entities should be resolved and added to matchedEntities
+      const matchedTypes = ctx.matchedEntities.map((e) => e.type);
+      expect(matchedTypes).toContain('DOC'); // Screen doc
+      expect(matchedTypes).toContain('LOCATION'); // Address
+      expect(matchedTypes).toContain('CONTEXT_STATE'); // Date/time, flight, phone contact
+      expect(matchedTypes).toContain('GOAL'); // Pre-existing goal linked via action
+
+      // Verify specific entities in the graph
+      const loc = graph.getEntity('location_1600_amphitheatre_pkwy_mountain_view');
+      expect(loc).toBeDefined();
+      expect(loc?.type).toBe('LOCATION');
+      expect(loc?.properties?.origin).toBe('android_text_classifier');
+
+      const dt = graph.getEntity('time_tomorrow_at_3pm');
+      expect(dt).toBeDefined();
+      expect(dt?.type).toBe('CONTEXT_STATE');
+
+      const flight = graph.getEntity('entity_ua_829');
+      expect(flight).toBeDefined();
+      expect(flight?.type).toBe('CONTEXT_STATE');
+
+      const contact = graph.getEntity('contact_1_555_0199');
+      expect(contact).toBeDefined();
+      expect(contact?.type).toBe('CONTEXT_STATE');
+
+      const goal = graph.getEntity('goal_view_map');
+      expect(goal).toBeDefined();
+      expect(goal?.type).toBe('GOAL');
+
+      // Verify graph relationships
+      const doc = graph.getEntity('doc_screen_order_confirmation');
+      expect(doc).toBeDefined();
+      expect(doc?.properties?.contextual_suggestions).toEqual(['view_map', 'view_calendar']);
+      const neighbors = graph.getNeighbors(doc!.id);
+      const neighborIds = neighbors.map((n) => n.id);
+      expect(neighborIds).toContain(loc!.id);
+      expect(neighborIds).toContain(dt!.id);
+      expect(neighborIds).toContain(flight!.id);
+      expect(neighborIds).toContain(contact!.id);
+      expect(neighborIds).toContain(goal!.id);
+    });
   });
 });

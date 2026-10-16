@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   computeSameHourYesterdayBaseline,
   computeShadowMetrics,
+  evaluateSystemSuggestionDecisions,
   formatShadowReport,
   loadShadowRows,
   type ShadowRow,
@@ -320,6 +321,33 @@ describe("computeSameHourYesterdayBaseline (sqlite)", () => {
 
     const report = formatShadowReport(metrics);
     expect(report).toContain("baseline 100.0%, n=20");
+  });
+});
+
+describe("evaluateSystemSuggestionDecisions", () => {
+  it("computes empirical acceptance rate, Wilson lower bound, and dwell times", () => {
+    const records = [
+      { decision: "ACCEPTED" as const, dwellMs: 1500, suggestionType: "open_url" },
+      { decision: "ACCEPTED" as const, dwellMs: 500, suggestionType: "open_url" },
+      { decision: "IGNORED" as const, dwellMs: 3000, suggestionType: "view_map" },
+      { decision: "IGNORED" as const, dwellMs: 5000, suggestionType: "call_phone" },
+    ];
+    const res = evaluateSystemSuggestionDecisions(records);
+    expect(res.sampleCount).toBe(4);
+    expect(res.acceptedCount).toBe(2);
+    expect(res.ignoredCount).toBe(2);
+    expect(res.acceptanceRate).toBe(0.5);
+    expect(res.wilsonLower).not.toBeNull();
+    expect(res.wilsonLower).toBeLessThan(0.5);
+    expect(res.meanAcceptedDwellMs).toBe(1000); // (1500 + 500) / 2
+    expect(res.meanIgnoredDwellMs).toBe(4000); // (3000 + 5000) / 2
+  });
+
+  it("handles empty records gracefully", () => {
+    const res = evaluateSystemSuggestionDecisions([]);
+    expect(res.sampleCount).toBe(0);
+    expect(res.acceptanceRate).toBeNull();
+    expect(res.wilsonLower).toBeNull();
   });
 });
 

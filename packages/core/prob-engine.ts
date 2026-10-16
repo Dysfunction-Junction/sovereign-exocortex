@@ -90,15 +90,17 @@ export const FEATURE_NAMES = [
   "idle",
   "temp",
   "place",
+  "sys_suggest",
 ] as const;
 
-/** Unigram, bigram, and the current action paired with each context feature, plus two joint contexts. */
+/** Unigram, bigram, and the current action paired with each context feature, plus three joint contexts. */
 export const DEFAULT_EXPERTS: readonly ExpertSpec[] = [
   { name: "unigram", features: [] },
   { name: "bigram", features: [] },
   ...FEATURE_NAMES.map((f) => ({ name: `cur+${f}`, features: [f] })),
   { name: "cur+prev+daypart", features: ["prev", "daypart"] },
   { name: "cur+daypart+weekend", features: ["daypart", "weekend"] },
+  { name: "cur+sys_suggest+app", features: ["sys_suggest", "app"] },
 ];
 
 const bucket = (v: number, edges: readonly number[], labels: readonly string[]): string => {
@@ -142,6 +144,13 @@ export function contextFeatures(ctx: PredictionContext | undefined, prev?: strin
   if (loc) {
     if (loc.place) f.place = loc.place;
     else if (typeof loc.lat === "number" && typeof loc.lon === "number") f.place = `${loc.lat.toFixed(1)},${loc.lon.toFixed(1)}`;
+  }
+  const sysSuggest =
+    ctx?.system_suggestions?.primary_action ??
+    (typeof ctx?.sys_suggest === "string" ? ctx.sys_suggest : undefined) ??
+    (typeof ctx?.suggested_action === "string" ? ctx.suggested_action : undefined);
+  if (sysSuggest) {
+    f.sys_suggest = sysSuggest;
   }
   return f;
 }
@@ -486,4 +495,129 @@ export function compareLogLoss(candidate: readonly ScoredExample[], baseline: re
 /** Engine restricted to the frequency baseline: unigram plus bigram, no context features. */
 export function baselineEngine(opts: EngineOptions = {}): ProbEngine {
   return new ProbEngine({ ...opts, experts: DEFAULT_EXPERTS.filter((e) => e.name === "unigram" || e.name === "bigram") });
+}
+
+export interface SystemSuggestionBenchmark {
+  totalEvaluated: number;
+  eligibleEvaluated: number;
+  coverage: number;
+  exocortexHits: number;
+  systemHits: number;
+  bothHit: number;
+  exoOnlyHits: number;
+  sysOnlyHits: number;
+  agreementRate: number;
+  exocortexAccuracy: number;
+  systemAccuracy: number;
+  exocortexAdvantage: number;
+  mcNemarChiSquare: number | null;
+  mcNemarSignificant: boolean;
+}
+
+export interface SuggestionBenchmarkItem {
+  actual: string;
+  exocortexTop: string;
+  systemSuggestion?: string | null;
+}
+
+/**
+ * Benchmark Exocortex next-step accuracy against native on-device system suggestions (TextClassifier).
+ * Restricts comparative evaluation to rows where the system emitted an action suggestion (reporting coverage),
+ * and evaluates statistical significance across discordant prediction pairs via McNemar's test.
+ */
+export function benchmarkAgainstSystemSuggestion(
+  items: readonly SuggestionBenchmarkItem[]
+): SystemSuggestionBenchmark {
+  const totalEvaluated = items.length;
+  if (totalEvaluated === 0) {
+    return {
+      totalEvaluated: 0,
+      eligibleEvaluated: 0,
+      coverage: 0,
+      exocortexHits: 0,
+      systemHits: 0,
+      bothHit: 0,
+      exoOnlyHits: 0,
+      sysOnlyHits: 0,
+      agreementRate: 0,
+      exocortexAccuracy: 0,
+      systemAccuracy: 0,
+      exocortexAdvantage: 0,
+      mcNemarChiSquare: null,
+      mcNemarSignificant: false,
+    };
+  }
+
+  const eligibleItems = items.filter(
+    (item) => typeof item.systemSuggestion === "string" && item.systemSuggestion.trim().length > 0
+  );
+  const eligibleEvaluated = eligibleItems.length;
+  const coverage = eligibleEvaluated / totalEvaluated;
+
+  if (eligibleEvaluated === 0) {
+    return {
+      totalEvaluated,
+      eligibleEvaluated: 0,
+      coverage: 0,
+      exocortexHits: 0,
+      systemHits: 0,
+      bothHit: 0,
+      exoOnlyHits: 0,
+      sysOnlyHits: 0,
+      agreementRate: 0,
+      exocortexAccuracy: 0,
+      systemAccuracy: 0,
+      exocortexAdvantage: 0,
+      mcNemarChiSquare: null,
+      mcNemarSignificant: false,
+    };
+  }
+
+  let exocortexHits = 0;
+  let systemHits = 0;
+  let bothHit = 0;
+  let agreed = 0;
+
+  for (const item of eligibleItems) {
+    const sys = item.systemSuggestion!;
+    const exoMatch = item.exocortexTop === item.actual;
+    const sysMatch = sys === item.actual;
+    if (exoMatch) exocortexHits++;
+    if (sysMatch) systemHits++;
+    if (exoMatch && sysMatch) bothHit++;
+    if (item.exocortexTop === sys) agreed++;
+  }
+
+  const exoOnlyHits = exocortexHits - bothHit;
+  const sysOnlyHits = systemHits - bothHit;
+  const discordant = exoOnlyHits + sysOnlyHits;
+
+  let mcNemarChiSquare: number | null = null;
+  let mcNemarSignificant = false;
+  if (discordant > 0) {
+    // McNemar test with Edwards continuity correction: (|b - c| - 1)^2 / (b + c)
+    mcNemarChiSquare = Math.max(0, Math.abs(exoOnlyHits - sysOnlyHits) - 1) ** 2 / discordant;
+    // Critical value at p = 0.05 (1 df) is 3.841
+    mcNemarSignificant = mcNemarChiSquare > 3.841;
+  }
+
+  const exocortexAccuracy = exocortexHits / eligibleEvaluated;
+  const systemAccuracy = systemHits / eligibleEvaluated;
+
+  return {
+    totalEvaluated,
+    eligibleEvaluated,
+    coverage,
+    exocortexHits,
+    systemHits,
+    bothHit,
+    exoOnlyHits,
+    sysOnlyHits,
+    agreementRate: agreed / eligibleEvaluated,
+    exocortexAccuracy,
+    systemAccuracy,
+    exocortexAdvantage: exocortexAccuracy - systemAccuracy,
+    mcNemarChiSquare,
+    mcNemarSignificant,
+  };
 }

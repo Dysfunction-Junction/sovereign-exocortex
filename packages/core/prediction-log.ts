@@ -102,6 +102,13 @@ export interface PredictionContext {
   ambient?: { temp_c?: number; humidity_pct?: number; source?: string };
   /** Coarse only: lat/lon are rounded to 2 decimals (about 1 km) before storage. */
   location?: { place?: string; lat?: number; lon?: number; accuracy_m?: number };
+  /** Native Android system contextual suggestions and on-device ML priors (TextClassifier) */
+  system_suggestions?: {
+    primary_action?: string;
+    actions?: string[];
+    entities?: Array<{ type: string; value: string; confidence?: number }>;
+    observed_ts?: number;
+  };
   /** Expected signals that were not available when this snapshot was taken, e.g. "ambient.temp_c". */
   missing?: string[];
   [extra: string]: unknown;

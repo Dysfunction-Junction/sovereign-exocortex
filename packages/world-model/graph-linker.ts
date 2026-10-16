@@ -14,6 +14,12 @@ import type {
   StatePrediction,
 } from './life-graph.js';
 
+export interface ExtractedEntityInput {
+  type: string;
+  value: string;
+  confidence?: number;
+}
+
 export interface LinkableEvent {
   event_id?: string;
   kind?: string;
@@ -24,6 +30,8 @@ export interface LinkableEvent {
   doc_id?: string;
   tags?: string[];
   persons?: string[];
+  extracted_entities?: ExtractedEntityInput[];
+  contextual_suggestions?: string[];
 }
 
 export interface ActivatedEntityScore {
@@ -261,6 +269,159 @@ export function linkEventToGraph(
       if (docEntity) {
         graph.addEdge(pEntity.id, docEntity.id, 'WORKS_ON', 0.8);
       }
+    }
+  }
+
+  // 4b. Resolve on-device TextClassifier extracted entities (addresses, dates, tracking numbers, flight numbers, URLs, contacts)
+  if (docEntity) {
+    const rawExtracted: unknown[] = [
+      ...(Array.isArray(event.extracted_entities) ? event.extracted_entities : []),
+      ...(Array.isArray(payload.extracted_entities) ? payload.extracted_entities : []),
+    ];
+
+    const seenEntityKeys = new Set<string>();
+    let extractedCount = 0;
+    const MAX_EXTRACTED_ENTITIES = 10;
+
+    for (const item of rawExtracted) {
+      if (extractedCount >= MAX_EXTRACTED_ENTITIES) break;
+      if (!item || typeof item !== 'object') continue;
+      const ent = item as Record<string, unknown>;
+      const entType = typeof ent.type === 'string' ? ent.type.toLowerCase() : '';
+      const entValue = typeof ent.value === 'string' ? ent.value.trim() : '';
+      if (!entValue) continue;
+
+      const conf = typeof ent.confidence === 'number' ? ent.confidence : 0.7;
+      if (conf < 0.6) continue; // Enforce confidence floor
+
+      const dedupKey = `${entType}:${entValue.toLowerCase()}`;
+      if (seenEntityKeys.has(dedupKey)) continue;
+      seenEntityKeys.add(dedupKey);
+
+      const s = slugify(entValue);
+      if (!s) continue;
+
+      let targetEntity: GraphEntity | undefined;
+      if (entType === 'address' || entType === 'location') {
+        const id = `location_${s}`;
+        targetEntity = graph.getEntity(id);
+        if (!targetEntity && autoCreate) {
+          targetEntity = graph.addEntity({
+            id,
+            type: 'LOCATION',
+            name: entValue,
+            properties: {
+              origin: 'android_text_classifier',
+              entity_type: 'address',
+              confidence: conf,
+            },
+            activation: 1.0,
+            lastActive: timestamp,
+          });
+        }
+        if (targetEntity) {
+          graph.addEdge(docEntity.id, targetEntity.id, 'LOCATED_AT', 0.85);
+        }
+      } else if (entType === 'date' || entType === 'date_time' || entType === 'datetime') {
+        const id = `time_${s}`;
+        targetEntity = graph.getEntity(id);
+        if (!targetEntity && autoCreate) {
+          targetEntity = graph.addEntity({
+            id,
+            type: 'CONTEXT_STATE',
+            name: entValue,
+            properties: {
+              origin: 'android_text_classifier',
+              entity_type: 'date_time',
+              confidence: conf,
+            },
+            activation: 1.0,
+            lastActive: timestamp,
+          });
+        }
+        if (targetEntity) {
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8);
+        }
+      } else if (entType === 'phone' || entType === 'email') {
+        const id = `contact_${s}`;
+        targetEntity = graph.getEntity(id);
+        if (!targetEntity && autoCreate) {
+          targetEntity = graph.addEntity({
+            id,
+            type: 'CONTEXT_STATE',
+            name: entValue,
+            properties: {
+              origin: 'android_text_classifier',
+              entity_type: entType,
+              confidence: conf,
+            },
+            activation: 1.0,
+            lastActive: timestamp,
+          });
+        }
+        if (targetEntity) {
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.85);
+        }
+      } else {
+        // url, flight_number, tracking_number, or general extracted entities
+        const id = `entity_${s}`;
+        targetEntity = graph.getEntity(id);
+        if (!targetEntity && autoCreate) {
+          targetEntity = graph.addEntity({
+            id,
+            type: 'CONTEXT_STATE',
+            name: entValue,
+            properties: {
+              origin: 'android_text_classifier',
+              entity_type: entType || 'entity',
+              confidence: conf,
+            },
+            activation: 1.0,
+            lastActive: timestamp,
+          });
+        }
+        if (targetEntity) {
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8);
+        }
+      }
+
+      if (targetEntity) {
+        recordMatch(targetEntity);
+        extractedCount++;
+      }
+    }
+
+    // 4c. Attach contextual suggestions to document properties (link to existing GOALs without creating global hubs)
+    const rawSuggestions: unknown[] = [
+      ...(Array.isArray(event.contextual_suggestions) ? event.contextual_suggestions : []),
+      ...(Array.isArray(payload.contextual_suggestions) ? payload.contextual_suggestions : []),
+    ];
+
+    const actions: string[] = [];
+    for (const item of rawSuggestions) {
+      const act =
+        typeof item === 'string'
+          ? item.trim()
+          : item && typeof item === 'object' && typeof (item as Record<string, unknown>).action === 'string'
+            ? ((item as Record<string, unknown>).action as string).trim()
+            : '';
+      if (!act || actions.includes(act)) continue;
+      actions.push(act);
+
+      // Only link if an existing GOAL entity for this action was already defined in the life graph
+      const s = slugify(act);
+      const existingGoal = graph.getEntity(`goal_${s}`) ?? graph.getEntity(s);
+      if (existingGoal && existingGoal.type === 'GOAL') {
+        recordMatch(existingGoal);
+        graph.addEdge(docEntity.id, existingGoal.id, 'TRIGGERS', 0.75);
+      }
+    }
+
+    if (actions.length > 0) {
+      docEntity.properties = {
+        ...docEntity.properties,
+        contextual_suggestions: actions,
+      };
     }
   }
 

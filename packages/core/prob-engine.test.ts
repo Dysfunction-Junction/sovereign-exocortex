@@ -3,6 +3,7 @@ import {
   OTHER,
   ProbEngine,
   baselineEngine,
+  benchmarkAgainstSystemSuggestion,
   compareLogLoss,
   contextFeatures,
   prequential,
@@ -249,5 +250,47 @@ describe("contextFeatures", () => {
     });
     expect(contextFeatures(undefined)).toEqual({});
     expect(contextFeatures({ time: ctx.time }).battery).toBeUndefined();
+  });
+
+  it("extracts sys_suggest from system_suggestions", () => {
+    const ctx: PredictionContext = {
+      system_suggestions: {
+        primary_action: "open_url",
+        actions: ["open_url", "copy"],
+      },
+    };
+    const f = contextFeatures(ctx);
+    expect(f.sys_suggest).toBe("open_url");
+  });
+});
+
+describe("benchmarkAgainstSystemSuggestion", () => {
+  it("evaluates accuracy, coverage, agreement rate, and advantage against on-device system suggestions", () => {
+    const items = [
+      { actual: "open_url", exocortexTop: "open_url", systemSuggestion: "open_url" },
+      { actual: "open_url", exocortexTop: "open_url", systemSuggestion: "view_map" },
+      { actual: "view_map", exocortexTop: "call_phone", systemSuggestion: "view_map" },
+      { actual: "setup", exocortexTop: "setup", systemSuggestion: "setup" },
+      { actual: "settings", exocortexTop: "settings", systemSuggestion: "" }, // missing suggestion
+    ];
+    const bench = benchmarkAgainstSystemSuggestion(items);
+    expect(bench.totalEvaluated).toBe(5);
+    expect(bench.eligibleEvaluated).toBe(4);
+    expect(bench.coverage).toBe(0.8);
+    expect(bench.exocortexHits).toBe(3); // 3 of 4 eligible
+    expect(bench.systemHits).toBe(3); // 3 of 4 eligible
+    expect(bench.bothHit).toBe(2);
+    expect(bench.exoOnlyHits).toBe(1);
+    expect(bench.sysOnlyHits).toBe(1);
+    expect(bench.agreementRate).toBe(0.5); // 2 of 4 had matching top prediction
+    expect(bench.exocortexAccuracy).toBe(0.75);
+    expect(bench.systemAccuracy).toBe(0.75);
+    expect(bench.exocortexAdvantage).toBe(0);
+    expect(bench.mcNemarSignificant).toBe(false);
+  });
+
+  it("handles empty items or items with no system suggestions gracefully", () => {
+    expect(benchmarkAgainstSystemSuggestion([]).totalEvaluated).toBe(0);
+    expect(benchmarkAgainstSystemSuggestion([{ actual: "a", exocortexTop: "a", systemSuggestion: null }]).eligibleEvaluated).toBe(0);
   });
 });

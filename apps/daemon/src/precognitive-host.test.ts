@@ -385,3 +385,63 @@ test("PreCognitiveHost HTTP endpoints integration test", async () => {
     defaultPreCognitiveHost.resetForTest();
   }
 });
+
+test("PreCognitiveHost records SUGGESTION_DECISION events and exposes suggestionMetrics in status", () => {
+  const host = PreCognitiveHost.createIsolatedForTest(() => 100_000);
+  const fakeDb = {} as any;
+
+  const events = [
+    {
+      seq: 1,
+      event_id: "ev1",
+      device_id: "phone-1",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: 100_000,
+      ts_device: 100_000,
+      payload: JSON.stringify({
+        event: "SUGGESTION_DECISION",
+        decision: "ACCEPTED",
+        suggestion_type: "open_url",
+        action: "open_url",
+        dwell_ms: 1200,
+      }),
+    },
+    {
+      seq: 2,
+      event_id: "ev2",
+      device_id: "phone-1",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: 100_000,
+      ts_device: 100_000,
+      payload: JSON.stringify({
+        event: "SUGGESTION_DECISION",
+        decision: "IGNORED",
+        suggestion_type: "view_map",
+        action: "view_map",
+        dwell_ms: 3600,
+      }),
+    },
+  ];
+
+  host.onEventsAppended(events, fakeDb);
+  const status = host.getStatus("phone-1");
+  assert.ok(status.suggestionMetrics);
+  assert.equal(status.suggestionMetrics.sampleCount, 2);
+  assert.equal(status.suggestionMetrics.acceptedCount, 1);
+  assert.equal(status.suggestionMetrics.ignoredCount, 1);
+  assert.equal(status.suggestionMetrics.acceptanceRate, 0.5);
+  assert.equal(status.suggestionMetrics.meanAcceptedDwellMs, 1200);
+  assert.equal(status.suggestionMetrics.meanIgnoredDwellMs, 3600);
+
+  // Re-delivering the exact same events with identical event_ids must not double count
+  host.onEventsAppended(events, fakeDb);
+  const reStatus = host.getStatus("phone-1");
+  assert.equal(reStatus.suggestionMetrics?.sampleCount, 2);
+});
+
