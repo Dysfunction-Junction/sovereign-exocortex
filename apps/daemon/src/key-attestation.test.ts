@@ -36,6 +36,18 @@ test("pinned Google roots parse (2 anchors)", () => {
   assert.equal(pinnedRoots().length, 2);
 });
 
+test("pinned Google roots are currently valid and unexpired", () => {
+  const roots = pinnedRoots();
+  assert.equal(roots.length, 2);
+  const now = Date.now();
+  for (const root of roots) {
+    const validFrom = new Date(root.validFrom).getTime();
+    const validTo = new Date(root.validTo).getTime();
+    assert.ok(now >= validFrom, `Root ${root.subject} not yet valid`);
+    assert.ok(now < validTo, `Root ${root.subject} expired`);
+  }
+});
+
 test("accepts a hardware-backed, biometric-gated chain", () => {
   const r = verify(build());
   assert.equal(r.ok, true, JSON.stringify(r));
