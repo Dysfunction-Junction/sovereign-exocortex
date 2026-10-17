@@ -1,4 +1,5 @@
 import { Preferences } from "@capacitor/preferences";
+import { Capacitor } from "@capacitor/core";
 
 // Dual-profile connection (Plan A LAN / Plan B Remote Gateway):
 //  - Plan A (LAN / USB): fast local path, e.g. http://192.168.1.x:8787
@@ -60,11 +61,80 @@ export interface ConnectionTarget {
   mode: "lan" | "remote";
 }
 
+let autoConnectPromise: Promise<boolean> | null = null;
+
+/**
+ * Attempts one-shot auto-discovery of the local PC daemon and proxy.
+ * Safe to call on web/desktop environments. Automatically saves credentials to Preferences.
+ */
+export async function tryAutoConnectLocalPc(): Promise<boolean> {
+  if (autoConnectPromise) return autoConnectPromise;
+  autoConnectPromise = (async () => {
+    if (typeof window === "undefined") return false;
+
+    // Check candidate endpoints:
+    // 1. Relative (if web dashboard served directly by the daemon or reverse proxy)
+    // 2. Default local daemon port 8788
+    // 3. Localhost 8788
+    const origin = window.location?.origin;
+    const candidates = [
+      ...(origin && origin.startsWith("http") ? [`${origin}/mobile/local-config`] : []),
+      "http://127.0.0.1:8788/mobile/local-config",
+      "http://localhost:8788/mobile/local-config",
+    ];
+
+    const uniqueCandidates = [...new Set(candidates)];
+
+    for (const endpoint of uniqueCandidates) {
+      try {
+        const res = await fetch(endpoint, {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(2000),
+        });
+        if (!res.ok) continue;
+        const data = (await res.json()) as {
+          ok?: boolean;
+          proxyBaseUrl?: string;
+          proxyToken?: string;
+          remoteGatewayUrl?: string;
+          remoteGatewayToken?: string;
+        };
+        if (data && data.ok && data.proxyBaseUrl && data.remoteGatewayUrl) {
+          await Promise.all([
+            setProxyBaseUrl(data.proxyBaseUrl),
+            setProxyToken(data.proxyToken ?? ""),
+            setRemoteGatewayUrl(data.remoteGatewayUrl),
+            setRemoteGatewayToken(data.remoteGatewayToken ?? ""),
+          ]);
+          return true;
+        }
+      } catch {
+        // try next candidate
+      }
+    }
+    return false;
+  })().finally(() => {
+    autoConnectPromise = null;
+  });
+  return autoConnectPromise;
+}
+
 /** Ordered [Plan A, Plan B], each included only if both its URL and token are set. */
 export async function getConnectionTargets(): Promise<ConnectionTarget[]> {
-  const [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
+  let [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
     getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
   ]);
+
+  // On desktop / PC browser, if credentials are unconfigured, auto-connect to the local daemon
+  if ((!lanUrl || !lanToken) && (!remoteUrl || !remoteToken) && !Capacitor.isNativePlatform()) {
+    const autoConnected = await tryAutoConnectLocalPc().catch(() => false);
+    if (autoConnected) {
+      [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
+        getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
+      ]);
+    }
+  }
+
   const targets: ConnectionTarget[] = [];
   if (lanUrl && lanToken) targets.push({ baseUrl: lanUrl, token: lanToken, mode: "lan" });
   if (remoteUrl && remoteToken) targets.push({ baseUrl: remoteUrl, token: remoteToken, mode: "remote" });

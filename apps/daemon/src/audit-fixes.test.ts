@@ -4,7 +4,7 @@ import { connect } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { issueToken } from "./jwt.js";
+import { issueToken, verifyToken } from "./jwt.js";
 import { setDatabase } from "./db-host.js";
 import { ExocortexDatabase } from "@exocortex/core/db";
 
@@ -153,4 +153,50 @@ test("server configures DoS and slowloris socket timeouts", () => {
   assert.equal(server.requestTimeout, 30_000);
   assert.equal(server.keepAliveTimeout, 65_000);
 });
+
+test("GET /mobile/local-config auto-registers pc:dashboard device and returns local config", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/mobile/local-config`, {
+      headers: { Origin: "http://localhost:5173" },
+    });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.remoteGatewayUrl, `http://127.0.0.1:${port}`);
+    assert.ok(typeof data.remoteGatewayToken === "string" && data.remoteGatewayToken.length > 0);
+
+    const dev = db.getDevice("pc:dashboard");
+    assert.ok(dev);
+    assert.equal(dev.name, "PC Command Center");
+    assert.deepEqual(dev.scopes, ["telemetry:write", "approval:write", "admin:read", "admin:write"]);
+
+    const verified = verifyToken(`Bearer ${data.remoteGatewayToken}`, TEST_SECRET);
+    assert.equal(verified.ok, true);
+    if (verified.ok) {
+      assert.equal(verified.deviceId, "pc:dashboard");
+    }
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("GET /mobile/local-config rejects non-local origin", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/mobile/local-config`, {
+      headers: { Origin: "https://evil-site.com" },
+    });
+    assert.equal(res.status, 403);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
 

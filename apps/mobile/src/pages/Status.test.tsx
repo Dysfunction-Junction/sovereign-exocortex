@@ -54,7 +54,10 @@ vi.mock("../lib/api", () => ({
 }));
 vi.mock("../lib/usage", () => ({ recordEvent: vi.fn() }));
 vi.mock("../lib/flush", () => ({ flushUsageEvents: vi.fn() }));
-vi.mock("../lib/config", () => ({ isScreenContextEnabled: vi.fn().mockResolvedValue(true) }));
+vi.mock("../lib/config", () => ({
+  isScreenContextEnabled: vi.fn().mockResolvedValue(true),
+  tryAutoConnectLocalPc: vi.fn().mockResolvedValue(false),
+}));
 vi.mock("../lib/passiveCapture", () => ({
   onPassiveCapture: vi.fn(() => () => {}),
   getLastPassiveCapture: vi.fn(() => null),

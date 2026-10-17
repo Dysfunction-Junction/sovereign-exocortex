@@ -1,10 +1,10 @@
 import { createServer } from "node:http";
 import { existsSync, createReadStream, statSync } from "node:fs";
 import { join, resolve, extname, relative, isAbsolute, sep } from "node:path";
-import { timingSafeEqual, createPublicKey } from "node:crypto";
+import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
-import { verifyToken } from "./jwt.js";
+import { verifyToken, issueToken } from "./jwt.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase } from "./db-host.js";
@@ -328,6 +328,79 @@ export const server = createServer(async (req, res) => {
   // from an actual proxied call succeeding.
   if (method === "GET" && url.pathname === "/mobile/health") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  // Loopback auto-discovery endpoint for PC Command Center / Web Dashboard.
+  // Delivers local proxy & gateway endpoints and issues an admin-scoped JWT
+  // to loopback clients only, removing any manual token copy-paste on the host PC.
+  if (method === "GET" && url.pathname === "/mobile/local-config") {
+    const remoteIp = req.socket.remoteAddress ?? "";
+    const isLoopback =
+      remoteIp === "127.0.0.1" ||
+      remoteIp === "::1" ||
+      remoteIp === "::ffff:127.0.0.1" ||
+      remoteIp === "localhost";
+    if (!isLoopback) {
+      sendJson(res, 403, { error: "forbidden: local config is only accessible from loopback interface" });
+      return;
+    }
+
+    const origin = req.headers.origin;
+    if (origin) {
+      try {
+        const originHost = new URL(origin).hostname;
+        if (originHost !== "localhost" && originHost !== "127.0.0.1" && originHost !== "[::1]") {
+          sendJson(res, 403, { error: "forbidden: origin not allowed" });
+          return;
+        }
+      } catch {
+        sendJson(res, 403, { error: "forbidden: invalid origin" });
+        return;
+      }
+    }
+
+    const secret = JWT_SECRET ?? process.env.GATEWAY_JWT_SECRET;
+    if (!secret) {
+      sendJson(res, 503, { error: "gateway authentication is not configured" });
+      return;
+    }
+
+    try {
+      const db = getDatabase();
+      const pcDeviceId = "pc:dashboard";
+      const dev = db.getDevice(pcDeviceId);
+      if (!dev) {
+        const { publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+        db.registerDevice({
+          device_id: pcDeviceId,
+          name: "PC Command Center",
+          platform: "windows",
+          pubkey_spki: new Uint8Array(publicKey.export({ format: "der", type: "spki" })),
+          key_attested: 0,
+          scopes: ["telemetry:write", "approval:write", "admin:read", "admin:write"],
+          enrolled_at: Date.now(),
+          revoked_at: null,
+        });
+      }
+
+      const token = issueToken(pcDeviceId, secret);
+      const addr = server.address();
+      const port = addr && typeof addr === "object" ? addr.port : 8788;
+      const remoteGatewayUrl = `http://127.0.0.1:${port}`;
+      const proxyBaseUrl = HOME_PROXY_BASE_URL || "http://127.0.0.1:8787";
+      const proxyToken = HOME_PROXY_TOKEN || "";
+
+      sendJson(res, 200, {
+        ok: true,
+        proxyBaseUrl,
+        proxyToken,
+        remoteGatewayUrl,
+        remoteGatewayToken: token,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to generate local configuration", err);
+    }
     return;
   }
 

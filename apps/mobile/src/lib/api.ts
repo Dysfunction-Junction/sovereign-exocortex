@@ -713,7 +713,7 @@ export function connectLivingGraphStream(handlers: GraphStreamHandlers): () => v
       }
       const localTarget = targets.find((t) => t.mode === "lan");
       const remoteTarget = targets.find((t) => t.mode === "remote");
-      const target = localTarget ?? remoteTarget ?? targets[0];
+      const target = remoteTarget ?? localTarget ?? targets[0];
       const url = `${target.baseUrl}/v3/world-model/graph/live`;
 
       const res = await fetch(url, {

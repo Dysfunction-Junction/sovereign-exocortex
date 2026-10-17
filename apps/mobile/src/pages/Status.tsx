@@ -4,7 +4,7 @@ import { getStatus, getCachedStatus, ProxyNotConfiguredError, HomeNodeUnreachabl
 import { recordEvent } from "../lib/usage";
 import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
-import { isScreenContextEnabled } from "../lib/config";
+import { isScreenContextEnabled, tryAutoConnectLocalPc } from "../lib/config";
 import { onPassiveCapture, getLastPassiveCapture, startPassiveCaptureListener } from "../lib/passiveCapture";
 import { withPlayCategoryFallback } from "../lib/playCategories";
 import { Capacitor, registerPlugin } from "@capacitor/core";
@@ -316,7 +316,22 @@ export default function Status() {
       {state.kind === "not-configured" && (
         <div className="card">
           <p className="status-error" style={{ marginBottom: 12 }}>Not set up yet.</p>
-          <button onClick={() => navigate("/setup")}>Go to Setup</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              onClick={async () => {
+                setState({ kind: "loading" });
+                const connected = await tryAutoConnectLocalPc().catch(() => false);
+                if (connected) {
+                  await load();
+                } else {
+                  navigate("/setup");
+                }
+              }}
+            >
+              ⚡ Auto-Connect to Local PC
+            </button>
+            <button className="secondary" onClick={() => navigate("/setup")}>Manual Setup</button>
+          </div>
         </div>
       )}
 
