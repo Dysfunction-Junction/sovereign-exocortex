@@ -109,7 +109,40 @@
 
 ---
 
-## 5. Next Steps
-- **Neo4j Desktop Integration:**
-  - Connect the daemon's background sync queue to local Neo4j Desktop at `neo4j://127.0.0.1:7687` (dbms `fb85c09a-5124-4df7-9128-1bb9cfea6036`).
-  - Wire continuous delta writes in `WorldModelHost.onGraphUpdated` via `graphToCypher`.
+## 5. Neo4j Enterprise Living Brain Synchronization & Zero-Touch Auto-Discovery (Completed)
+
+- **Localhost Zero-Touch Auto-Discovery (`apps/daemon/src/server.ts` & `apps/mobile/src/lib/config.ts`):**
+  - Loopback-only `GET /mobile/local-config` route auto-enrolls `pc:dashboard` with `admin:read` + `admin:write` scopes and issues a 365-day HS256 JWT.
+  - Desktop browsers opening the PC Command Center automatically self-configure against local proxy (:8787) and gateway (:8788) with zero prompts or tokens required.
+  - Manual fallback buttons added to `Status.tsx` and `Setup.tsx`.
+  - Commit: `a268144`.
+
+- **Neo4j Enterprise Runtime Recovery & Historical Ingestion:**
+  - Configured Zulu JRE 21 (`C:\Users\micha\.Neo4jDesktop2\Cache\runtime\zulu21.52.15-ca-jre21.0.12-win_x64`) to resolve Java 8 missing vector module error.
+  - Created [neo4j-sync-cli.ts](file:///C:/Users/micha/projects/sovereign-exocortex/apps/daemon/src/neo4j-sync-cli.ts) and npm script `pnpm --filter @exocortex/daemon neo4j-sync`.
+  - Replayed all 14,155 historical events from `C:\Users\micha\AppData\Local\exocortex.db`, importing 763 unique entities and 1,453 relationships in 2.6 seconds.
+  - Applied secondary labels (`:Person`, `:Project`, `:Device`, `:Topic`, `:Goal`, `:ContextState`) on top of `:Entity` for native color coding in Neo4j Browser and Bloom.
+
+- **Automated Continuous Real-Time Ingestion (`apps/daemon/src/neo4j-sync.ts`):**
+  - Created `Neo4jSyncService` connecting to Neo4j transactional HTTP endpoint (`http://127.0.0.1:7474/db/neo4j/tx/commit`) with Basic auth (`neo4j:codecode`).
+  - Automatically executes parameterized `MERGE` statements with schema constraints.
+  - Wired `attachToHost(defaultWorldModelHost)` on daemon startup: subscribes to `onGraphUpdated` and debounces live subgraphs/pulses directly into Neo4j.
+  - Added REST control routes: `GET /v3/world-model/neo4j/status` (admin:read) and `POST /v3/world-model/neo4j/sync` (admin:write).
+  - All 179 daemon tests pass with 100% pass rate. Commit: `19e3644`.
+
+- **3D Living Brain HUD Badge & Deep-Link Inspection (`apps/mobile/src/pages/LivingBrain.tsx`):**
+  - Added live Neo4j indicator badge in top status HUD (`🟢 Neo4j: 763 nodes`) with continuous polling and one-click `↻` re-sync trigger.
+  - Added `↗ Open in Neo4j Browser` to the node inspector drawer that opens `http://127.0.0.1:7474/browser/?cmd=edit&arg=...` with the pre-filled Cypher query.
+  - All 154 mobile tests pass with 100% pass rate. Commit: `5c8439f`.
+
+---
+
+## 6. Active Ecosystem Processes & Ports
+
+| Subsystem | Port | Process / Status | Notes |
+|---|---|---|---|
+| **Exocortex PC Dashboard** | `:5173` | Vite Dev Server (PID 41948) | PC Command Center & 3D Living Brain (`http://localhost:5173`) |
+| **Exocortex Gateway Daemon** | `:8788` | Node/tsx `exocortexd` (PID 52768) | Gateway, World Model, Pre-Cognitive Engine, Neo4j continuous sync |
+| **Pieces Android Proxy** | `:8787` | S4U Scheduled Task (PID 7288) | Loopback Plan A proxy forwarding to PiecesOS |
+| **Neo4j Enterprise** | `:7687` (Bolt), `:7474` (HTTP) | Zulu JRE 21 (PID 38284) | Neo4j Enterprise 2026.09 ("Exocortex" dbms) |
+| **PiecesOS Native** | `:39300` | `os_server.exe` | Pieces LTM database and REST API |
