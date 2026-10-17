@@ -10,6 +10,7 @@ import {
   ActiveInferenceEngine, LearnedActiveInferenceEngine, LivingLifeGraph, rankInferencePolicies,
 } from "@exocortex/world-model";
 import { ShadowRecorder } from "./shadow-recorder.js";
+import { surfaceTestProposal } from "./dev-tools.js";
 import {
   buildPendingProposals,
   type PendingFetcher,
@@ -346,7 +347,10 @@ test("a shadow proposal cannot be approved after live actuation is enabled", asy
       body: JSON.stringify({ proposal_id: "pol_shadow", action: "approve", nonce: "unused" }),
     });
     assert.equal(res.status, 423, await res.clone().text());
-    assert.match((await res.json()).error, /shadow proposal cannot be approved/);
+    const body = await res.json();
+    assert.match(body.error, /shadow proposal cannot be approved/);
+    assert.equal(body.code, "SHADOW_PROPOSAL_LABEL_ONLY");
+    assert.equal(body.label_endpoint, "/v3/shadow/labels");
     assert.equal(db.getProposal("pol_shadow")?.state, "SURFACED");
   } finally {
     if (prevShadow === undefined) delete process.env.SHADOW;
@@ -355,3 +359,58 @@ test("a shadow proposal cannot be approved after live actuation is enabled", asy
     setDatabase(null);
   }
 });
+
+test("GET /v3/proposals/pending?include_shadow=1 marks shadow: true and requiresBiometric: false", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  device(db, "dev_a", p256());
+  proposal(db, "pol_live", { shadow: 0 });
+  proposal(db, "pol_shadow", { shadow: 1 });
+  setDatabase(db);
+  const reg = fakeRegistry();
+  setPendingFetcherForTest(reg.fetcher);
+  setPendingSpeculatorForTest(reg.speculator);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  const base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+  try {
+    const res = await fetch(`${base}/v3/proposals/pending?include_shadow=1`, {
+      headers: { Authorization: "Bearer " + issueToken("dev_a", SECRET) },
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const live = body.proposals.find((p: any) => p.proposalId === "pol_live");
+    const shadow = body.proposals.find((p: any) => p.proposalId === "pol_shadow");
+    assert.ok(live, "live proposal should be listed");
+    assert.ok(shadow, "shadow proposal should be listed");
+    assert.equal(live.requiresBiometric, true);
+    assert.equal(live.shadow, undefined);
+    assert.equal(shadow.requiresBiometric, false);
+    assert.equal(shadow.shadow, true);
+  } finally {
+    setPendingFetcherForTest(null);
+    setPendingSpeculatorForTest(null);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    setDatabase(null);
+  }
+});
+
+test("surfaceTestProposal respects process.env.SHADOW === '0' and creates shadow: 0 proposal", () => {
+  const prevShadow = process.env.SHADOW;
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    delete process.env.SHADOW;
+    const shadowId = surfaceTestProposal(db);
+    assert.equal(db.getProposal(shadowId)?.shadow, 1, "defaults to shadow: 1 when SHADOW is not '0'");
+
+    process.env.SHADOW = "0";
+    const liveId = surfaceTestProposal(db);
+    assert.equal(db.getProposal(liveId)?.shadow, 0, "creates shadow: 0 when SHADOW is '0'");
+
+    const forcedShadow = surfaceTestProposal(db, Date.now(), 60000, { shadow: true });
+    assert.equal(db.getProposal(forcedShadow)?.shadow, 1, "honors explicit shadow: true override");
+  } finally {
+    if (prevShadow === undefined) delete process.env.SHADOW;
+    else process.env.SHADOW = prevShadow;
+  }
+});
+

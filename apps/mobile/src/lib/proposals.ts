@@ -242,6 +242,18 @@ class ProposalManager {
       item.consumedAt = Date.now();
       // No "wanted" tap label from the phone: the daemon records it itself after a verified approve.
     } else {
+      if (
+        result.upstream_status === 423 &&
+        (result.error?.includes("shadow proposal cannot be approved") ||
+          result.error?.includes("shadow mode") ||
+          (result as { shadow_mode?: boolean }).shadow_mode)
+      ) {
+        // Fallback: If server rejects because proposal is shadow, convert to shadow mode and submit shadow label
+        item.shadow = true;
+        item.state = "pending";
+        this.notify();
+        return this.labelWanted(proposalId);
+      }
       // If rejected upstream as expired or nonce mismatch, lock terminal state
       if (result.upstream_status === 404) item.state = "expired";
       else if (result.upstream_status === 403 || result.upstream_status === 409) item.state = "consumed";
@@ -303,6 +315,17 @@ class ProposalManager {
         latencyMs: Math.max(0, Date.now() - item.receivedAt),
       }).catch(() => {});
     } else {
+      if (
+        result.upstream_status === 423 &&
+        (result.error?.includes("shadow proposal cannot be approved") ||
+          result.error?.includes("shadow mode") ||
+          (result as { shadow_mode?: boolean }).shadow_mode)
+      ) {
+        item.shadow = true;
+        item.state = "pending";
+        this.notify();
+        return this.labelNotWanted(proposalId, reason);
+      }
       item.state = "pending"; // transient upstream failure: the reject did not land, allow retry
     }
     this.notify();

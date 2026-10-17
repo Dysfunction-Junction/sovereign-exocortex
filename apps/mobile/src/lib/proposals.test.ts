@@ -393,4 +393,33 @@ describe("proposalManager", () => {
       })
     );
   });
+
+  it("approve() falls back to labelWanted when server rejects with 423 shadow error", async () => {
+    const liveLookingProp: IncomingProposal = {
+      ...baseProposal,
+      proposalId: "prop_skew_789",
+      shadow: false,
+    };
+    vi.mocked(api.submitProposalApproval).mockResolvedValueOnce({
+      ok: false,
+      status: "release_failed",
+      upstream_status: 423,
+      error: "shadow proposal cannot be approved, even when live actuation is enabled",
+    });
+
+    proposalManager.ingestProposal(liveLookingProp);
+    const result = await proposalManager.approve(liveLookingProp.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("approved");
+    expect(proposalManager.get(liveLookingProp.proposalId)?.shadow).toBe(true);
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      liveLookingProp.proposalId,
+      "wanted",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+      })
+    );
+  });
 });

@@ -1405,8 +1405,33 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         return;
       }
       const shadowProposals = getUnlabeledShadowProposals(db, Date.now());
-      const liveIds = new Set(live.map((p) => p.proposalId));
-      const combined = [...live, ...shadowProposals.filter((sp) => !liveIds.has(sp.proposalId))];
+      const shadowMap = new Map(shadowProposals.map((sp) => [sp.proposalId, sp]));
+      const combined: PendingProposal[] = [];
+      const seen = new Set<string>();
+
+      for (const p of live) {
+        seen.add(p.proposalId);
+        const shadowVersion = shadowMap.get(p.proposalId);
+        if (shadowVersion) {
+          combined.push(shadowVersion);
+        } else if (db.getProposal(p.proposalId)?.shadow === 1) {
+          combined.push({
+            ...p,
+            requiresBiometric: false,
+            shadow: true,
+          });
+        } else {
+          combined.push(p);
+        }
+      }
+
+      for (const sp of shadowProposals) {
+        if (!seen.has(sp.proposalId)) {
+          seen.add(sp.proposalId);
+          combined.push(sp);
+        }
+      }
+
       sendJson(res, 200, { ok: true, proposals: combined });
     } catch (err) {
       sendInternalError(res, "failed to list pending proposals", err);
@@ -1533,8 +1558,10 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
           if (db.getProposal(proposalId)?.shadow === 1) {
             sendJson(res, 423, {
               ok: false,
-              error: "shadow proposal cannot be approved, even when live actuation is enabled",
+              code: "SHADOW_PROPOSAL_LABEL_ONLY",
+              error: "shadow proposal cannot be approved, even when live actuation is enabled: shadow proposals are calibration-only (submit a shadow label via /v3/shadow/labels)",
               shadow_mode: true,
+              label_endpoint: "/v3/shadow/labels",
             });
             return;
           }

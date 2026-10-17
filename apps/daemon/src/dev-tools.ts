@@ -27,7 +27,12 @@ export function enrollV3Device(db: ExocortexDatabase, deviceId: string, label: s
  * Put one harmless SURFACED proposal in the database so the phone has something to approve.
  * The action is the allowlisted read-only diagnostic probe. Returns the proposal id.
  */
-export function surfaceTestProposal(db: ExocortexDatabase, now = Date.now(), ttlMs = 10 * 60 * 1000): string {
+export function surfaceTestProposal(
+  db: ExocortexDatabase,
+  now = Date.now(),
+  ttlMs = 10 * 60 * 1000,
+  options: { shadow?: boolean } = {},
+): string {
   if (!db.getDevice(HOST_DEVICE_ID)) {
     db.registerDevice({
       device_id: HOST_DEVICE_ID,
@@ -42,13 +47,16 @@ export function surfaceTestProposal(db: ExocortexDatabase, now = Date.now(), ttl
   }
   const id = `devtest_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const action = JSON.stringify({ command: "diagnostic_probe", note: "device approval test" });
+  const shadow = options.shadow !== undefined
+    ? (options.shadow ? 1 : 0)
+    : (process.env.SHADOW === "0" ? 0 : 1);
   db.withTransaction(() => {
     const { event } = db.ingestEvent(HOST_DEVICE_ID, {
       event_id: `proposal:${id}`,
       kind: "proposal",
       ts_device: now,
       schema_ver: 1,
-      payload: { proposal_id: id, policy_type: "EPISTEMIC", summary: "Device approval test", shadow: true },
+      payload: { proposal_id: id, policy_type: "EPISTEMIC", summary: "Device approval test", shadow: shadow === 1 },
     });
     db.insertProposal({
       proposal_id: id,
@@ -63,7 +71,7 @@ export function surfaceTestProposal(db: ExocortexDatabase, now = Date.now(), ttl
       risk_term: 0.2,
       ambiguity_term: 0,
       state: "SURFACED",
-      shadow: 1,
+      shadow,
       expires_at: now + ttlMs,
       updated_at: now,
     });
