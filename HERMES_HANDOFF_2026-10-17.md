@@ -77,6 +77,39 @@
 
 ---
 
-## 4. Next Steps
-- Batches 1 & 5 (Hermes Secrets & Agent Mesh MCP Upstream PR), Batches 6 & 7 (Hardware Attestation & Registry App Dev Tooling), Batches 3 & 4 (Empirical App Transitions & Clipboard Intent Extraction), and Shadow Proposal Biometric Review Alignment are 100% complete.
-- Ready for user directive on remaining items or next evolutionary milestones.
+## 4. PC Command Center Web Dashboard & 3D WebGL Living Brain Visualizer
+
+- **Motivation & Goal:**
+  - The phone app contained rich telemetry, anticipation ring, and cognitive HUD interfaces, but the ecosystem lacked a dedicated, responsive PC desktop dashboard.
+  - The user requested an automatic pipeline to visualize collected telemetry in a "living brain" model (prior to Neo4j ingestion).
+- **Architectural Implementation:**
+  - **3D WebGL Force-Directed Brain Canvas (`apps/mobile/src/pages/LivingBrain.tsx`):**
+    - High-performance Three.js + `3d-force-graph` visualization.
+    - Entities colored by semantic type (`PERSON` = orange, `PROJECT` = electric cyan, `DEVICE` = purple, `GOAL` = emerald green, `ROUTINE` = rose, `CONTEXT_STATE` = gold, `TOPIC` = teal, `DOC` = slate).
+    - Node size and outer glowing auras dynamically scaled by real-time spreading activation $(2.5 + \text{activation} \times 10)$.
+    - Directed synapses with particle flows traveling along active edges.
+    - Top floating control bar: live connection indicator, cognitive mode badge, node search with auto-focus camera tweening, category filter chips, and auto-orbiting controls.
+    - Slide-out node inspection drawer: displays entity details, activation gauge, connected neighbors, and a 1-click "Inspect in Neo4j" button with copyable Cypher queries.
+    - Full resource lifecycle: `ResizeObserver` container sizing and WebGL destructor cleanup on unmount.
+  - **PC Command Center Responsive Layout (`apps/mobile/src/components/Layout.tsx` & `index.css`):**
+    - Desktop Topbar Header at $\ge 900\text{px}$: Brand title, PC Command Center subtitle, persistent navigation buttons with active states, and real-time status pill.
+    - Expands viewport container to $1300\text{px}$ on desktop (or $100\%$ viewport height for `/brain`), while preserving the compact layout on mobile screens with bottom `TabBar`.
+    - Smart `RootRedirect`: Inspects enrollment state on load to route unconfigured clients to `/setup` and configured nodes to `/status`.
+  - **Daemon Streaming & Static Asset Serving (`apps/daemon/src/server.ts`):**
+    - `GET /v3/world-model/graph/full`: Exports snapshot of all entities and edges with `admin:read` scope enforcement.
+    - `GET /v3/world-model/graph/live`: Server-Sent Events (SSE) stream broadcasting real-time `pulse` events on each `linkEventToGraph` update, `init` state, and periodic `ping` keep-alives. Hardened with comprehensive disconnect listeners (`req.on("close")`, `res.on("close")`, `aborted`, `error`) to eliminate listener leaks.
+    - Hardened static file serving: Serves built production bundle from `apps/mobile/dist` for `GET`/`HEAD` requests, with path traversal prevention (`relative`, `sep`, `\0` rejection), `X-Content-Type-Options: nosniff`, content-hashed immutable caching for `/assets/`, and SPA HTML fallback.
+- **Verification:**
+  - Full TypeScript typecheck: 0 errors across `@exocortex/daemon` and `@exocortex/mobile`.
+  - Production build: `pnpm --filter @exocortex/mobile build` completes cleanly in $529\text{ms}$.
+  - Daemon tests: 173 / 173 passing ($100\%$).
+  - Mobile tests: 150 / 150 passing ($100\%$).
+  - Autonomous Triad diff review: Addressed all critical security, traversal, memory leak, and disposable connection items.
+  - Commit: `a503988` pushed to `origin/main`.
+
+---
+
+## 5. Next Steps
+- **Neo4j Desktop Integration:**
+  - Connect the daemon's background sync queue to local Neo4j Desktop at `neo4j://127.0.0.1:7687` (dbms `fb85c09a-5124-4df7-9128-1bb9cfea6036`).
+  - Wire continuous delta writes in `WorldModelHost.onGraphUpdated` via `graphToCypher`.
