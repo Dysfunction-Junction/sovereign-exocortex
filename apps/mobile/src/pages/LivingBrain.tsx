@@ -4,9 +4,12 @@ import * as THREE from "three";
 import {
   getFullLivingGraph,
   connectLivingGraphStream,
+  getNeo4jStatus,
+  triggerNeo4jSync,
   type FullLivingGraph,
   type FullGraphEntity,
   type FullGraphEdge,
+  type Neo4jSyncStatusResponse,
 } from "../lib/api";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -55,6 +58,8 @@ export default function LivingBrain() {
   const [searchQuery, setSearchQuery] = useState("");
   const [autoRotate, setAutoRotate] = useState(true);
   const [copiedQuery, setCopiedQuery] = useState(false);
+  const [neo4jStatus, setNeo4jStatus] = useState<Neo4jSyncStatusResponse | null>(null);
+  const [syncingNeo4j, setSyncingNeo4j] = useState(false);
 
   // Load initial full snapshot
   const loadGraph = useCallback(async () => {
@@ -70,9 +75,36 @@ export default function LivingBrain() {
     }
   }, []);
 
+  const refreshNeo4jStatus = useCallback(async () => {
+    try {
+      const res = await getNeo4jStatus();
+      setNeo4jStatus(res);
+    } catch {
+      // Quiet fail if gateway/Neo4j offline
+    }
+  }, []);
+
   useEffect(() => {
     void loadGraph();
-  }, [loadGraph]);
+    void refreshNeo4jStatus();
+    const interval = setInterval(() => {
+      void refreshNeo4jStatus();
+    }, 12000);
+    return () => clearInterval(interval);
+  }, [loadGraph, refreshNeo4jStatus]);
+
+  const handleTriggerNeo4jSync = async () => {
+    setSyncingNeo4j(true);
+    try {
+      const res = await triggerNeo4jSync();
+      setNeo4jStatus(res.status);
+      await loadGraph();
+    } catch (err) {
+      console.error("Failed to sync Neo4j:", err);
+    } finally {
+      setSyncingNeo4j(false);
+    }
+  };
 
   // Connect live SSE streaming
   useEffect(() => {
@@ -356,6 +388,50 @@ export default function LivingBrain() {
               {lastPulse}
             </span>
           )}
+
+          {/* Neo4j Continuous Sync Badge */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            background: neo4jStatus?.connected ? "rgba(16, 185, 129, 0.12)" : "rgba(148, 163, 184, 0.12)",
+            border: `1px solid ${neo4jStatus?.connected ? "rgba(16, 185, 129, 0.3)" : "rgba(148, 163, 184, 0.2)"}`,
+            borderRadius: "10px",
+            padding: "3px 8px",
+            fontSize: "11px",
+            fontWeight: 600,
+            color: neo4jStatus?.connected ? "#34d399" : "#94a3b8",
+          }}>
+            <span style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              backgroundColor: neo4jStatus?.connected ? "#10b981" : "#64748b",
+              boxShadow: neo4jStatus?.connected ? "0 0 6px #10b981" : "none",
+            }} />
+            <span>
+              {neo4jStatus?.connected
+                ? `Neo4j: ${neo4jStatus.nodeCount} nodes`
+                : "Neo4j Offline"}
+            </span>
+            <button
+              type="button"
+              onClick={handleTriggerNeo4jSync}
+              disabled={syncingNeo4j}
+              title="Force sync to Neo4j"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: syncingNeo4j ? "#38bdf8" : "#94a3b8",
+                cursor: "pointer",
+                padding: "0 2px",
+                fontSize: "12px",
+                lineHeight: 1,
+              }}
+            >
+              {syncingNeo4j ? "…" : "↻"}
+            </button>
+          </div>
         </div>
 
         {/* Right: Controls & Search */}
@@ -608,24 +684,47 @@ export default function LivingBrain() {
             }}>
               {cypherQuery}
             </pre>
-            <button
-              type="button"
-              onClick={handleCopyCypher}
-              style={{
-                width: "100%",
-                background: copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.3)",
-                border: `1px solid ${copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.5)"}`,
-                color: "#ffffff",
-                padding: "6px 10px",
-                borderRadius: "8px",
-                fontSize: "11px",
-                fontWeight: 600,
-                cursor: "pointer",
-                transition: "all 160ms ease",
-              }}
-            >
-              {copiedQuery ? "✓ Copied to Clipboard" : "Copy Cypher Query"}
-            </button>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <a
+                href={`http://127.0.0.1:7474/browser/?cmd=edit&arg=${encodeURIComponent(cypherQuery)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: "block",
+                  textAlign: "center",
+                  textDecoration: "none",
+                  background: "rgba(16, 185, 129, 0.2)",
+                  border: "1px solid rgba(16, 185, 129, 0.4)",
+                  color: "#34d399",
+                  padding: "7px 10px",
+                  borderRadius: "8px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "all 160ms ease",
+                }}
+              >
+                ↗ Open in Neo4j Browser
+              </a>
+              <button
+                type="button"
+                onClick={handleCopyCypher}
+                style={{
+                  width: "100%",
+                  background: copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.3)",
+                  border: `1px solid ${copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.5)"}`,
+                  color: "#ffffff",
+                  padding: "6px 10px",
+                  borderRadius: "8px",
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  transition: "all 160ms ease",
+                }}
+              >
+                {copiedQuery ? "✓ Copied to Clipboard" : "Copy Cypher Query"}
+              </button>
+            </div>
           </div>
         </div>
       )}

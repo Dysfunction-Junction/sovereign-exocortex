@@ -791,3 +791,32 @@ export function connectLivingGraphStream(handlers: GraphStreamHandlers): () => v
   };
 }
 
+export interface Neo4jSyncStatusResponse {
+  ok: boolean;
+  enabled: boolean;
+  connected: boolean;
+  lastSyncAt: string | null;
+  nodeCount: number;
+  edgeCount: number;
+  lastError: string | null;
+}
+
+export async function getNeo4jStatus(): Promise<Neo4jSyncStatusResponse> {
+  const res = await authedFetch("/v3/world-model/neo4j/status");
+  if (!res.ok) {
+    throw new Error(`Failed to query Neo4j status: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<Neo4jSyncStatusResponse>;
+}
+
+export async function triggerNeo4jSync(): Promise<{ ok: boolean; status: Neo4jSyncStatusResponse }> {
+  const res = await authedFetch("/v3/world-model/neo4j/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to trigger Neo4j sync: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ ok: boolean; status: Neo4jSyncStatusResponse }>;
+}
+
