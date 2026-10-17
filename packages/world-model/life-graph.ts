@@ -17,7 +17,8 @@ export type EntityType =
   | 'ROUTINE'
   | 'CONTEXT_STATE'
   | 'TOPIC'
-  | 'DOC';
+  | 'DOC'
+  | 'INTENT';
 
 export type RelationType =
   | 'WORKS_ON'
@@ -95,6 +96,13 @@ export class LivingLifeGraph {
    */
   public getEntity(id: string): GraphEntity | undefined {
     return this.entities.get(id);
+  }
+
+  /**
+   * Retrieve an edge by id.
+   */
+  public getEdge(id: string): GraphEdge | undefined {
+    return this.edges.get(id);
   }
 
   /**

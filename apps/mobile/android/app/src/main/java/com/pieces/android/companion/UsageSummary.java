@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.util.Log;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -17,6 +18,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * Turns Android's app-usage events into one compact telemetry event per sync window.
@@ -78,6 +81,8 @@ final class UsageSummary {
         Map<String, Integer> opens = new HashMap<>();
         int switches = 0;
         String lastPkg = null;
+        long lastResumedAt = 0L;
+        List<JSONObject> recentTransitions = new ArrayList<>();
 
         UsageEvents events = usm.queryEvents(start, end);
         UsageEvents.Event ev = new UsageEvents.Event();
@@ -88,10 +93,29 @@ final class UsageSummary {
             int type = ev.getEventType();
             if (type == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                 if (!resumedAt.containsKey(pkg)) {
-                    resumedAt.put(pkg, ev.getTimeStamp());
+                    long nowTs = ev.getTimeStamp();
+                    resumedAt.put(pkg, nowTs);
                     opens.put(pkg, (opens.containsKey(pkg) ? opens.get(pkg) : 0) + 1);
-                    if (lastPkg != null && !lastPkg.equals(pkg)) switches++;
+                    if (lastPkg != null && !lastPkg.equals(pkg) && !lastPkg.equals(ctx.getPackageName()) && !pkg.equals(ctx.getPackageName())) {
+                        switches++;
+                        long dwellMs = lastResumedAt > 0L ? Math.max(0L, nowTs - lastResumedAt) : 0L;
+                        try {
+                            JSONObject tr = new JSONObject();
+                            tr.put("from", lastPkg);
+                            tr.put("to", pkg);
+                            tr.put("dwell_ms", dwellMs);
+                            tr.put("ts", nowTs);
+                            Calendar cal = Calendar.getInstance();
+                            cal.setTimeInMillis(nowTs);
+                            tr.put("hour", cal.get(Calendar.HOUR_OF_DAY));
+                            recentTransitions.add(tr);
+                            if (recentTransitions.size() > 30) {
+                                recentTransitions.remove(0);
+                            }
+                        } catch (Exception ignored) {}
+                    }
                     lastPkg = pkg;
+                    lastResumedAt = nowTs;
                 }
             } else if (type == UsageEvents.Event.MOVE_TO_BACKGROUND) {
                 Long from = resumedAt.remove(pkg);
@@ -128,7 +152,11 @@ final class UsageSummary {
                 .append(", ").append(opens.containsKey(e.getKey()) ? opens.get(e.getKey()) : 1).append(" opens\n");
         }
         sb.append("Total foreground ").append(fmt(total));
-        NativeTelemetrySync.queueScreenCapture(ctx, "android.usage", "App usage summary", sb.toString());
+        JSONArray transitions = new JSONArray();
+        for (JSONObject tr : recentTransitions) {
+            transitions.put(tr);
+        }
+        NativeTelemetrySync.queueAppTransitions(ctx, transitions, sb.toString(), switches);
         return "queued";
     }
 

@@ -40,6 +40,14 @@ export interface ContextualSignals {
   thermalStatus?: 'nominal' | 'elevated' | 'throttling' | string;
   physicalState?: 'in_pocket' | 'face_down' | 'desk_ambient' | 'handheld' | 'at_ear' | 'unknown' | string;
   networkMetered?: boolean;
+  appTransitions?: Array<{ from: string; to: string; dwell_ms?: number; ts?: number; hour?: number }>;
+  clipboardIntent?: {
+    entity_type: string;
+    value: string;
+    snippet?: string;
+    action?: string;
+    ts?: number;
+  };
 }
 
 export interface ProposalEnvelope {
@@ -228,9 +236,17 @@ export class CognitiveModeGate {
       return this.currentMode;
     }
 
-    // 6. High Velocity Execution: Rapid interaction velocity (>15 actions/min) or low idle time
+    // 6. High Velocity Execution: Rapid interaction velocity (>15 actions/min), rapid recent app transitions, or low idle time
     const velocity = effective.recentInteractionVelocity ?? 0;
-    if (velocity >= 15 || ((effective.idleDurationMs ?? 0) < 5000 && effective.screenState !== 'OFF')) {
+    const nowTs = effective.timestamp ?? Date.now();
+    const recentTransitions = Array.isArray(effective.appTransitions)
+      ? effective.appTransitions.filter((t) => t && typeof t.dwell_ms === 'number' && (!t.ts || nowTs - t.ts < 15 * 60 * 1000))
+      : [];
+    const hasRapidSwitches =
+      recentTransitions.length >= 3 &&
+      recentTransitions.filter((t) => (t.dwell_ms ?? 0) < 10000).length >= 2;
+
+    if (velocity >= 15 || hasRapidSwitches || ((effective.idleDurationMs ?? 0) < 5000 && effective.screenState !== 'OFF')) {
       this.currentMode = 'HIGH_VELOCITY_EXECUTION';
       return this.currentMode;
     }
@@ -406,6 +422,40 @@ export class CognitiveModeGate {
         confidence: proposal.confidence,
         evaluatedAt: now,
       };
+    }
+
+    // Clipboard Intent Surface: If proposal matches an active fresh clipboard intent, prioritize immediate glass modal
+    const clipIntent = effectiveSignals.clipboardIntent;
+    const isClipIntentFresh = Boolean(clipIntent && (!clipIntent.ts || now - clipIntent.ts < 60_000));
+    if (
+      isClipIntentFresh &&
+      clipIntent &&
+      typeof clipIntent.action === 'string' &&
+      !isThrottling &&
+      effectiveSignals.screenState !== 'OFF'
+    ) {
+      const clipAct = clipIntent.action.trim().toLowerCase();
+      const propCmd = typeof (proposal.suggestedAction as Record<string, unknown> | null)?.command === 'string'
+        ? ((proposal.suggestedAction as Record<string, unknown>).command as string).trim().toLowerCase()
+        : '';
+      const isExactMatch = clipAct.length > 0 && (
+        propCmd === clipAct ||
+        (proposal.category === 'clipboard_action' && proposal.candidateId.toLowerCase() === clipAct)
+      );
+
+      // Do not breach safety: proposal must be low risk or have high urgency
+      const isSafeOrUrgent = proposal.estimatedRisk <= this.config.autoExecuteMaxRisk || urgency >= 0.8;
+
+      if (isExactMatch && isSafeOrUrgent) {
+        return {
+          action: 'ALLOW_PROMPT',
+          mode: activeMode,
+          reason: `Clipboard Intent Surface: Immediate match for ${clipIntent.action} (${clipIntent.entity_type}).`,
+          targetDelivery: 'GLASS_MODAL',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
     }
 
     switch (activeMode) {
@@ -642,5 +692,7 @@ export function contextToSignals(ctx: PredictionContext | undefined): Contextual
     physicalState: (ctx.physical_surface?.state && ctx.physical_surface.state !== 'unknown' ? ctx.physical_surface.state : undefined) ??
       (ctx.ambient?.physical_state && ctx.ambient.physical_state !== 'unknown' ? ctx.ambient.physical_state : undefined),
     networkMetered: ctx.network_telemetry?.connected === false ? undefined : (ctx.network_telemetry?.metered ?? ctx.device?.metered),
+    appTransitions: ((ctx as Record<string, unknown>).app_transitions ?? (ctx as Record<string, unknown>).transitions) as ContextualSignals['appTransitions'],
+    clipboardIntent: (ctx as Record<string, unknown>).clipboard_intent as ContextualSignals['clipboardIntent'],
   };
 }

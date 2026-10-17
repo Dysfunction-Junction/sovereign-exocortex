@@ -647,6 +647,81 @@ public class NativeTelemetrySync {
         });
     }
 
+    /**
+     * Queues an extracted on-device clipboard intent event.
+     */
+    public static void queueClipboardIntent(Context context, String entityType, String value, String previewSnippet, String targetAction) {
+        final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        final long eventTime = System.currentTimeMillis();
+        final String safeType = truncate(entityType, 64);
+        final String safeValue = truncate(value, 256);
+        final String safeSnippet = truncate(previewSnippet, 128);
+        final String safeAction = truncate(targetAction, 64);
+
+        DISK_EXECUTOR.execute((CaptureTask) () -> {
+            try {
+                JSONObject event = new JSONObject();
+                event.put("id", "native-clip-" + eventTime + "-" + UUID.randomUUID().toString().substring(0, 8));
+                event.put("type", "system_telemetry");
+                event.put("screen", "background");
+                event.put("package", "android.clipboard");
+                event.put("app_label", "Clipboard");
+                event.put("timestamp", formatIsoUtc(eventTime));
+                event.put("event", "CLIPBOARD_INTENT");
+
+                JSONObject clipData = new JSONObject();
+                clipData.put("entity_type", safeType);
+                clipData.put("value", safeValue);
+                clipData.put("snippet", safeSnippet);
+                clipData.put("action", safeAction);
+                event.put("clipboard_intent", clipData);
+
+                event.put("telemetry", "Clipboard intent: " + safeType + " (" + safeAction + ") - " + safeSnippet);
+                event.put("triaged", false);
+
+                appendEvent(appContext, event);
+                flushAsync(appContext);
+            } catch (Exception e) {
+                droppedEventsCount.incrementAndGet();
+                Log.e(TAG, "Failed to queue clipboard intent: " + e.getClass().getSimpleName());
+            }
+        });
+    }
+
+    /**
+     * Queues an empirical app transitions batch event from UsageStatsManager.
+     */
+    public static void queueAppTransitions(Context context, JSONArray transitions, String summaryText, int switchCount) {
+        final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        final long eventTime = System.currentTimeMillis();
+        final String safeSummary = truncate(summaryText, MAX_SINGLE_TEXT_CHARS);
+
+        DISK_EXECUTOR.execute((CaptureTask) () -> {
+            try {
+                JSONObject event = new JSONObject();
+                event.put("id", "native-usage-" + eventTime + "-" + UUID.randomUUID().toString().substring(0, 8));
+                event.put("type", "system_telemetry");
+                event.put("screen", "background");
+                event.put("package", "android.usage");
+                event.put("app_label", "App Usage");
+                event.put("timestamp", formatIsoUtc(eventTime));
+                event.put("event", "APP_TRANSITIONS");
+                event.put("switches", switchCount);
+                if (transitions != null && transitions.length() > 0) {
+                    event.put("transitions", transitions);
+                }
+                event.put("telemetry", safeSummary);
+                event.put("triaged", false);
+
+                appendEvent(appContext, event);
+                flushAsync(appContext);
+            } catch (Exception e) {
+                droppedEventsCount.incrementAndGet();
+                Log.e(TAG, "Failed to queue app transitions: " + e.getClass().getSimpleName());
+            }
+        });
+    }
+
     private static String truncate(String val, int max) {
         if (val == null) return "";
         val = val.trim();

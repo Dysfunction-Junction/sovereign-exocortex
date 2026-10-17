@@ -4,6 +4,7 @@ import {
   GraphEventLinker,
   linkEventToGraph,
   slugify,
+  hashValue,
   type LinkableEvent,
 } from './graph-linker.js';
 
@@ -302,6 +303,63 @@ describe('GraphEventLinker (Graph-to-Event Linkage)', () => {
       expect(doc?.properties?.physical_state).toBe('desk_ambient');
       expect(doc?.properties?.network_metered).toBe(false);
       expect(typeof doc?.properties?.physical_state_expires_at).toBe('number');
+    });
+
+    it('resolves on-device clipboard intent into INTENT entity and recommends action', () => {
+      const event: LinkableEvent = {
+        event_id: 'clip_ev_99',
+        clipboard_intent: {
+          entity_type: 'tracking_number',
+          value: '1Z9999999999999999',
+          snippet: 'UPS 1Z9999999999999999',
+          action: 'track_package',
+        },
+      };
+
+      const context = linkEventToGraph(event, graph, { autoCreate: true });
+
+      const expectedIntentId = `intent_tracking_number_${hashValue('1Z9999999999999999')}`;
+      const intentEntity = graph.getEntity(expectedIntentId);
+      expect(intentEntity).toBeDefined();
+      expect(intentEntity?.type).toBe('INTENT');
+      expect(intentEntity?.properties?.action).toBe('track_package');
+      expect(intentEntity?.activation).toBe(1.0);
+
+      expect(context.matchedEntities.map((e) => e.id)).toContain(expectedIntentId);
+      expect(context.recommendedActions[0]).toEqual({
+        actionType: 'EXECUTE_INTENT',
+        targetId: expectedIntentId,
+        reason: 'Clipboard intent: track_package for tracking_number',
+        confidence: 0.95,
+      });
+    });
+
+    it('resolves empirical app transitions into CONTEXT_STATE entities with TRANSITIONS_TO edge', () => {
+      const event: LinkableEvent = {
+        event_id: 'usage_trans_01',
+        app_transitions: [
+          {
+            from: 'com.slack',
+            to: 'com.github.android',
+            dwell_ms: 15000,
+            ts: 1_700_000_000_000,
+          },
+        ],
+      };
+
+      const context = linkEventToGraph(event, graph, { autoCreate: true });
+
+      const fromNode = graph.getEntity('app_com_slack');
+      const toNode = graph.getEntity('app_com_github_android');
+      expect(fromNode).toBeDefined();
+      expect(toNode).toBeDefined();
+      expect(fromNode?.type).toBe('CONTEXT_STATE');
+      expect(toNode?.type).toBe('CONTEXT_STATE');
+
+      const edge = graph.getEdge('app_com_slack:TRANSITIONS_TO:app_com_github_android');
+      expect(edge).toBeDefined();
+      expect(edge?.relation).toBe('TRANSITIONS_TO');
+      expect(edge?.observedCount).toBe(1);
     });
   });
 });

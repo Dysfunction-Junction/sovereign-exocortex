@@ -20,6 +20,21 @@ export interface ExtractedEntityInput {
   confidence?: number;
 }
 
+export interface ClipboardIntentInput {
+  entity_type: string;
+  value: string;
+  snippet?: string;
+  action?: string;
+}
+
+export interface AppTransitionInput {
+  from: string;
+  to: string;
+  dwell_ms?: number;
+  ts?: number;
+  hour?: number;
+}
+
 export interface LinkableEvent {
   event_id?: string;
   kind?: string;
@@ -36,6 +51,8 @@ export interface LinkableEvent {
   physical_surface?: Record<string, unknown>;
   network_telemetry?: Record<string, unknown>;
   hardware_telemetry?: Record<string, unknown>;
+  clipboard_intent?: ClipboardIntentInput;
+  app_transitions?: AppTransitionInput[];
 }
 
 export interface ActivatedEntityScore {
@@ -76,6 +93,15 @@ export function slugify(s: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+}
+
+export function hashValue(val: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < val.length; i++) {
+    hash ^= val.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
 }
 
 function parsePayload(event: LinkableEvent): Record<string, unknown> {
@@ -492,6 +518,111 @@ export function linkEventToGraph(
     }
   }
 
+  // 4f. Resolve on-device clipboard intent (Track 4)
+  const isRecordObj = (x: unknown): x is Record<string, unknown> =>
+    Boolean(x && typeof x === 'object' && !Array.isArray(x));
+
+  const clipObj = (event.clipboard_intent ??
+    (isRecordObj(payload.clipboard_intent)
+      ? (payload.clipboard_intent as Record<string, unknown>)
+      : null)) as ClipboardIntentInput | null;
+
+  let matchedIntentEntityId: string | undefined;
+
+  if (clipObj && typeof clipObj.entity_type === 'string' && typeof clipObj.value === 'string') {
+    const rawVal = clipObj.value.trim();
+    const entType = clipObj.entity_type.trim().toLowerCase();
+    if (rawVal) {
+      const intentHash = hashValue(rawVal);
+      const intentSlug = slugify(entType);
+      const intentId = `intent_${intentSlug}_${intentHash}`;
+      let intentEntity = graph.getEntity(intentId);
+      if (!intentEntity && autoCreate) {
+        const isSensitive = entType === 'phone' || entType === 'email';
+        const safeStoredVal = isSensitive && !rawVal.startsWith('sha256:') ? `sha256:${intentHash}` : rawVal;
+        const safeName = typeof clipObj.snippet === 'string' && clipObj.snippet.trim()
+          ? clipObj.snippet.trim()
+          : `${clipObj.entity_type}: ${rawVal.slice(0, 48)}`;
+
+        intentEntity = graph.addEntity({
+          id: intentId,
+          type: 'INTENT',
+          name: safeName,
+          properties: {
+            origin: 'android_clipboard',
+            entity_type: entType,
+            value: safeStoredVal,
+            action: typeof clipObj.action === 'string' ? clipObj.action : 'view_intent',
+          },
+          activation: 1.0,
+          lastActive: timestamp,
+        });
+      }
+      if (intentEntity) {
+        matchedIntentEntityId = intentEntity.id;
+        recordMatch(intentEntity);
+        if (docEntity) {
+          graph.addEdge(docEntity.id, intentEntity.id, 'REFERENCES', 0.9);
+        }
+      }
+    }
+  }
+
+  // 4g. Resolve empirical app transitions (Track 3)
+  const rawTransitions = (
+    Array.isArray(event.app_transitions)
+      ? event.app_transitions
+      : Array.isArray(payload.transitions)
+        ? payload.transitions
+        : []
+  ) as AppTransitionInput[];
+
+  const seenTransitionsInEvent = new Set<string>();
+  for (const tr of rawTransitions) {
+    if (!tr || typeof tr.from !== 'string' || typeof tr.to !== 'string') continue;
+    const fromPkg = tr.from.trim();
+    const toPkg = tr.to.trim();
+    if (!fromPkg || !toPkg || fromPkg === toPkg) continue;
+
+    const pairKey = `${fromPkg}->${toPkg}`;
+    if (seenTransitionsInEvent.has(pairKey)) continue;
+    seenTransitionsInEvent.add(pairKey);
+
+    const fromId = `app_${slugify(fromPkg)}`;
+    const toId = `app_${slugify(toPkg)}`;
+
+    let fromEntity = graph.getEntity(fromId);
+    if (!fromEntity && autoCreate) {
+      fromEntity = graph.addEntity({
+        id: fromId,
+        type: 'CONTEXT_STATE',
+        name: fromPkg,
+        properties: { origin: 'android_usage', package: fromPkg },
+        activation: 0.8,
+        lastActive: tr.ts ?? timestamp,
+      });
+    }
+
+    let toEntity = graph.getEntity(toId);
+    if (!toEntity && autoCreate) {
+      toEntity = graph.addEntity({
+        id: toId,
+        type: 'CONTEXT_STATE',
+        name: toPkg,
+        properties: { origin: 'android_usage', package: toPkg },
+        activation: 0.9,
+        lastActive: tr.ts ?? timestamp,
+      });
+    }
+
+    if (fromEntity && toEntity) {
+      recordMatch(fromEntity);
+      recordMatch(toEntity);
+      const dwellWeight = typeof tr.dwell_ms === 'number' && tr.dwell_ms > 5000 ? 0.85 : 0.65;
+      graph.addEdge(fromEntity.id, toEntity.id, 'TRANSITIONS_TO', dwellWeight);
+    }
+  }
+
   // 5. Stimulate matched entities
   for (const entity of matchedEntities) {
     entity.lastActive = Math.max(entity.lastActive ?? 0, timestamp);
@@ -541,6 +672,16 @@ export function linkEventToGraph(
 
   // 9. Recommended actions
   const recommendedActions: RecommendedAction[] = [];
+
+  if (matchedIntentEntityId && clipObj && typeof clipObj.action === 'string' && clipObj.action.trim()) {
+    const entType = typeof clipObj.entity_type === 'string' ? clipObj.entity_type.trim() : 'item';
+    recommendedActions.push({
+      actionType: 'EXECUTE_INTENT',
+      targetId: matchedIntentEntityId,
+      reason: `Clipboard intent: ${clipObj.action} for ${entType}`,
+      confidence: 0.95,
+    });
+  }
 
   for (const pred of predictedNextStates.slice(0, 3)) {
     recommendedActions.push({

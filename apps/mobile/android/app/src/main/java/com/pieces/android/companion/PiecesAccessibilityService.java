@@ -2,6 +2,9 @@ package com.pieces.android.companion;
 
 import android.accessibilityservice.AccessibilityService;
 import android.app.KeyguardManager;
+import android.content.ClipData;
+import android.content.ClipDescription;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
@@ -25,6 +28,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class PiecesAccessibilityService extends AccessibilityService {
 
@@ -69,6 +74,17 @@ public class PiecesAccessibilityService extends AccessibilityService {
         void onCapture(String packageName, String text);
     }
     public static volatile PassiveCaptureListener passiveListener;
+
+    private ClipboardManager clipboardManager;
+    private ClipboardManager.OnPrimaryClipChangedListener clipListener;
+    private String lastClipContentHash = null;
+
+    private static final Pattern UPS_TRACKING_PATTERN = Pattern.compile("\\b(1Z[0-9A-Z]{16})\\b", Pattern.CASE_INSENSITIVE);
+    private static final Pattern USPS_TRACKING_PATTERN = Pattern.compile("\\b(9[234]\\d{20}|94\\d{20}|70\\d{18})\\b");
+    private static final Pattern FEDEX_TRACKING_PATTERN = Pattern.compile("\\b(\\d{12}|\\d{15}|\\d{20}|\\d{22})\\b");
+    private static final Pattern URL_PATTERN = Pattern.compile("^(https?://[\\w\\-\\.]+(?:[/?#]\\S*)?)$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern EMAIL_PATTERN = Pattern.compile("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    private static final Pattern PHONE_PATTERN = Pattern.compile("^(\\+?[0-9\\s\\-\\(\\)]{10,20})$");
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -479,10 +495,141 @@ public class PiecesAccessibilityService extends AccessibilityService {
         }
     };
 
+    private void initClipboardListener() {
+        try {
+            clipboardManager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (clipboardManager != null) {
+                clipListener = this::handlePrimaryClipChanged;
+                clipboardManager.addPrimaryClipChangedListener(clipListener);
+            }
+        } catch (Throwable t) {
+            // Clipboard service might be unavailable in restricted environments
+        }
+    }
+
+    private void cleanupClipboardListener() {
+        try {
+            if (clipboardManager != null && clipListener != null) {
+                clipboardManager.removePrimaryClipChangedListener(clipListener);
+                clipListener = null;
+            }
+        } catch (Throwable t) {
+            // Ignore cleanup failures
+        }
+    }
+
+    private static boolean isCredentialOrSecret(String text) {
+        if (text == null) return false;
+        String trimmed = text.trim();
+        // Common token / key prefixes
+        if (trimmed.startsWith("ghp_") || trimmed.startsWith("gho_") || trimmed.startsWith("ghu_")
+                || trimmed.startsWith("github_pat_") || trimmed.startsWith("sk-") || trimmed.startsWith("xoxb-")
+                || trimmed.startsWith("Bearer ") || trimmed.contains("BEGIN PRIVATE KEY")
+                || trimmed.contains("BEGIN RSA PRIVATE KEY") || trimmed.startsWith("eyJh")) {
+            return true;
+        }
+        // High-entropy token or password pattern (e.g. 18+ alphanumeric characters with symbols and no spaces)
+        if (trimmed.length() >= 18 && !trimmed.contains(" ") && !trimmed.contains("\n")
+                && trimmed.matches("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^a-zA-Z0-9]).+$")) {
+            return true;
+        }
+        return false;
+    }
+
+    private void handlePrimaryClipChanged() {
+        if (!isScreenContextEnabled() || isLocked()) return;
+        if (clipboardManager == null) return;
+        try {
+            if (!clipboardManager.hasPrimaryClip()) return;
+
+            ClipDescription desc = clipboardManager.getPrimaryClipDescription();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && desc != null) {
+                if (desc.getExtras() != null && desc.getExtras().getBoolean(ClipDescription.EXTRA_IS_SENSITIVE, false)) {
+                    return; // Dropped: sensitive content from password manager or secure field
+                }
+            }
+
+            ClipData clip = clipboardManager.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return;
+
+            CharSequence cs = clip.getItemAt(0).getText();
+            if (cs == null) {
+                cs = clip.getItemAt(0).coerceToText(this);
+            }
+            if (cs == null) return;
+            String text = cs.toString().trim();
+            if (text.isEmpty() || text.length() > 5000) return;
+
+            // Reject credentials / secrets first
+            if (isCredentialOrSecret(text)) return;
+
+            // Deduplicate repeat triggers
+            String textHash = hashPii(text);
+            if (textHash.equals(lastClipContentHash)) return;
+            lastClipContentHash = textHash;
+
+            // Check deterministic patterns
+            Matcher ups = UPS_TRACKING_PATTERN.matcher(text);
+            if (ups.find()) {
+                String tracking = ups.group(1);
+                NativeTelemetrySync.queueClipboardIntent(this, "tracking_number", tracking, "UPS " + tracking, "track_package");
+                return;
+            }
+
+            Matcher usps = USPS_TRACKING_PATTERN.matcher(text);
+            if (usps.find()) {
+                String tracking = usps.group(1);
+                NativeTelemetrySync.queueClipboardIntent(this, "tracking_number", tracking, "USPS " + tracking, "track_package");
+                return;
+            }
+
+            Matcher fedex = FEDEX_TRACKING_PATTERN.matcher(text);
+            if (fedex.find() && (text.length() == 12 || text.length() == 15 || text.length() == 20 || text.length() == 22)) {
+                String tracking = fedex.group(1);
+                NativeTelemetrySync.queueClipboardIntent(this, "tracking_number", tracking, "FedEx " + tracking, "track_package");
+                return;
+            }
+
+            Matcher url = URL_PATTERN.matcher(text);
+            if (url.matches()) {
+                String snippet = text.length() > 48 ? text.substring(0, 48) + "..." : text;
+                NativeTelemetrySync.queueClipboardIntent(this, "url", text, snippet, "open_link");
+                return;
+            }
+
+            Matcher email = EMAIL_PATTERN.matcher(text);
+            if (email.matches()) {
+                NativeTelemetrySync.queueClipboardIntent(this, "email", hashPii(text), "[REDACTED_EMAIL]", "compose_email");
+                return;
+            }
+
+            Matcher phone = PHONE_PATTERN.matcher(text);
+            if (phone.matches()) {
+                NativeTelemetrySync.queueClipboardIntent(this, "phone", hashPii(text), "[REDACTED_PHONE]", "dial_number");
+                return;
+            }
+
+            // Fallback to on-device TextClassifier entity & suggestion extraction
+            ClassifierResult result = extractEntitiesAndSuggestions(text);
+            if (result != null && result.entities != null && result.entities.length() > 0) {
+                JSONObject ent = result.entities.getJSONObject(0);
+                String entityType = ent.optString("type", "text");
+                String value = ent.optString("value", "");
+                String action = mapEntityToAction(entityType);
+                if (action == null) action = "view_details";
+                String snippet = value.length() > 48 ? value.substring(0, 48) + "..." : value;
+                NativeTelemetrySync.queueClipboardIntent(this, entityType, value, snippet, action);
+            }
+        } catch (Throwable t) {
+            // Log or ignore non-fatal clipboard extraction issues
+        }
+    }
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
         isRunning = true;
+        initClipboardListener();
         NativeHardwareTelemetry.initSensors(this);
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
@@ -498,6 +645,7 @@ public class PiecesAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         isRunning = false;
+        cleanupClipboardListener();
         NativeHardwareTelemetry.stopSensors();
         syncHandler.removeCallbacks(periodicSyncRunnable);
         super.onDestroy();

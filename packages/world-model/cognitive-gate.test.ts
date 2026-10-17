@@ -439,4 +439,105 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     // Offline network does not emit metered: false
     expect(signals.networkMetered).toBeUndefined();
   });
+
+  it('classifies HIGH_VELOCITY_EXECUTION when rapid app transitions occur', () => {
+    const now = Date.now();
+    // With prolonged idle (60s), normally MAINTENANCE_SURFACING; rapid transitions trigger HIGH_VELOCITY
+    const mode = gate.classifyMode({
+      screenState: 'ON',
+      idleDurationMs: 60_000,
+      timestamp: now,
+      appTransitions: [
+        { from: 'com.slack', to: 'com.chrome', dwell_ms: 3000, ts: now - 5000 },
+        { from: 'com.chrome', to: 'com.github.android', dwell_ms: 4000, ts: now - 2000 },
+        { from: 'com.github.android', to: 'com.slack', dwell_ms: 12000, ts: now },
+      ],
+    });
+    expect(mode).toBe('HIGH_VELOCITY_EXECUTION');
+
+    // Negative case 1: only 2 transitions (below 3-switch threshold)
+    const mode2 = gate.classifyMode({
+      screenState: 'ON',
+      idleDurationMs: 60_000,
+      timestamp: now,
+      appTransitions: [
+        { from: 'com.slack', to: 'com.chrome', dwell_ms: 3000, ts: now - 5000 },
+        { from: 'com.chrome', to: 'com.github.android', dwell_ms: 4000, ts: now - 2000 },
+      ],
+    });
+    expect(mode2).toBe('MAINTENANCE_SURFACING');
+
+    // Negative case 2: slow switches (dwells > 10s)
+    const mode3 = gate.classifyMode({
+      screenState: 'ON',
+      idleDurationMs: 60_000,
+      timestamp: now,
+      appTransitions: [
+        { from: 'com.slack', to: 'com.chrome', dwell_ms: 15000, ts: now - 35000 },
+        { from: 'com.chrome', to: 'com.github.android', dwell_ms: 20000, ts: now - 15000 },
+        { from: 'com.github.android', to: 'com.slack', dwell_ms: 12000, ts: now },
+      ],
+    });
+    expect(mode3).toBe('MAINTENANCE_SURFACING');
+
+    // Negative case 3: stale transitions (>15 mins old)
+    const mode4 = gate.classifyMode({
+      screenState: 'ON',
+      idleDurationMs: 60_000,
+      timestamp: now,
+      appTransitions: [
+        { from: 'com.slack', to: 'com.chrome', dwell_ms: 3000, ts: now - 20 * 60 * 1000 },
+        { from: 'com.chrome', to: 'com.github.android', dwell_ms: 4000, ts: now - 18 * 60 * 1000 },
+        { from: 'com.github.android', to: 'com.slack', dwell_ms: 5000, ts: now - 16 * 60 * 1000 },
+      ],
+    });
+    expect(mode4).toBe('MAINTENANCE_SURFACING');
+  });
+
+  it('prioritizes immediate GLASS_MODAL delivery when proposal matches active clipboard intent', () => {
+    const now = Date.now();
+    const proposal: ProposalEnvelope = {
+      id: 'prop_track_pkg',
+      candidateId: 'cand_track_package',
+      summary: 'Track package UPS 1Z999',
+      urgency: 0.3, // casual urgency
+      confidence: 0.85,
+      estimatedRisk: 0.1,
+      suggestedAction: {
+        command: 'track_package',
+      },
+    };
+
+    const decision = gate.evaluateProposal(proposal, {
+      screenState: 'ON',
+      timestamp: now,
+      clipboardIntent: {
+        entity_type: 'tracking_number',
+        value: '1Z9999999999999999',
+        action: 'track_package',
+        ts: now - 10_000, // 10s ago
+      },
+    });
+
+    expect(decision.action).toBe('ALLOW_PROMPT');
+    expect(decision.targetDelivery).toBe('GLASS_MODAL');
+    expect(decision.confidence).toBe(0.85); // Preserves calibrated confidence
+    expect(decision.reason).toContain('Clipboard Intent Surface');
+
+    // Negative case: stale clipboard intent (>60s old) does not bypass normal mode routing
+    gate.classifyMode({ foregroundApp: 'Code.exe' }); // Put in DEEP_FOCUS
+    const staleDecision = gate.evaluateProposal(proposal, {
+      screenState: 'ON',
+      timestamp: now,
+      clipboardIntent: {
+        entity_type: 'tracking_number',
+        value: '1Z9999999999999999',
+        action: 'track_package',
+        ts: now - 120_000, // 2 minutes old (stale)
+      },
+    });
+    // In DEEP_FOCUS with urgency 0.3, it should be suppressed and queued, not allowed
+    expect(staleDecision.action).toBe('SUPPRESS_AND_QUEUE');
+  });
 });
+
