@@ -90,6 +90,15 @@ export class WorldModelHost {
   private autoExecutor: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null = null;
   private preferenceDb: ExocortexDatabase | null = null;
   private lastGraphContextByDevice = new Map<string, EventGraphContext>();
+  private graphListeners = new Set<(ctx: EventGraphContext, event: EventRecord) => void>();
+
+  /** Subscribe to live graph mutations when events are linked to the Living Life Graph. */
+  public onGraphUpdated(listener: (ctx: EventGraphContext, event: EventRecord) => void): () => void {
+    this.graphListeners.add(listener);
+    return () => {
+      this.graphListeners.delete(listener);
+    };
+  }
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
@@ -505,6 +514,13 @@ export class WorldModelHost {
         if (this.lastGraphContextByDevice.size > 100) {
           const firstKey = this.lastGraphContextByDevice.keys().next().value;
           if (firstKey !== undefined) this.lastGraphContextByDevice.delete(firstKey);
+        }
+        for (const listener of this.graphListeners) {
+          try {
+            listener(linkCtx, ev);
+          } catch (listenerErr) {
+            console.warn("[world-model-host] graph update listener error:", listenerErr);
+          }
         }
       } catch (graphErr) {
         console.warn(`[world-model-host] graph link error for seq ${ev.seq}:`, graphErr);

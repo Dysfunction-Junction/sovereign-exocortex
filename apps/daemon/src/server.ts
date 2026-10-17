@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { existsSync, createReadStream, statSync } from "node:fs";
+import { join, resolve, extname, relative, isAbsolute, sep } from "node:path";
 import { timingSafeEqual, createPublicKey } from "node:crypto";
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
@@ -226,6 +228,77 @@ export const defaultInferredOutcomeScheduler = new InferredOutcomeScheduler({
   intervalMs: Number(process.env.EXOCORTEX_INFER_INTERVAL_MS) || 15 * 60 * 1000,
 });
 
+const DASHBOARD_DIR = process.env.EXOCORTEX_DASHBOARD_DIR || resolve(import.meta.dirname, "../../mobile/dist");
+
+const STATIC_MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".mjs": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".webp": "image/webp",
+  ".wasm": "application/wasm",
+  ".map": "application/json; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+};
+
+function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, pathname: string): boolean {
+  if (!existsSync(DASHBOARD_DIR)) return false;
+
+  let rel: string;
+  if (pathname === "/" || pathname === "/index.html") {
+    rel = "index.html";
+  } else if (pathname.startsWith("/assets/") || pathname === "/favicon.png" || pathname === "/favicon.ico") {
+    rel = pathname.slice(1);
+  } else if (!pathname.startsWith("/v3/") && !pathname.startsWith("/mobile/") && !pathname.startsWith("/network/") && (req.headers.accept?.includes("text/html") || !extname(pathname))) {
+    rel = "index.html";
+  } else {
+    return false;
+  }
+
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rel);
+  } catch {
+    return false;
+  }
+  if (decoded.includes("\0")) return false;
+
+  const abs = resolve(DASHBOARD_DIR, decoded);
+  const r = relative(DASHBOARD_DIR, abs);
+  if (r.startsWith(".." + sep) || r === ".." || isAbsolute(r)) return false;
+  if (!existsSync(abs) || !statSync(abs).isFile()) return false;
+
+  const ext = extname(abs).toLowerCase();
+  const contentType = STATIC_MIME_TYPES[ext] ?? "application/octet-stream";
+  const stat = statSync(abs);
+  const isHashedAsset = pathname.startsWith("/assets/");
+
+  res.writeHead(200, {
+    "Content-Type": contentType,
+    "Content-Length": stat.size,
+    "Cache-Control": isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
+    "X-Content-Type-Options": "nosniff",
+    ...CORS_HEADERS,
+  });
+
+  if (req.method === "HEAD") {
+    res.end();
+    return true;
+  }
+
+  createReadStream(abs).pipe(res);
+  return true;
+}
+
 
 export const server = createServer(async (req, res) => {
   // Fixed base: a malformed attacker-supplied Host header must not throw out of this async handler (unhandled rejection).
@@ -241,6 +314,11 @@ export const server = createServer(async (req, res) => {
   if (method === "OPTIONS") {
     res.writeHead(204, CORS_HEADERS);
     res.end();
+    return;
+  }
+
+  // Serve PC Web Dashboard if request matches frontend static assets or SPA views
+  if ((method === "GET" || method === "HEAD") && tryServeDashboardStatic(req, res, url.pathname)) {
     return;
   }
 
@@ -861,6 +939,90 @@ export const server = createServer(async (req, res) => {
       });
     } catch (err) {
       sendInternalError(res, "failed to query graph context", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/graph/full") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph inspection requires admin:read scope" });
+        return;
+      }
+      const snapshot = defaultWorldModelHost.lifeGraph.snapshot();
+      sendJson(res, 200, {
+        ok: true,
+        cognitiveMode: defaultWorldModelHost.cognitiveGate.mode,
+        entityCount: defaultWorldModelHost.lifeGraph.entityCount,
+        edgeCount: defaultWorldModelHost.lifeGraph.edgeCount,
+        entities: snapshot.entities,
+        edges: snapshot.edges,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query full world model graph", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/graph/live") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph streaming requires admin:read scope" });
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        ...CORS_HEADERS,
+      });
+
+      const sendSse = (event: string, data: unknown) => {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+
+      sendSse("init", {
+        cognitiveMode: defaultWorldModelHost.cognitiveGate.mode,
+        entityCount: defaultWorldModelHost.lifeGraph.entityCount,
+        edgeCount: defaultWorldModelHost.lifeGraph.edgeCount,
+        timestamp: Date.now(),
+      });
+
+      const unsubscribe = defaultWorldModelHost.onGraphUpdated((ctx, ev) => {
+        sendSse("pulse", {
+          eventId: ev.event_id,
+          kind: ev.kind,
+          matchedEntities: ctx.matchedEntities,
+          activatedEntities: ctx.activatedEntities,
+          timestamp: ctx.timestamp,
+        });
+      });
+
+      const keepAlive = setInterval(() => {
+        sendSse("ping", {
+          cognitiveMode: defaultWorldModelHost.cognitiveGate.mode,
+          timestamp: Date.now(),
+        });
+      }, 15000);
+
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clearInterval(keepAlive);
+        unsubscribe();
+      };
+
+      req.on("close", cleanup);
+      res.on("close", cleanup);
+      req.on("aborted", cleanup);
+      req.on("error", cleanup);
+      res.on("error", cleanup);
+    } catch (err) {
+      sendInternalError(res, "failed to stream world model graph", err);
     }
     return;
   }

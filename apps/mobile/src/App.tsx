@@ -1,14 +1,15 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { HashRouter, Routes, Route, Navigate } from "react-router";
 import Setup from "./pages/Setup";
 import Status from "./pages/Status";
+import LivingBrain from "./pages/LivingBrain";
 import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
 import { flushUsageEvents } from "./lib/flush";
 import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
-import { isScreenContextEnabled, isNotificationCaptureEnabled } from "./lib/config";
+import { isScreenContextEnabled, isNotificationCaptureEnabled, isConfigured } from "./lib/config";
 import { startPassiveCaptureListener } from "./lib/passiveCapture";
 import { startNotificationCaptureListener } from "./lib/notificationCapture";
 import { runSmsBackfill } from "./lib/smsBackfill";
@@ -24,6 +25,15 @@ const USAGE_FLUSH_INTERVAL_MS = 5 * 60 * 1000;
 // 404 on refresh/deep link. Same class of problem bear-house-classic solved
 // with apiUrl() for API calls — this is the routing equivalent.
 import Layout from "./components/Layout";
+
+function RootRedirect() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  useEffect(() => {
+    isConfigured().then(setConfigured).catch(() => setConfigured(false));
+  }, []);
+  if (configured === null) return null;
+  return <Navigate to={configured ? "/status" : "/setup"} replace />;
+}
 
 export default function App() {
   useEffect(() => {
@@ -133,9 +143,10 @@ export default function App() {
     <HashRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route path="/" element={<Navigate to="/setup" replace />} />
+          <Route path="/" element={<RootRedirect />} />
           <Route path="/setup" element={<Setup />} />
           <Route path="/status" element={<Status />} />
+          <Route path="/brain" element={<LivingBrain />} />
           <Route path="/ask" element={<Ask />} />
           <Route path="/recent" element={<Recent />} />
           <Route path="/search" element={<Search />} />

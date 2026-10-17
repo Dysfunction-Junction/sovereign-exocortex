@@ -323,6 +323,40 @@ test("v3 world-model endpoints integration test", async () => {
     const admin2ContextAfterData = await admin2ContextAfter.json();
     assert.equal(admin2ContextAfterData.ok, true);
     assert.equal(admin2ContextAfterData.context, null);
+
+    // Full graph endpoint test
+    const fullGraphRes = await fetch(`${baseUrl}/v3/world-model/graph/full`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    assert.equal(fullGraphRes.status, 200);
+    const fullGraphData = await fullGraphRes.json();
+    assert.equal(fullGraphData.ok, true);
+    assert.ok(Array.isArray(fullGraphData.entities));
+    assert.ok(Array.isArray(fullGraphData.edges));
+    assert.equal(typeof fullGraphData.entityCount, "number");
+
+    // Non-admin forbidden check on full graph
+    const userFullRes = await fetch(`${baseUrl}/v3/world-model/graph/full`, {
+      method: "GET",
+      headers: userHeaders,
+    });
+    assert.equal(userFullRes.status, 403);
+
+    // Live graph SSE stream test
+    const liveRes = await fetch(`${baseUrl}/v3/world-model/graph/live`, {
+      method: "GET",
+      headers: adminHeaders,
+    });
+    assert.equal(liveRes.status, 200);
+    assert.equal(liveRes.headers.get("content-type"), "text/event-stream");
+    const reader = liveRes.body?.getReader();
+    assert.ok(reader);
+    const chunk = await reader.read();
+    assert.ok(chunk.value);
+    const text = new TextDecoder().decode(chunk.value);
+    assert.ok(text.includes("event: init"));
+    await reader.cancel();
   } finally {
     setPendingFetcherForTest(null);
     setPendingSpeculatorForTest(null);

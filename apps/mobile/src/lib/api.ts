@@ -632,3 +632,162 @@ export async function getLivingGraphContext(): Promise<LivingGraphStatus> {
   };
 }
 
+export interface FullGraphEntity {
+  id: string;
+  type: string;
+  name: string;
+  activation: number;
+  lastActive: number;
+  properties?: Record<string, unknown>;
+}
+
+export interface FullGraphEdge {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  relation: string;
+  weight: number;
+  observedCount: number;
+  lastObserved: number;
+}
+
+export interface FullLivingGraph {
+  cognitiveMode: string;
+  entityCount: number;
+  edgeCount: number;
+  entities: FullGraphEntity[];
+  edges: FullGraphEdge[];
+  scopeRequired?: string;
+}
+
+export async function getFullLivingGraph(): Promise<FullLivingGraph> {
+  const res = await authedFetch("/v3/world-model/graph/full");
+  if (res.status === 403) {
+    return {
+      cognitiveMode: "UNKNOWN",
+      entityCount: 0,
+      edgeCount: 0,
+      entities: [],
+      edges: [],
+      scopeRequired: "admin:read",
+    };
+  }
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Full graph failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as {
+    ok?: boolean;
+    cognitiveMode?: string;
+    entityCount?: number;
+    edgeCount?: number;
+    entities?: FullGraphEntity[];
+    edges?: FullGraphEdge[];
+  };
+  return {
+    cognitiveMode: body.cognitiveMode ?? "NORMAL",
+    entityCount: body.entityCount ?? (body.entities?.length ?? 0),
+    edgeCount: body.edgeCount ?? (body.edges?.length ?? 0),
+    entities: body.entities ?? [],
+    edges: body.edges ?? [],
+  };
+}
+
+export interface GraphStreamHandlers {
+  onInit?: (data: { cognitiveMode: string; entityCount: number; edgeCount: number; timestamp: number }) => void;
+  onPulse?: (data: { eventId: string; kind: string; matchedEntities: LivingGraphEntity[]; activatedEntities: LivingGraphEntity[]; timestamp: number }) => void;
+  onPing?: (data: { cognitiveMode: string; timestamp: number }) => void;
+  onError?: (err: Error) => void;
+  onClose?: () => void;
+}
+
+export function connectLivingGraphStream(handlers: GraphStreamHandlers): () => void {
+  const controller = new AbortController();
+
+  void (async () => {
+    try {
+      const targets = await getConnectionTargets();
+      if (targets.length === 0) {
+        handlers.onError?.(new ProxyNotConfiguredError());
+        return;
+      }
+      const localTarget = targets.find((t) => t.mode === "lan");
+      const remoteTarget = targets.find((t) => t.mode === "remote");
+      const target = localTarget ?? remoteTarget ?? targets[0];
+      const url = `${target.baseUrl}/v3/world-model/graph/live`;
+
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${target.token}`,
+          Accept: "text/event-stream",
+        },
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        handlers.onError?.(new Error(`SSE connection failed: HTTP ${res.status}`));
+        return;
+      }
+
+      const reader = res.body?.getReader();
+      if (!reader) {
+        handlers.onClose?.();
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        buffer = buffer.replace(/\r\n/g, "\n");
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          let eventType = "message";
+          const dataLines: string[] = [];
+
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event: ")) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              dataLines.push(line.slice(6));
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5));
+            }
+          }
+
+          if (dataLines.length > 0) {
+            const rawData = dataLines.join("\n");
+            let parsed: any = null;
+            try {
+              parsed = JSON.parse(rawData);
+            } catch {
+              // Non-json chunk
+            }
+
+            if (parsed) {
+              if (eventType === "init") handlers.onInit?.(parsed);
+              else if (eventType === "pulse") handlers.onPulse?.(parsed);
+              else if (eventType === "ping") handlers.onPing?.(parsed);
+            }
+          }
+        }
+      }
+      handlers.onClose?.();
+    } catch (err: unknown) {
+      if (controller.signal.aborted) return;
+      handlers.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  })();
+
+  return () => {
+    controller.abort();
+  };
+}
+
