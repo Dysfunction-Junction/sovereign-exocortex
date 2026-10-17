@@ -28,6 +28,7 @@ import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
+import { defaultNeo4jSyncService } from "./neo4j-sync.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -97,6 +98,9 @@ if (process.env.NODE_ENV !== "test") {
     console.error("HOME_PROXY_TOKEN is not set (the Plan A proxy's bearer token).");
     process.exit(1);
   }
+
+  // Attach automated Neo4j Living Brain real-time sync
+  defaultNeo4jSyncService.attachToHost(defaultWorldModelHost);
 }
 
 
@@ -1034,6 +1038,44 @@ export const server = createServer(async (req, res) => {
       });
     } catch (err) {
       sendInternalError(res, "failed to query full world model graph", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/world-model/neo4j/status") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: neo4j status inspection requires admin:read scope" });
+        return;
+      }
+      await defaultNeo4jSyncService.checkHealth();
+      sendJson(res, 200, {
+        ok: true,
+        ...defaultNeo4jSyncService.getStatus(),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query neo4j sync status", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/world-model/neo4j/sync") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: neo4j synchronization requires admin:write scope" });
+        return;
+      }
+      const snapshot = defaultWorldModelHost.lifeGraph.snapshot();
+      const result = await defaultNeo4jSyncService.syncGraph(snapshot);
+      sendJson(res, 200, {
+        ok: true,
+        result,
+        status: defaultNeo4jSyncService.getStatus(),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to trigger neo4j synchronization", err);
     }
     return;
   }
