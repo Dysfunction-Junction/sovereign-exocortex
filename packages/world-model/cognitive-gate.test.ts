@@ -174,12 +174,76 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     const decision = gate.evaluateProposal(proposal, { motionState: 'in_vehicle' });
     expect(decision.action).toBe('SUPPRESS_AND_QUEUE');
     expect(decision.targetDelivery).toBe('BACKGROUND_QUEUE');
-    expect(decision.reason).toContain('In-vehicle motion detected');
+    expect(decision.reason).toContain('driving safety');
 
     // Critical emergency breaches in-vehicle gate
     const emergencyDecision = gate.evaluateProposal({ ...proposal, urgency: 0.98 }, { motionState: 'in_vehicle' });
     expect(emergencyDecision.action).toBe('ALLOW_PROMPT');
     expect(emergencyDecision.targetDelivery).toBe('GLASS_MODAL');
+  });
+
+  it('triggers zero-latency driving safety gating when car audio is connected', () => {
+    const proposal: ProposalEnvelope = {
+      id: 'prop_car_audio',
+      candidateId: 'cand_car',
+      summary: 'Prompt to clean up downloads',
+      urgency: 0.4,
+      confidence: 0.8,
+      estimatedRisk: 0.1,
+    };
+
+    // 1. Direct carAudioConnected flag
+    const decision = gate.evaluateProposal(proposal, { carAudioConnected: true });
+    expect(decision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decision.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(decision.reason).toContain('Car Audio connected');
+
+    // 2. Audio output routed to car_audio
+    const decisionRouting = gate.evaluateProposal(proposal, { audioOutput: 'car_audio' });
+    expect(decisionRouting.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decisionRouting.targetDelivery).toBe('BACKGROUND_QUEUE');
+
+    // 3. Mode classification infers in_vehicle immediately when not stationary
+    const mode = gate.classifyMode({ carAudioConnected: true, hourOfDay: 14 });
+    expect(mode).toBe('HIGH_VELOCITY_EXECUTION');
+    expect(gate.getLastSignals().motionState).toBe('in_vehicle');
+
+    // 4. Stationary car audio does not override motion to in_vehicle
+    gate.classifyMode({ carAudioConnected: true, motionState: 'stationary', hourOfDay: 14 });
+    expect(gate.getLastSignals().motionState).toBe('stationary');
+  });
+
+  it('suppresses non-emergency proposals when Zen / DND mode is active', () => {
+    const proposal: ProposalEnvelope = {
+      id: 'prop_dnd',
+      candidateId: 'cand_dnd',
+      summary: 'Non-urgent suggestion',
+      urgency: 0.6,
+      confidence: 0.85,
+      estimatedRisk: 0.1,
+    };
+
+    // DND active via interruptionFilter PRIORITY
+    const decisionFilter = gate.evaluateProposal(proposal, { interruptionFilter: 'PRIORITY' });
+    expect(decisionFilter.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decisionFilter.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(decisionFilter.reason).toContain('Zen/DND active');
+
+    // DND active via boolean flag
+    const decisionBool = gate.evaluateProposal(proposal, { dndActive: true });
+    expect(decisionBool.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decisionBool.targetDelivery).toBe('BACKGROUND_QUEUE');
+
+    // Emergency urgency breaches PRIORITY DND
+    const emergencyDnd = gate.evaluateProposal({ ...proposal, urgency: 0.96 }, { dndActive: true });
+    expect(emergencyDnd.action).toBe('ALLOW_PROMPT');
+    expect(emergencyDnd.targetDelivery).toBe('GLASS_MODAL');
+
+    // Under NONE filter (total silence), even emergency urgency is suppressed
+    const totalSilence = gate.evaluateProposal({ ...proposal, urgency: 0.98 }, { interruptionFilter: 'NONE' });
+    expect(totalSilence.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(totalSilence.targetDelivery).toBe('BACKGROUND_QUEUE');
+    expect(totalSilence.reason).toContain('total silence');
   });
 
   it('throttles speculative execution and stages proposals when device is under thermal exhaustion', () => {

@@ -379,6 +379,15 @@ test("PreCognitiveHost HTTP endpoints integration test", async () => {
     assert.equal(postCalStatusData.status.calibrated, true);
     assert.equal(postCalStatusData.status.source, "device");
     assert.ok(postCalStatusData.status.wakeThresholdMs <= 1000);
+
+    // Verify GET /v3/precognitive/pre-warmed returns 200
+    const preWarmedRes = await fetch(`${baseUrl}/v3/precognitive/pre-warmed`, {
+      method: "GET",
+      headers: userHeaders,
+    });
+    assert.equal(preWarmedRes.status, 200);
+    const preWarmedData = await preWarmedRes.json();
+    assert.equal(preWarmedData.ok, true);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     memoryDb.close();
@@ -444,4 +453,94 @@ test("PreCognitiveHost records SUGGESTION_DECISION events and exposes suggestion
   const reStatus = host.getStatus("phone-1");
   assert.equal(reStatus.suggestionMetrics?.sampleCount, 2);
 });
+
+test("PreCognitiveHost speculative action pre-warming: Markov transitions and clipboard intent", () => {
+  let currentNow = 200_000;
+  const now = currentNow;
+  const host = PreCognitiveHost.createIsolatedForTest(() => currentNow);
+  const fakeDb = {} as any;
+
+  // 1. Train Markov transitions: Chrome -> Maps (twice), then transition Slack -> Chrome
+  const transitionEvents = [
+    {
+      seq: 1,
+      event_id: "evt_t1",
+      device_id: "phone-precog-1",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: now,
+      ts_device: now,
+      payload: JSON.stringify({
+        appTransitions: [
+          { from: "com.android.chrome", to: "com.google.android.apps.maps", timestamp: now - 10000 },
+          { from: "com.android.chrome", to: "com.google.android.apps.maps", timestamp: now - 8000 },
+          { from: "com.slack", to: "com.android.chrome", timestamp: now - 1000 },
+        ],
+      }),
+    },
+  ];
+
+  host.onEventsAppended(transitionEvents, fakeDb);
+
+  const statusAfterTransition = host.getStatus("phone-precog-1");
+  assert.equal(statusAfterTransition.isPreStaged, true);
+  assert.ok(statusAfterTransition.preStagedProposalId?.startsWith("prop_precog_phone-precog-1_"));
+  assert.ok(statusAfterTransition.preWarmedAction);
+  assert.equal(statusAfterTransition.preWarmedAction.targetApp, "com.google.android.apps.maps");
+  assert.ok(statusAfterTransition.preWarmedAction.probability >= 0.35);
+
+  const preWarmed = host.getPreWarmedProposal("phone-precog-1");
+  assert.ok(preWarmed);
+  assert.equal(preWarmed.targetApp, "com.google.android.apps.maps");
+
+  // 2. Clipboard Intent Pre-Warming
+  const clipboardEvents = [
+    {
+      seq: 2,
+      event_id: "evt_clip_1",
+      device_id: "phone-precog-1",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: now,
+      ts_device: now,
+      payload: JSON.stringify({
+        clipboardIntent: {
+          entity_type: "TRACKING_NUMBER",
+          value: "1Z9999999999999999",
+        },
+      }),
+    },
+  ];
+
+  host.onEventsAppended(clipboardEvents, fakeDb);
+
+  const statusAfterClipboard = host.getStatus("phone-precog-1");
+  assert.equal(statusAfterClipboard.isPreStaged, true);
+  assert.ok(statusAfterClipboard.preStagedProposalId?.startsWith("prop_intent_phone-precog-1_"));
+  assert.ok(statusAfterClipboard.preWarmedAction);
+  assert.equal(statusAfterClipboard.preWarmedAction.targetApp, "companion");
+  // Privacy invariant: raw clipboard snippet/value is NEVER included in action or status
+  assert.equal(statusAfterClipboard.preWarmedAction.action, "Process clipboard TRACKING_NUMBER");
+  assert.equal(statusAfterClipboard.preWarmedAction.action.includes("1Z9999999999999999"), false);
+
+  // 3. Device isolation: phone-precog-2 must not inherit phone-precog-1's pre-warmed state
+  const statusDev2 = host.getStatus("phone-precog-2");
+  assert.equal(statusDev2.isPreStaged, false);
+  assert.equal(statusDev2.preWarmedAction, undefined);
+
+  // 4. Expiry: advance time past RECENCY_WINDOW_MS (60,000ms)
+  currentNow += 65_000;
+  const expiredProposal = host.getPreWarmedProposal("phone-precog-1");
+  assert.equal(expiredProposal, null);
+
+  const statusAfterExpiry = host.getStatus("phone-precog-1");
+  assert.equal(statusAfterExpiry.isPreStaged, false);
+  assert.equal(statusAfterExpiry.preStagedProposalId, undefined);
+  assert.equal(statusAfterExpiry.preWarmedAction, undefined);
+});
+
 

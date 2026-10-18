@@ -28,7 +28,7 @@ import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
-import { defaultNeo4jSyncService } from "./neo4j-sync.js";
+import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -1080,6 +1080,64 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  if (method === "GET" && url.pathname === "/v3/world-model/neo4j/analytics") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: neo4j analytics requires admin:read scope" });
+        return;
+      }
+      const analytics = await defaultNeo4jSyncService.getGraphAnalytics();
+      sendJson(res, 200, {
+        ok: true,
+        analytics,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to compute neo4j analytics", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/world-model/neo4j/query") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: neo4j querying requires admin:read scope" });
+        return;
+      }
+      const raw = await readBody(req, 64 * 1024);
+      let decoded: unknown;
+      try {
+        decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+      const qObj = decoded as { query?: string; mode?: "nl" | "cypher" };
+      if (!qObj || typeof qObj.query !== "string" || !qObj.query.trim()) {
+        sendJson(res, 400, { error: "missing or empty query string" });
+        return;
+      }
+      const mode = qObj.mode ?? "nl";
+      if (mode !== "nl" && mode !== "cypher") {
+        sendJson(res, 400, { error: "invalid query mode: must be 'nl' or 'cypher'" });
+        return;
+      }
+      const result = await defaultNeo4jSyncService.queryLivingGraph(qObj.query, mode);
+      sendJson(res, 200, {
+        ok: true,
+        result,
+      });
+    } catch (err) {
+      if (err instanceof GraphQueryRejectedError) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
+      sendInternalError(res, "failed to execute neo4j query", err);
+    }
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v3/world-model/graph/live") {
     try {
       const db = getDatabase();
@@ -1152,6 +1210,19 @@ export const server = createServer(async (req, res) => {
       });
     } catch (err) {
       sendInternalError(res, "failed to get precognitive status", err);
+    }
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/v3/precognitive/pre-warmed") {
+    try {
+      const proposal = defaultPreCognitiveHost.getPreWarmedProposal(auth.deviceId);
+      sendJson(res, 200, {
+        ok: true,
+        proposal,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to get pre-warmed proposal", err);
     }
     return;
   }

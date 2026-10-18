@@ -169,3 +169,163 @@ test("POST /v3/world-model/neo4j/sync enforces admin:write scope", async () => {
     setDatabase(null);
   }
 });
+
+test("GET /v3/world-model/neo4j/analytics enforces scope and returns computed metrics", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_read", ["admin:read"]));
+  db.registerDevice(deviceRow("dev_plain_user", ["telemetry:write"]));
+  setDatabase(db);
+  const port = await listen();
+
+  const origFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (url, init) => {
+      if (String(url).includes("/db/neo4j/tx/commit")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              { data: [{ row: [763] }] },
+              { data: [{ row: [2102] }] },
+              { data: [{ row: ["person_michael", "Michael", "PERSON", 194] }] },
+              { data: [{ row: ["person_ana", "Ana", "PERSON", 1777972800000] }] },
+              { data: [{ row: ["TOPIC", 602] }] },
+              { data: [{ row: ["HAS_TOPIC", 952] }] },
+            ],
+            errors: [],
+          }),
+        } as Response;
+      }
+      return origFetch(url, init);
+    }) as typeof fetch;
+
+    // 1. Missing scope -> 403
+    const userRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/analytics`, {
+      headers: { Authorization: `Bearer ${issueToken("dev_plain_user", TEST_SECRET)}` },
+    });
+    assert.equal(userRes.status, 403);
+
+    // 2. Admin read -> 200 with analytics
+    const adminRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/analytics`, {
+      headers: { Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}` },
+    });
+    assert.equal(adminRes.status, 200);
+    const data = await adminRes.json();
+    assert.equal(data.ok, true);
+    assert.equal(data.analytics.nodeCount, 763);
+    assert.equal(data.analytics.edgeCount, 2102);
+    assert.equal(data.analytics.hubs[0].id, "person_michael");
+    assert.equal(data.analytics.hubs[0].degree, 194);
+    assert.equal(data.analytics.staleEntities[0].id, "person_ana");
+  } finally {
+    globalThis.fetch = origFetch;
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("POST /v3/world-model/neo4j/query enforces read-only safety and handles NL & Cypher", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_read", ["admin:read"]));
+  setDatabase(db);
+  const port = await listen();
+
+  const origFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (url, init) => {
+      if (String(url).includes("/db/neo4j/tx/commit")) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                columns: ["id", "label", "type", "degree"],
+                data: [{ row: ["project_sovereign_exocortex", "Sovereign Exocortex", "PROJECT", 42] }],
+              },
+            ],
+            errors: [],
+          }),
+        } as Response;
+      }
+      return origFetch(url, init);
+    }) as typeof fetch;
+
+    // 1. Rejects dangerous mutations in Cypher mode with HTTP 400
+    const mutationRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "MATCH (n) DETACH DELETE n", mode: "cypher" }),
+    });
+    assert.equal(mutationRes.status, 400);
+    const mutData = await mutationRes.json();
+    assert.ok(mutData.error.includes("Forbidden operation"));
+
+    // 1b. Rejects comment-obfuscated mutations and CALL statements with HTTP 400
+    const obfuscatedRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "MATCH (n) /* hide */ DETACH // delete\nDELETE n", mode: "cypher" }),
+    });
+    assert.equal(obfuscatedRes.status, 400);
+
+    const callRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "CALL apoc.warmup.run()", mode: "cypher" }),
+    });
+    assert.equal(callRes.status, 400);
+
+    // 1c. Rejects invalid mode with HTTP 400
+    const badModeRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "MATCH (n) RETURN n", mode: "sql" }),
+    });
+    assert.equal(badModeRes.status, 400);
+
+    // 2. Executes valid read-only Cypher (including keyword inside string literal)
+    const cypherRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "MATCH (n:Project) WHERE n.name = 'SET_OF_RULES' RETURN n.id, n.label", mode: "cypher" }),
+    });
+    assert.equal(cypherRes.status, 200);
+    const cypherData = await cypherRes.json();
+    assert.equal(cypherData.ok, true);
+    assert.equal(cypherData.result.rows[0].id, "project_sovereign_exocortex");
+
+    // 3. Executes Natural Language query
+    const nlRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/query`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${issueToken("dev_admin_read", TEST_SECRET)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query: "show me projects", mode: "nl" }),
+    });
+    assert.equal(nlRes.status, 200);
+    const nlData = await nlRes.json();
+    assert.equal(nlData.ok, true);
+    assert.equal(nlData.result.mode, "nl");
+    assert.ok(nlData.result.matchedEntityIds.includes("project_sovereign_exocortex"));
+  } finally {
+    globalThis.fetch = origFetch;
+    server.close();
+    setDatabase(null);
+  }
+});

@@ -17,6 +17,8 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.PowerManager;
 import android.os.SystemClock;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import org.json.JSONObject;
 
 /**
@@ -31,6 +33,11 @@ import org.json.JSONObject;
  * Runs offline with zero network requests and minimal battery footprint.
  */
 public final class NativeHardwareTelemetry {
+
+    private static final Pattern CAR_AUDIO_NAME_PATTERN = Pattern.compile(
+        "\\b(android\\s*auto|apple\\s*carplay|carplay|uconnect|carkit|car\\s*kit|sync\\s*3|infotainment|audiomms|mycar)\\b",
+        Pattern.CASE_INSENSITIVE
+    );
 
     private static volatile String lastMotionState = "unknown";
     private static volatile float lastMotionConfidence = 0.0f;
@@ -246,6 +253,17 @@ public final class NativeHardwareTelemetry {
             JSONObject network = collectNetwork(context);
             if (network != null) root.put("network", network);
 
+            // 7. Focus & Zen / DND Telemetry
+            JSONObject focus = collectFocusAndDnd(context);
+            if (focus != null) {
+                root.put("focus", focus);
+                root.put("dnd_active", focus.optBoolean("dnd_active", false));
+                root.put("interruption_filter", focus.optString("interruption_filter", "UNKNOWN"));
+            }
+            if (audio != null) {
+                root.put("car_audio_connected", audio.optBoolean("car_audio_connected", false));
+            }
+
             root.put("sampled_at_elapsed_ms", now);
 
             synchronized (NativeHardwareTelemetry.class) {
@@ -292,33 +310,88 @@ public final class NativeHardwareTelemetry {
             obj.put("in_call", inCall);
             obj.put("music_active", am.isMusicActive());
 
-            // Detect audio output routing
+            // Detect Android Auto / Car mode
+            boolean uiModeCar = false;
+            try {
+                android.app.UiModeManager uiModeManager = (android.app.UiModeManager) context.getSystemService(Context.UI_MODE_SERVICE);
+                if (uiModeManager != null && uiModeManager.getCurrentModeType() == android.content.res.Configuration.UI_MODE_TYPE_CAR) {
+                    uiModeCar = true;
+                }
+            } catch (Throwable ignored) {}
+
+            int bestPriority = 0; // 0=none, 1=speaker, 2=wired, 3=bluetooth, 4=car_audio
             String outputType = "speaker";
+            boolean carAudioConnected = false;
+
+            if (uiModeCar) {
+                bestPriority = 4;
+                outputType = "car_audio";
+                carAudioConnected = true;
+            }
+
+            // Detect audio output routing
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 AudioDeviceInfo[] devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS);
                 if (devices != null) {
                     for (AudioDeviceInfo dev : devices) {
                         int type = dev.getType();
+
+                        // 1. Android Automotive Audio Bus (API 24+)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && type == AudioDeviceInfo.TYPE_BUS) {
+                            bestPriority = 4;
+                            outputType = "car_audio";
+                            carAudioConnected = true;
+                            break;
+                        }
+
+                        // 2. Strict vehicle infotainment product name match (word-boundary regex)
+                        CharSequence nameSeq = dev.getProductName();
+                        if (nameSeq != null && CAR_AUDIO_NAME_PATTERN.matcher(nameSeq).find()) {
+                            bestPriority = 4;
+                            outputType = "car_audio";
+                            carAudioConnected = true;
+                            break;
+                        }
+
+                        // 3. Bluetooth audio output
                         if (type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
                                 || type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
                                 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && type == AudioDeviceInfo.TYPE_BLE_HEADSET)
                                 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && type == AudioDeviceInfo.TYPE_HEARING_AID)) {
-                            outputType = "bluetooth_headset";
-                            break;
-                        } else if (type == AudioDeviceInfo.TYPE_WIRED_HEADSET
+                            if (bestPriority < 3) {
+                                bestPriority = 3;
+                                outputType = "bluetooth_headset";
+                            }
+                        }
+                        // 4. Wired or USB audio output
+                        else if (type == AudioDeviceInfo.TYPE_WIRED_HEADSET
                                 || type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES
                                 || type == AudioDeviceInfo.TYPE_USB_HEADSET) {
-                            outputType = "wired_headset";
+                            if (bestPriority < 2) {
+                                bestPriority = 2;
+                                outputType = "wired_headset";
+                            }
+                        }
+                        // 5. Built-in speaker
+                        else if (type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                            if (bestPriority < 1) {
+                                bestPriority = 1;
+                                outputType = "speaker";
+                            }
                         }
                     }
                 }
             } else {
-                if (am.isBluetoothA2dpOn() || am.isBluetoothScoOn()) {
+                if (uiModeCar) {
+                    outputType = "car_audio";
+                    carAudioConnected = true;
+                } else if (am.isBluetoothA2dpOn() || am.isBluetoothScoOn()) {
                     outputType = "bluetooth_headset";
                 } else if (am.isWiredHeadsetOn()) {
                     outputType = "wired_headset";
                 }
             }
+
             // On Android 12+ (API 31+), check explicit active communication device only during an active call/meeting
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && (mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_IN_COMMUNICATION)) {
                 AudioDeviceInfo commDevice = am.getCommunicationDevice();
@@ -336,7 +409,48 @@ public final class NativeHardwareTelemetry {
                 }
             }
             obj.put("output_type", outputType);
+            obj.put("car_audio_connected", carAudioConnected);
 
+            return obj;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    public static JSONObject collectFocusAndDnd(Context context) {
+        try {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null;
+            android.app.NotificationManager nm = (android.app.NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm == null) return null;
+
+            int filter = nm.getCurrentInterruptionFilter();
+            String filterStr;
+            boolean dndActive = false;
+
+            switch (filter) {
+                case android.app.NotificationManager.INTERRUPTION_FILTER_ALL:
+                    filterStr = "ALL";
+                    break;
+                case android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY:
+                    filterStr = "PRIORITY";
+                    dndActive = true;
+                    break;
+                case android.app.NotificationManager.INTERRUPTION_FILTER_NONE:
+                    filterStr = "NONE";
+                    dndActive = true;
+                    break;
+                case android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS:
+                    filterStr = "ALARMS";
+                    dndActive = true;
+                    break;
+                default:
+                    filterStr = "UNKNOWN";
+                    break;
+            }
+
+            JSONObject obj = new JSONObject();
+            obj.put("interruption_filter", filterStr);
+            obj.put("dnd_active", dndActive);
             return obj;
         } catch (Throwable t) {
             return null;

@@ -6,10 +6,14 @@ import {
   connectLivingGraphStream,
   getNeo4jStatus,
   triggerNeo4jSync,
+  getNeo4jAnalytics,
+  queryNeo4jLivingGraph,
   type FullLivingGraph,
   type FullGraphEntity,
   type FullGraphEdge,
   type Neo4jSyncStatusResponse,
+  type GraphAnalyticsResponse,
+  type GraphQueryResponse,
 } from "../lib/api";
 
 const TYPE_COLORS: Record<string, string> = {
@@ -60,6 +64,28 @@ export default function LivingBrain() {
   const [copiedQuery, setCopiedQuery] = useState(false);
   const [neo4jStatus, setNeo4jStatus] = useState<Neo4jSyncStatusResponse | null>(null);
   const [syncingNeo4j, setSyncingNeo4j] = useState(false);
+  const [analytics, setAnalytics] = useState<GraphAnalyticsResponse["analytics"] | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [nlQueryInput, setNlQueryInput] = useState("");
+  const [nlQueryMode, setNlQueryMode] = useState<"nl" | "cypher">("nl");
+  const [nlQueryRunning, setNlQueryRunning] = useState(false);
+  const [nlQueryResult, setNlQueryResult] = useState<GraphQueryResponse["result"] | null>(null);
+  const [nlQueryError, setNlQueryError] = useState<string | null>(null);
+
+  const handleNodeClick = useCallback((node: GraphNode) => {
+    setSelectedNode(node);
+    if (fgRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
+      const distance = 80;
+      const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
+      fgRef.current.cameraPosition(
+        { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+        node as any,
+        1200
+      );
+    }
+  }, []);
 
   // Load initial full snapshot
   const loadGraph = useCallback(async () => {
@@ -103,6 +129,43 @@ export default function LivingBrain() {
       console.error("Failed to sync Neo4j:", err);
     } finally {
       setSyncingNeo4j(false);
+    }
+  };
+
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true);
+    setAnalyticsError(null);
+    try {
+      const res = await getNeo4jAnalytics();
+      setAnalytics(res.analytics);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn("Failed to load Neo4j analytics:", msg);
+      setAnalyticsError(msg);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }, []);
+
+  const handleRunNlQuery = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!nlQueryInput.trim()) return;
+    setNlQueryRunning(true);
+    setNlQueryError(null);
+    try {
+      const res = await queryNeo4jLivingGraph(nlQueryInput, nlQueryMode);
+      setNlQueryResult(res.result);
+      if (res.result.matchedEntityIds.length > 0 && graphData) {
+        const firstId = res.result.matchedEntityIds[0];
+        const match = graphData.entities.find((ent) => ent.id === firstId);
+        if (match) {
+          handleNodeClick(match as GraphNode);
+        }
+      }
+    } catch (err) {
+      setNlQueryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setNlQueryRunning(false);
     }
   };
 
@@ -228,17 +291,7 @@ export default function LivingBrain() {
         .linkDirectionalParticleSpeed(0.005)
         .linkDirectionalParticleColor(() => "#38bdf8")
         .onNodeClick((node: GraphNode) => {
-          setSelectedNode(node);
-          // Aim camera at node
-          if (fgRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
-            const distance = 80;
-            const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
-            fgRef.current.cameraPosition(
-              { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
-              node as any,
-              1200
-            );
-          }
+          handleNodeClick(node);
         });
 
       fgRef.current = fg;
@@ -269,7 +322,7 @@ export default function LivingBrain() {
     return () => {
       ro.disconnect();
     };
-  }, [filteredData, loading, autoRotate]);
+  }, [filteredData, loading, autoRotate, handleNodeClick]);
 
   // Clean up WebGL on component unmount
   useEffect(() => {
@@ -429,7 +482,7 @@ export default function LivingBrain() {
                 lineHeight: 1,
               }}
             >
-              {syncingNeo4j ? "…" : "↻"}
+              {syncingNeo4j ? "\u2026" : "\u21BB"}
             </button>
           </div>
         </div>
@@ -501,8 +554,267 @@ export default function LivingBrain() {
           >
             Reset View
           </button>
+
+          {/* Brain Analytics & Query Button */}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !showAnalytics;
+              setShowAnalytics(next);
+              if (next && !analytics) void loadAnalytics();
+            }}
+            style={{
+              background: showAnalytics ? "rgba(56, 189, 248, 0.25)" : "rgba(13, 17, 30, 0.85)",
+              backdropFilter: "blur(16px)",
+              border: `1px solid ${showAnalytics ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.1)"}`,
+              borderRadius: "12px",
+              padding: "8px 12px",
+              color: showAnalytics ? "#38bdf8" : "#94a3b8",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {showAnalytics ? "Close Insights" : "Brain Analytics"}
+          </button>
         </div>
       </div>
+
+      {/* Brain Analytics & Natural Language Query Drawer */}
+      {showAnalytics && (
+        <div style={{
+          position: "absolute",
+          top: 80,
+          left: 20,
+          width: "360px",
+          maxHeight: "calc(100% - 130px)",
+          overflowY: "auto",
+          background: "rgba(13, 17, 30, 0.94)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(56, 189, 248, 0.3)",
+          borderRadius: "18px",
+          padding: "18px",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.8)",
+          zIndex: 25,
+          color: "#f8fafc",
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: "14px", fontWeight: 700, color: "#38bdf8" }}>
+              Living Brain Analytics & Query
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAnalytics(false)}
+              style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: "16px" }}
+            >
+              {"\u2715"}
+            </button>
+          </div>
+
+          {analyticsError && (
+            <div style={{ background: "rgba(244,63,94,0.15)", border: "1px solid rgba(244,63,94,0.3)", borderRadius: "8px", padding: "8px 10px", fontSize: "11px", color: "#f87171", marginBottom: 12 }}>
+              {analyticsError}
+            </div>
+          )}
+
+          {/* NL / Cypher Query Form */}
+          <form onSubmit={handleRunNlQuery} style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+              <input
+                type="text"
+                placeholder={nlQueryMode === "nl" ? "Ask brain (e.g. 'hermes', 'stale')..." : "MATCH (n:Entity) RETURN n LIMIT 10"}
+                value={nlQueryInput}
+                onChange={(e) => setNlQueryInput(e.target.value)}
+                style={{
+                  flex: 1,
+                  background: "rgba(255, 255, 255, 0.05)",
+                  border: "1px solid rgba(255, 255, 255, 0.12)",
+                  borderRadius: "10px",
+                  padding: "6px 10px",
+                  color: "#ffffff",
+                  fontSize: "12px",
+                  outline: "none",
+                }}
+              />
+              <button
+                type="submit"
+                disabled={nlQueryRunning}
+                style={{
+                  background: "#38bdf8",
+                  color: "#0f172a",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "6px 12px",
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                {nlQueryRunning ? "\u2026" : "Run"}
+              </button>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setNlQueryMode("nl")}
+                  style={{
+                    background: nlQueryMode === "nl" ? "rgba(56, 189, 248, 0.2)" : "transparent",
+                    border: `1px solid ${nlQueryMode === "nl" ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
+                    color: nlQueryMode === "nl" ? "#38bdf8" : "#94a3b8",
+                    padding: "2px 8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                  }}
+                >
+                  Natural Language
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNlQueryMode("cypher")}
+                  style={{
+                    background: nlQueryMode === "cypher" ? "rgba(56, 189, 248, 0.2)" : "transparent",
+                    border: `1px solid ${nlQueryMode === "cypher" ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
+                    color: nlQueryMode === "cypher" ? "#38bdf8" : "#94a3b8",
+                    padding: "2px 8px",
+                    borderRadius: "6px",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                  }}
+                >
+                  Cypher
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadAnalytics()}
+                disabled={analyticsLoading}
+                style={{ background: "transparent", border: "none", color: "#38bdf8", cursor: "pointer", fontSize: "11px" }}
+              >
+                {analyticsLoading ? "Refreshing\u2026" : "\u21BB Refresh"}
+              </button>
+            </div>
+          </form>
+
+          {nlQueryError && (
+            <div style={{ background: "rgba(244,63,94,0.15)", border: "1px solid rgba(244,63,94,0.3)", borderRadius: "8px", padding: "8px", fontSize: "11px", color: "#f87171", marginBottom: 12 }}>
+              {nlQueryError}
+            </div>
+          )}
+
+          {/* Query Results */}
+          {nlQueryResult && (
+            <div style={{ marginBottom: 16, background: "rgba(0,0,0,0.3)", borderRadius: "10px", padding: "10px", border: "1px solid rgba(255,255,255,0.06)" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#34d399", marginBottom: 6 }}>
+                Matches: {nlQueryResult.rows.length} rows ({nlQueryResult.matchedEntityIds.length} neurons focused)
+              </div>
+              <div style={{ maxHeight: "140px", overflowY: "auto", fontSize: "11px" }}>
+                {nlQueryResult.rows.map((row, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      if (typeof row.id === "string" && graphData) {
+                        const m = graphData.entities.find((e) => e.id === row.id);
+                        if (m) handleNodeClick(m as GraphNode);
+                      }
+                    }}
+                    style={{
+                      padding: "4px 6px",
+                      borderRadius: "6px",
+                      background: idx % 2 === 0 ? "rgba(255,255,255,0.02)" : "transparent",
+                      cursor: "pointer",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      color: "#e2e8f0",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600 }}>{String(row.label ?? row.id ?? "")}</span>
+                    <span style={{ color: "#94a3b8", fontSize: "10px" }}>{String(row.type ?? "")}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Centrality Hubs */}
+          {analytics && (
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#cbd5e1", marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+                <span>Top Central Synapses (Hubs)</span>
+                <span style={{ color: "#64748b", fontSize: "11px" }}>Degree</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 16 }}>
+                {analytics.hubs.slice(0, 5).map((hub) => (
+                  <div
+                    key={hub.id}
+                    onClick={() => {
+                      if (graphData) {
+                        const m = graphData.entities.find((e) => e.id === hub.id);
+                        if (m) handleNodeClick(m as GraphNode);
+                      }
+                    }}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "6px 8px",
+                      borderRadius: "8px",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.05)",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 600, color: "#ffffff" }}>{hub.label}</span>
+                      <span style={{ marginLeft: 6, fontSize: "9px", color: getNodeColor(hub.type) }}>{hub.type}</span>
+                    </div>
+                    <span style={{ fontWeight: 700, color: "#38bdf8" }}>{hub.degree}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Neglected / Stale Entities */}
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#cbd5e1", marginBottom: 8 }}>
+                Stale / Neglected Knowledge
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {analytics.staleEntities.slice(0, 4).map((stale) => (
+                  <div
+                    key={stale.id}
+                    onClick={() => {
+                      if (graphData) {
+                        const m = graphData.entities.find((e) => e.id === stale.id);
+                        if (m) handleNodeClick(m as GraphNode);
+                      }
+                    }}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "6px 8px",
+                      borderRadius: "8px",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.05)",
+                      cursor: "pointer",
+                      fontSize: "11px",
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontWeight: 600, color: "#ffffff" }}>{stale.label}</span>
+                      <span style={{ marginLeft: 6, fontSize: "9px", color: getNodeColor(stale.type) }}>{stale.type}</span>
+                    </div>
+                    <span style={{ color: "#f43f5e", fontSize: "10px" }}>
+                      {stale.lastActive ? new Date(stale.lastActive).toLocaleDateString() : "idle"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Bottom Category Filter Chips */}
       <div style={{
@@ -631,7 +943,7 @@ export default function LivingBrain() {
                 padding: "2px 6px",
               }}
             >
-              ✕
+              {"\u2715"}
             </button>
           </div>
 
@@ -722,7 +1034,7 @@ export default function LivingBrain() {
                   transition: "all 160ms ease",
                 }}
               >
-                {copiedQuery ? "✓ Copied to Clipboard" : "Copy Cypher Query"}
+                {copiedQuery ? "\u2713 Copied to Clipboard" : "Copy Cypher Query"}
               </button>
             </div>
           </div>

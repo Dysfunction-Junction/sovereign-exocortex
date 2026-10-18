@@ -18,6 +18,48 @@ export interface Neo4jSyncStatus {
   lastError: string | null;
 }
 
+export interface GraphHub {
+  id: string;
+  label: string;
+  type: string;
+  degree: number;
+}
+
+export interface StaleEntity {
+  id: string;
+  label: string;
+  type: string;
+  lastActive: number | null;
+}
+
+export interface TypeDistribution {
+  type: string;
+  count: number;
+}
+
+export interface EdgeDistribution {
+  relType: string;
+  count: number;
+}
+
+export interface GraphAnalyticsResult {
+  nodeCount: number;
+  edgeCount: number;
+  hubs: GraphHub[];
+  staleEntities: StaleEntity[];
+  typeDistribution: TypeDistribution[];
+  edgeDistribution: EdgeDistribution[];
+  analyzedAt: string;
+}
+
+export interface GraphQueryResult {
+  mode: "nl" | "cypher";
+  cypher: string;
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  matchedEntityIds: string[];
+}
+
 function labelForType(type: string): string {
   switch (type.toUpperCase()) {
     case "PERSON":
@@ -47,6 +89,23 @@ function safeRelType(rel: string): string {
   return /^[A-Z][A-Z0-9_]*$/u.test(rel) ? rel : "RELATED";
 }
 
+export class GraphQueryRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GraphQueryRejectedError";
+  }
+}
+
+function sanitizeForScan(q: string): string {
+  return q
+    .replace(/\/\*[\s\S]*?\*\//g, " ")
+    .replace(/\/\/.*$/gm, " ")
+    .replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"/g, "''");
+}
+
+const FORBIDDEN_CYPHER = /\b(CREATE|MERGE|DELETE|DETACH|SET|REMOVE|DROP|ALTER|LOAD|CALL|FOREACH|TERMINATE|GRANT|DENY|REVOKE|START|STOP|USE)\b/i;
+const ALLOWED_CYPHER_PREFIX = /^\s*(MATCH|RETURN|WITH|UNWIND|EXPLAIN|PROFILE)\b/i;
+
 export class Neo4jSyncService {
   private readonly url: string;
   private readonly user: string;
@@ -60,6 +119,7 @@ export class Neo4jSyncService {
   private cachedNodeCount = 0;
   private cachedEdgeCount = 0;
   private autoSyncAttached = false;
+  private cachedAnalytics: { data: GraphAnalyticsResult; expiresAt: number } | null = null;
 
   constructor(options: Neo4jSyncOptions = {}) {
     this.url = options.url || process.env.NEO4J_URL || "http://127.0.0.1:7474";
@@ -359,6 +419,148 @@ export class Neo4jSyncService {
       nodeCount: this.cachedNodeCount,
       edgeCount: this.cachedEdgeCount,
       lastError: this.lastError,
+    };
+  }
+
+  /**
+   * Run graph analytics over Neo4j: hub centrality, stale/neglected entities, and cluster distributions.
+   * Cached for 30 seconds to minimize full-graph scan overhead.
+   */
+  public async getGraphAnalytics(): Promise<GraphAnalyticsResult> {
+    const now = Date.now();
+    if (this.cachedAnalytics && this.cachedAnalytics.expiresAt > now) {
+      return this.cachedAnalytics.data;
+    }
+
+    const data = await this.executeCypher([
+      { statement: "MATCH (n:Entity) RETURN count(n) AS nodeCount" },
+      { statement: "MATCH ()-[r]->() RETURN count(r) AS edgeCount" },
+      {
+        statement:
+          "MATCH (n:Entity)-[r]-(m) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 10",
+      },
+      {
+        statement:
+          "MATCH (n:Entity) WHERE n.lastActive IS NOT NULL RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, n.lastActive AS lastActive ORDER BY n.lastActive ASC LIMIT 10",
+      },
+      {
+        statement:
+          "MATCH (n:Entity) RETURN n.type AS type, count(n) AS count ORDER BY count DESC LIMIT 15",
+      },
+      {
+        statement:
+          "MATCH ()-[r]->() RETURN type(r) AS relType, count(r) AS count ORDER BY count DESC LIMIT 15",
+      },
+    ]);
+
+    const nodeCount = Number(data.results?.[0]?.data?.[0]?.row?.[0] ?? 0);
+    const edgeCount = Number(data.results?.[1]?.data?.[0]?.row?.[0] ?? 0);
+
+    const hubs: GraphHub[] = (data.results?.[2]?.data ?? []).map((d: any) => ({
+      id: String(d.row?.[0] ?? ""),
+      label: String(d.row?.[1] ?? d.row?.[0] ?? ""),
+      type: String(d.row?.[2] ?? "UNKNOWN"),
+      degree: Number(d.row?.[3] ?? 0),
+    }));
+
+    const staleEntities: StaleEntity[] = (data.results?.[3]?.data ?? []).map((d: any) => ({
+      id: String(d.row?.[0] ?? ""),
+      label: String(d.row?.[1] ?? d.row?.[0] ?? ""),
+      type: String(d.row?.[2] ?? "UNKNOWN"),
+      lastActive: typeof d.row?.[3] === "number" ? d.row[3] : null,
+    }));
+
+    const typeDistribution: TypeDistribution[] = (data.results?.[4]?.data ?? []).map((d: any) => ({
+      type: String(d.row?.[0] ?? "UNKNOWN"),
+      count: Number(d.row?.[1] ?? 0),
+    }));
+
+    const edgeDistribution: EdgeDistribution[] = (data.results?.[5]?.data ?? []).map((d: any) => ({
+      relType: String(d.row?.[0] ?? "RELATED"),
+      count: Number(d.row?.[1] ?? 0),
+    }));
+
+    const result: GraphAnalyticsResult = {
+      nodeCount,
+      edgeCount,
+      hubs,
+      staleEntities,
+      typeDistribution,
+      edgeDistribution,
+      analyzedAt: new Date(now).toISOString(),
+    };
+
+    this.cachedAnalytics = { data: result, expiresAt: now + 30_000 };
+    return result;
+  }
+
+  /**
+   * Execute a Natural Language or direct Cypher query against the living graph.
+   * Direct Cypher queries are strictly validated to prevent data mutations.
+   */
+  public async queryLivingGraph(query: string, mode: "nl" | "cypher" = "nl"): Promise<GraphQueryResult> {
+    const raw = query.trim();
+    if (!raw) {
+      return { mode, cypher: "", columns: [], rows: [], matchedEntityIds: [] };
+    }
+
+    let statement = "";
+    let params: Record<string, unknown> = {};
+
+    if (mode === "cypher") {
+      const sanitized = sanitizeForScan(raw);
+      if (FORBIDDEN_CYPHER.test(sanitized)) {
+        throw new GraphQueryRejectedError("Forbidden operation in read-only Living Brain query");
+      }
+      if (!ALLOWED_CYPHER_PREFIX.test(sanitized)) {
+        throw new GraphQueryRejectedError("Living Brain queries must begin with MATCH, RETURN, WITH, UNWIND, EXPLAIN, or PROFILE");
+      }
+      statement = raw;
+    } else {
+      const lower = raw.toLowerCase();
+      if (lower.includes("project")) {
+        statement =
+          "MATCH (n:Project) OPTIONAL MATCH (n)-[r]-(m:Entity) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 25";
+      } else if (lower.includes("person") || lower.includes("people")) {
+        statement =
+          "MATCH (n:Person) OPTIONAL MATCH (n)-[r]-(m:Entity) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 25";
+      } else if (lower.includes("device") || lower.includes("hardware") || lower.includes("phone")) {
+        statement =
+          "MATCH (n:Device) OPTIONAL MATCH (n)-[r]-(m:Entity) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 25";
+      } else if (lower.includes("topic")) {
+        statement =
+          "MATCH (n:Topic) OPTIONAL MATCH (n)-[r]-(m:Entity) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 25";
+      } else if (lower.includes("stale") || lower.includes("neglected") || lower.includes("idle")) {
+        statement =
+          "MATCH (n:Entity) WHERE n.lastActive IS NOT NULL RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, n.lastActive AS lastActive ORDER BY n.lastActive ASC LIMIT 25";
+      } else {
+        statement =
+          "MATCH (n:Entity) WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($q) OR toLower(n.id) CONTAINS toLower($q) OR toLower(n.type) CONTAINS toLower($q) OPTIONAL MATCH (n)-[r]-(m:Entity) RETURN n.id AS id, coalesce(n.name, n.id) AS label, n.type AS type, count(r) AS degree ORDER BY degree DESC LIMIT 25";
+        params = { q: raw };
+      }
+    }
+
+    const data = await this.executeCypher([{ statement, parameters: params }]);
+    const columns: string[] = data.results?.[0]?.columns ?? [];
+    const rawRows = (data.results?.[0]?.data ?? []).slice(0, 200);
+    const rows: Array<Record<string, unknown>> = rawRows.map((d: any) => {
+      const obj: Record<string, unknown> = {};
+      columns.forEach((col, idx) => {
+        obj[col] = d.row?.[idx];
+      });
+      return obj;
+    });
+
+    const matchedEntityIds: string[] = rows
+      .map((r) => (typeof r.id === "string" ? r.id : ""))
+      .filter(Boolean);
+
+    return {
+      mode,
+      cypher: statement,
+      columns,
+      rows,
+      matchedEntityIds,
     };
   }
 }

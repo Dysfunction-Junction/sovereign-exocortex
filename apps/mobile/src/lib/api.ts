@@ -507,6 +507,12 @@ export interface PreCognitiveStatus {
   hesitationScore: number;
   isPreStaged: boolean;
   preStagedProposalId?: string;
+  preWarmedAction?: {
+    proposalId: string;
+    targetApp: string;
+    action: string;
+    probability: number;
+  };
   calibrated: boolean;
   sampleCount: number;
   source: "device" | "global" | "default";
@@ -539,6 +545,29 @@ export async function getPrecognitiveStatus(): Promise<PreCognitiveStatus> {
   const body = (await res.json()) as { ok?: boolean; status?: PreCognitiveStatus };
   if (!body.status) throw new Error("Malformed precognitive status response");
   return body.status;
+}
+
+export async function getPreWarmedProposal(): Promise<{
+  proposalId: string;
+  targetApp: string;
+  action: string;
+  probability: number;
+} | null> {
+  const res = await authedFetch("/v3/precognitive/pre-warmed");
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`Pre-warmed proposal fetch failed: HTTP ${res.status}${errorBody ? ` (${errorBody})` : ""}`);
+  }
+  const body = (await res.json()) as {
+    ok?: boolean;
+    proposal?: {
+      proposalId: string;
+      targetApp: string;
+      action: string;
+      probability: number;
+    } | null;
+  };
+  return body.proposal ?? null;
 }
 
 export async function sendPrecognitiveTelemetry(
@@ -818,5 +847,74 @@ export async function triggerNeo4jSync(): Promise<{ ok: boolean; status: Neo4jSy
     throw new Error(`Failed to trigger Neo4j sync: HTTP ${res.status}`);
   }
   return res.json() as Promise<{ ok: boolean; status: Neo4jSyncStatusResponse }>;
+}
+
+export interface GraphHub {
+  id: string;
+  label: string;
+  type: string;
+  degree: number;
+}
+
+export interface StaleEntity {
+  id: string;
+  label: string;
+  type: string;
+  lastActive: number | null;
+}
+
+export interface TypeDistribution {
+  type: string;
+  count: number;
+}
+
+export interface EdgeDistribution {
+  relType: string;
+  count: number;
+}
+
+export interface GraphAnalyticsResponse {
+  ok: boolean;
+  analytics: {
+    nodeCount: number;
+    edgeCount: number;
+    hubs: GraphHub[];
+    staleEntities: StaleEntity[];
+    typeDistribution: TypeDistribution[];
+    edgeDistribution: EdgeDistribution[];
+    analyzedAt: string;
+  };
+}
+
+export interface GraphQueryResponse {
+  ok: boolean;
+  result: {
+    mode: "nl" | "cypher";
+    cypher: string;
+    columns: string[];
+    rows: Array<Record<string, unknown>>;
+    matchedEntityIds: string[];
+  };
+}
+
+export async function getNeo4jAnalytics(): Promise<GraphAnalyticsResponse> {
+  const res = await authedFetch("/v3/world-model/neo4j/analytics");
+  if (!res.ok) {
+    throw new Error(`Failed to query Neo4j analytics: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<GraphAnalyticsResponse>;
+}
+
+export async function queryNeo4jLivingGraph(query: string, mode: "nl" | "cypher" = "nl"): Promise<GraphQueryResponse> {
+  const res = await authedFetch("/v3/world-model/neo4j/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, mode }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to execute Neo4j query (HTTP ${res.status}): ${errText}`);
+  }
+  return res.json() as Promise<GraphQueryResponse>;
 }
 

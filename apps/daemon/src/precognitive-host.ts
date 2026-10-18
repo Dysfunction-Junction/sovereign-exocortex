@@ -9,6 +9,7 @@
 
 import {
   PreCognitiveEngine,
+  AppTransitionMarkov,
   computeWakeDeltaQuantile,
   extractWakeDeltasFromEvents,
   DEFAULT_WAKE_THRESHOLD_MS,
@@ -24,6 +25,17 @@ const RECENCY_WINDOW_MS = 60_000; // 60 seconds
 export function isValidDwell(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 60_000;
 }
+
+export const ALLOWED_CLIPBOARD_ENTITIES = new Set([
+  "URL",
+  "CODE",
+  "TRACKING_NUMBER",
+  "ADDRESS",
+  "PHONE",
+  "EMAIL",
+  "TEXT",
+  "CLIPBOARD",
+]);
 
 export interface CalibrationResult {
   wakeThresholdMs: number;
@@ -44,6 +56,13 @@ interface DeviceReadinessEntry {
   updatedAt: number;
 }
 
+export interface PreWarmedAction {
+  proposalId: string;
+  targetApp: string;
+  action: string;
+  probability: number;
+}
+
 export interface PreCognitiveStatus {
   deviceId: string;
   wakeThresholdMs: number;
@@ -52,6 +71,7 @@ export interface PreCognitiveStatus {
   hesitationScore: number;
   isPreStaged: boolean;
   preStagedProposalId?: string;
+  preWarmedAction?: PreWarmedAction;
   calibrated: boolean;
   sampleCount: number;
   source: "device" | "global" | "default";
@@ -71,6 +91,9 @@ export class PreCognitiveHost {
   private sampleCount = 0;
   private readonly futureSkewDropsByDevice = new Map<string, number>();
   private readonly processedDecisionEventIds = new Set<string>();
+  private readonly processedPreWarmEventIds = new Set<string>();
+  private readonly appMarkovByDevice = new Map<string, AppTransitionMarkov>();
+  private readonly preWarmedProposals = new Map<string, PreWarmedAction & { preWarmedAt: number }>();
 
   public constructor(private readonly nowProvider: () => number = Date.now) {}
 
@@ -94,6 +117,9 @@ export class PreCognitiveHost {
     this.sampleCount = 0;
     this.futureSkewDropsByDevice.clear();
     this.processedDecisionEventIds.clear();
+    this.processedPreWarmEventIds.clear();
+    this.appMarkovByDevice.clear();
+    this.preWarmedProposals.clear();
   }
 
   public getFutureSkewDropCount(deviceId?: string): number {
@@ -324,8 +350,92 @@ export class PreCognitiveHost {
             engine.recordSuggestionDecision(decision, dwell, suggType, action, ev.ts_device);
           }
         }
+
+        if (this.processedPreWarmEventIds.has(ev.event_id)) {
+          continue;
+        }
+        if (this.processedPreWarmEventIds.size > 5000) {
+          const oldest = this.processedPreWarmEventIds.values().next().value;
+          if (oldest) this.processedPreWarmEventIds.delete(oldest);
+        }
+        this.processedPreWarmEventIds.add(ev.event_id);
+
+        const isFresh = (now - ev.ts_device) <= RECENCY_WINDOW_MS;
+
+        // App Transitions -> Markov Model & Speculative Action Pre-Warming
+        const transitions = Array.isArray(payload?.appTransitions)
+          ? payload.appTransitions
+          : payload?.event === "APP_TRANSITION" && typeof payload?.from === "string" && typeof payload?.to === "string"
+            ? [{ from: payload.from, to: payload.to, dwell_ms: payload.dwell_ms }]
+            : [];
+
+        const markov = this.getMarkovModel(deviceId);
+        for (const t of transitions) {
+          if (t && typeof t.from === "string" && typeof t.to === "string") {
+            markov.recordTransition(t);
+            if (isFresh) {
+              const predictions = markov.predictNextApp(t.to, 1);
+              if (predictions.length > 0 && predictions[0].smoothedProbability >= 0.35 && predictions[0].count >= 2) {
+                const next = predictions[0];
+                const preWarmId = `prop_precog_${deviceId}_${next.to.replace(/[^a-zA-Z0-9]/g, "_")}`;
+                this.preStage(
+                  deviceId,
+                  {
+                    proposalId: preWarmId,
+                    targetApp: next.to,
+                    action: `Pre-stage speculative action for ${next.to}`,
+                    probability: next.smoothedProbability,
+                    preWarmedAt: now,
+                  },
+                  now,
+                );
+              }
+            }
+          }
+        }
+
+        // Clipboard Intent -> Immediate Speculative Pre-Warming (Redacted for privacy)
+        if (isFresh && payload?.clipboardIntent && typeof payload.clipboardIntent === "object") {
+          const ci = payload.clipboardIntent as Record<string, unknown>;
+          const rawType = String(ci.entity_type ?? "CLIPBOARD").toUpperCase();
+          const intentType = ALLOWED_CLIPBOARD_ENTITIES.has(rawType) ? rawType : "CLIPBOARD";
+          const hasContent = Boolean(ci.value || ci.snippet);
+          if (hasContent) {
+            const sanitizedEvId = ev.event_id.replace(/[^a-zA-Z0-9_-]/g, "");
+            const preWarmId = `prop_intent_${deviceId}_${sanitizedEvId}`;
+            this.preStage(
+              deviceId,
+              {
+                proposalId: preWarmId,
+                targetApp: "companion",
+                action: `Process clipboard ${intentType}`,
+                probability: 0.95,
+                preWarmedAt: now,
+              },
+              now,
+            );
+          }
+        }
       }
     }
+  }
+
+  private preStage(
+    deviceId: string,
+    preWarm: PreWarmedAction & { preWarmedAt: number },
+    now: number,
+  ): void {
+    this.preWarmedProposals.set(deviceId, preWarm);
+    const current = this.deviceReadiness.get(deviceId)?.state ?? {
+      urgencyIntent: "CASUAL",
+      wakeupLatencyMs: 0,
+      hesitationScore: 0,
+      isPreStaged: false,
+    };
+    this.deviceReadiness.set(deviceId, {
+      state: { ...current, isPreStaged: true, preStagedProposalId: preWarm.proposalId },
+      updatedAt: now,
+    });
   }
 
   public recordScreenState(deviceId: string, state: "SCREEN_ON" | "SCREEN_OFF", timestamp?: number): ReadinessState {
@@ -354,6 +464,38 @@ export class PreCognitiveHost {
       updatedAt: this.nowProvider(),
     });
     return score;
+  }
+
+  public getMarkovModel(deviceId = "default"): AppTransitionMarkov {
+    let m = this.appMarkovByDevice.get(deviceId);
+    if (!m) {
+      m = new AppTransitionMarkov();
+      this.appMarkovByDevice.set(deviceId, m);
+    }
+    return m;
+  }
+
+  public getPreWarmedProposal(deviceId = "default"): PreWarmedAction | null {
+    const p = this.preWarmedProposals.get(deviceId);
+    if (!p) return null;
+    const now = this.nowProvider();
+    if (now - p.preWarmedAt > RECENCY_WINDOW_MS) {
+      this.preWarmedProposals.delete(deviceId);
+      const current = this.deviceReadiness.get(deviceId);
+      if (current) {
+        this.deviceReadiness.set(deviceId, {
+          state: { ...current.state, isPreStaged: false, preStagedProposalId: undefined },
+          updatedAt: now,
+        });
+      }
+      return null;
+    }
+    return {
+      proposalId: p.proposalId,
+      targetApp: p.targetApp,
+      action: p.action,
+      probability: p.probability,
+    };
   }
 
   public getStatus(deviceId = "default"): PreCognitiveStatus {
@@ -390,6 +532,7 @@ export class PreCognitiveHost {
       hesitationScore: readiness.hesitationScore,
       isPreStaged: readiness.isPreStaged,
       preStagedProposalId: readiness.preStagedProposalId,
+      preWarmedAction: this.getPreWarmedProposal(deviceId) ?? undefined,
       calibrated,
       sampleCount,
       source,

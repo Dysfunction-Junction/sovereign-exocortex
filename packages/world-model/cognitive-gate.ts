@@ -40,6 +40,9 @@ export interface ContextualSignals {
   thermalStatus?: 'nominal' | 'elevated' | 'throttling' | string;
   physicalState?: 'in_pocket' | 'face_down' | 'desk_ambient' | 'handheld' | 'at_ear' | 'unknown' | string;
   networkMetered?: boolean;
+  carAudioConnected?: boolean;
+  interruptionFilter?: 'ALL' | 'PRIORITY' | 'NONE' | 'ALARMS' | 'UNKNOWN' | string;
+  dndActive?: boolean;
   appTransitions?: Array<{ from: string; to: string; dwell_ms?: number; ts?: number; hour?: number }>;
   clipboardIntent?: {
     entity_type: string;
@@ -160,6 +163,13 @@ export class CognitiveModeGate {
   }
 
   /**
+   * Get a snapshot of the most recently evaluated contextual signals.
+   */
+  public getLastSignals(): ContextualSignals {
+    return { ...this.lastSignals };
+  }
+
+  /**
    * Classify the user's cognitive state given environmental, temporal, and behavioural signals.
    */
   public classifyMode(signals: ContextualSignals): CognitiveMode {
@@ -178,8 +188,28 @@ export class CognitiveModeGate {
       return this.currentMode;
     }
 
+    // Car audio routing infers in_vehicle motion state when not explicitly stationary
+    if ((effective.carAudioConnected || effective.audioOutput === 'car_audio') && effective.motionState !== 'stationary') {
+      effective.motionState = 'in_vehicle';
+    }
+
     const now = new Date(effective.timestamp ?? Date.now());
     const hour = effective.hourOfDay ?? now.getHours();
+
+    // Native Do-Not-Disturb / Zen / Priority focus mode
+    if (
+      effective.dndActive ||
+      effective.interruptionFilter === 'PRIORITY' ||
+      effective.interruptionFilter === 'NONE' ||
+      effective.interruptionFilter === 'ALARMS'
+    ) {
+      if (effective.screenState === 'OFF' || (hour >= 22 || hour < 7)) {
+        this.currentMode = 'REST_RECOVERY';
+      } else {
+        this.currentMode = 'DEEP_FOCUS';
+      }
+      return this.currentMode;
+    }
 
     // 2. Explicit screen off or prolonged idle during night hours -> REST_RECOVERY
     if ((effective.screenState === 'OFF' || (effective.idleDurationMs ?? 0) > 300000) && (hour >= 22 || hour < 7)) {
@@ -354,13 +384,18 @@ export class CognitiveModeGate {
       };
     }
 
-    // Low-Power Motion Prior: In-vehicle driving safety gating
-    if (effectiveSignals.motionState === 'in_vehicle') {
+    // Low-Power Motion Prior & Car Audio: In-vehicle driving safety gating
+    const isDriving =
+      effectiveSignals.motionState === 'in_vehicle' ||
+      ((effectiveSignals.carAudioConnected === true || effectiveSignals.audioOutput === 'car_audio') &&
+        effectiveSignals.motionState !== 'stationary');
+
+    if (isDriving) {
       if (canAutoExecute) {
         return {
           action: 'SILENT_AUTO_EXECUTE',
           mode: activeMode,
-          reason: `In-vehicle: Safe routine action executed silently without visual distraction.`,
+          reason: `In-vehicle / Car Audio: Safe routine action executed silently without visual distraction.`,
           targetDelivery: 'SILENT_EXECUTE',
           confidence: proposal.confidence,
           evaluatedAt: now,
@@ -370,7 +405,7 @@ export class CognitiveModeGate {
         return {
           action: 'ALLOW_PROMPT',
           mode: activeMode,
-          reason: `In-vehicle: Critical emergency urgency ${urgency.toFixed(2)} allowed.`,
+          reason: `In-vehicle / Car Audio: Critical emergency urgency ${urgency.toFixed(2)} allowed.`,
           targetDelivery: 'GLASS_MODAL',
           confidence: proposal.confidence,
           evaluatedAt: now,
@@ -380,7 +415,58 @@ export class CognitiveModeGate {
       return {
         action: 'SUPPRESS_AND_QUEUE',
         mode: activeMode,
-        reason: `In-vehicle motion detected: visual modals suppressed for driving safety.`,
+        reason: `In-vehicle / Car Audio connected: visual modals suppressed for driving safety.`,
+        targetDelivery: 'BACKGROUND_QUEUE',
+        confidence: proposal.confidence,
+        evaluatedAt: now,
+      };
+    }
+
+    // Native Zen / Do-Not-Disturb (DND) Interruption Gating
+    const isDnd =
+      effectiveSignals.dndActive === true ||
+      effectiveSignals.interruptionFilter === 'PRIORITY' ||
+      effectiveSignals.interruptionFilter === 'NONE' ||
+      effectiveSignals.interruptionFilter === 'ALARMS';
+
+    if (isDnd) {
+      if (canAutoExecute) {
+        return {
+          action: 'SILENT_AUTO_EXECUTE',
+          mode: activeMode,
+          reason: `Zen/DND active: Safe routine action executed silently without visual interruption.`,
+          targetDelivery: 'SILENT_EXECUTE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      // Total silence requested under interruptionFilter === 'NONE'
+      if (effectiveSignals.interruptionFilter === 'NONE') {
+        this.queueProposal(proposal);
+        return {
+          action: 'SUPPRESS_AND_QUEUE',
+          mode: activeMode,
+          reason: `Zen/DND total silence (interruption filter NONE): all visual interruptions suppressed.`,
+          targetDelivery: 'BACKGROUND_QUEUE',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      if (urgency >= this.config.emergencyUrgencyCutoff) {
+        return {
+          action: 'ALLOW_PROMPT',
+          mode: activeMode,
+          reason: `Zen/DND active: Critical emergency urgency ${urgency.toFixed(2)} allowed through filter.`,
+          targetDelivery: 'GLASS_MODAL',
+          confidence: proposal.confidence,
+          evaluatedAt: now,
+        };
+      }
+      this.queueProposal(proposal);
+      return {
+        action: 'SUPPRESS_AND_QUEUE',
+        mode: activeMode,
+        reason: `Zen/DND active (${effectiveSignals.interruptionFilter ?? 'ACTIVE'}): non-emergency notifications suppressed.`,
         targetDelivery: 'BACKGROUND_QUEUE',
         confidence: proposal.confidence,
         evaluatedAt: now,
