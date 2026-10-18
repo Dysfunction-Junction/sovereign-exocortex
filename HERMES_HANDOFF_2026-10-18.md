@@ -82,3 +82,64 @@ In previous architectural roadmaps, **Option 4** referred to the **Cross-Repo Ec
 - **TypeScript**: **0** errors across all 11 packages and apps (`pnpm typecheck`).
 - **Triad Advisory Review**: Fully reviewed and approved by the Autonomous Triad Advisory Council (`advisor.py` with Claude Pro / Codex failover) with zero token cost. All 5 advisory council refinements implemented and verified.
 - **Git Commit**: `fix(exocortex): harden Cypher label sanitization, telemetry key normalization, and hardware signal mapping`.
+
+---
+
+## 4. Autonomous Triad Fusion Audit Runs (Completed Runs 1 - 4)
+
+Across 4 consecutive Triad Fusion cycles, deep audits and surgical hardening were executed across the entire Sovereign Exocortex monorepo with Autonomous Triad advisory critique (`advisor.py`):
+
+### Run 1 (Round 2 — Commit `6f7ee5c`):
+- **Core Security & Telemetry Validation (`apps/daemon`)**:
+  - Required explicit `telemetry:write` and `approval:write` cryptographic scopes on device attestations.
+  - Hardened `dropKnownTelemetry` to prevent spoofing and replay attacks.
+- **World Model Resilience (`packages/world-model`)**:
+  - Guarded `LivingLifeGraph` against non-finite weights, edge probabilities, and NaN divergence in active inference policy evaluation.
+- **Mobile Routing (`apps/mobile`)**:
+  - Hardened navigation route parameters and deep link handling against corrupted payloads.
+
+### Run 2 (Round 3 — Commit `c69ac81`):
+- **P2P Mesh Network Hardening (`@exocortex/mesh`)**:
+  - Enforced bounded peer discovery buffers, message envelope replay protections, and clock skew mitigation.
+- **Databank Integrity (`@exocortex/databank`)**:
+  - Hardened SQLite WAL mode transitions and transaction isolation under heavy background writes.
+- **Semantic Memory Subsystem (`@exocortex/memory`)**:
+  - Sanitized vector search inputs, embedding dimensionality checks, and cosine similarity NaN protection.
+
+### Run 3 (Round 4 — Commit `68debd1`):
+- **Decay Clocks (`packages/core/clocks.ts`)**:
+  - Standardized `Number.isNaN` fail-closed decay and clarified `daysUntilExpiry` contracts.
+- **CAS Proposal Transitions (`packages/core/db.ts`)**:
+  - Implemented atomic compare-and-swap (CAS) transitions with `ProposalConcurrentModificationError`.
+  - Permitted `SURFACED -> SUPPRESSED` transition while strictly blocking direct human bypass `GATED -> APPROVED`.
+- **Replay Guards (`apps/mobile/src/lib/proposals.ts`)**:
+  - Added synchronous in-flight action locks in `guardPendingProposal` and robust async concurrency guards.
+
+### Run 4 (Round 5 — Commit `f6df55a`):
+- **Cognitive Mode Gate Sanitization (`packages/world-model/cognitive-gate.ts`)**:
+  - Out-of-range confidence (`> 1` or `< 0`) and risk (`< 0` or `> 1`) fail closed to `confidence: 0` and `risk: 1`.
+  - Finite urgency is clamped to `[0, 1]` so emergency cutoffs (`>= 0.95`) are never suppressed by scaling anomalies.
+  - Immutability: proposals and signals are shallow-cloned, preventing caller mutations from altering gate states or queued proposals.
+  - Malformed proposal envelopes or missing IDs fail closed to `action: DROP`.
+  - Queued proposals strictly sanitize `stagedAt`, `urgency`, `confidence`, and `estimatedRisk` to finite values.
+- **Pending Proposals Payload Validation (`apps/daemon/src/pending-proposals.ts`)**:
+  - Validates `actionPayload` before DB lookup: non-plain-objects (arrays, primitives, dates) fail closed by skipping the proposal.
+  - Added deduplicated, sanitized warning logs (`JSON.stringify(proposalId)`).
+- **State Matching Allowlist (`apps/daemon/src/inferred-outcomes.ts`)**:
+  - `isStateMatching`: positive allowlist (`string`, `number`, `boolean`, `bigint`) prevents false string matches against objects, arrays (`[]`), functions, or `null`/`undefined`.
+
+---
+
+## 5. Final Ecosystem Verification & Test Metrics
+- **Tests**:
+  - `@exocortex/daemon`: **187 / 187** tests passing (100%).
+  - `@exocortex/world-model`: **120 / 120** tests passing (100%).
+  - `@exocortex/core`: **180 / 180** tests passing (100%).
+  - `@exocortex/mesh`: **326 / 326** tests passing (100%).
+  - `@exocortex/memory`: **112 / 112** tests passing (100%).
+  - `@exocortex/databank`: **33 / 33** tests passing (100%).
+  - `@exocortex/mobile`: **158 / 158** tests passing (100%).
+- **TypeScript**: **0** compile errors across all 11 workspace packages (`pnpm typecheck`).
+- **Triad Advisory Review**: Fully reviewed, refined, and approved by the Autonomous Triad Advisory Council (`advisor.py`).
+- **All Remote Branches**: Synchronized on `origin/main`.
+
