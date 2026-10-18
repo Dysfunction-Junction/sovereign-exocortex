@@ -422,4 +422,93 @@ describe("proposalManager", () => {
       })
     );
   });
+
+  it("reject() returns already_consumed or already_rejected on duplicate action", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    vi.mocked(api.submitProposalApproval).mockResolvedValueOnce({
+      ok: true,
+      status: "rejected",
+    });
+
+    const res1 = await proposalManager.reject(baseProposal.proposalId);
+    expect(res1.ok).toBe(true);
+    expect(res1.status).toBe("rejected");
+
+    const res2 = await proposalManager.reject(baseProposal.proposalId);
+    expect(res2.ok).toBe(false);
+    expect(res2.status).toBe("already_rejected");
+
+    // Also check already_consumed when previously consumed/approved
+    const consumedProp: IncomingProposal = { ...baseProposal, proposalId: "prop_consumed_1" };
+    proposalManager.ingestProposal(consumedProp);
+    const tracked = proposalManager.get("prop_consumed_1")!;
+    tracked.state = "consumed";
+
+    const res3 = await proposalManager.reject("prop_consumed_1");
+    expect(res3.ok).toBe(false);
+    expect(res3.status).toBe("already_consumed");
+  });
+
+  it("locks the proposal in flight during reject so concurrent reject calls cannot double-submit", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    let resolveApi!: (v: api.ProposalApprovalResult) => void;
+    vi.mocked(api.submitProposalApproval).mockImplementationOnce(
+      () => new Promise((resolve) => { resolveApi = resolve; })
+    );
+
+    const [p1, p2] = [
+      proposalManager.reject(baseProposal.proposalId),
+      proposalManager.reject(baseProposal.proposalId),
+    ];
+
+    // Second call should fail immediately synchronously while first is in flight
+    const res2 = await p2;
+    expect(res2.ok).toBe(false);
+    expect(res2.status).toBe("already_consumed");
+
+    await vi.waitFor(() => expect(api.submitProposalApproval).toHaveBeenCalledTimes(1));
+    resolveApi({ ok: true, status: "rejected" });
+    const res1 = await p1;
+    expect(res1.ok).toBe(true);
+    expect(api.submitProposalApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("reject() returns expired when proposal TTL has elapsed", async () => {
+    const expiredProp: IncomingProposal = {
+      ...baseProposal,
+      proposalId: "prop_expired_1",
+      expiresAt: Date.now() - 1000,
+    };
+    proposalManager.ingestProposal(expiredProp);
+
+    const res = await proposalManager.reject(expiredProp.proposalId);
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe("expired");
+    expect(api.submitProposalApproval).not.toHaveBeenCalled();
+  });
+
+  it("labelNotWanted() returns already_consumed, already_rejected, and expired", async () => {
+    const prop: IncomingProposal = { ...baseProposal, proposalId: "prop_lnw_1" };
+    proposalManager.ingestProposal(prop);
+
+    const res1 = await proposalManager.labelNotWanted(prop.proposalId);
+    expect(res1.ok).toBe(true);
+
+    const res2 = await proposalManager.labelNotWanted(prop.proposalId);
+    expect(res2.ok).toBe(false);
+    expect(res2.status).toBe("already_rejected");
+
+    const consumedProp: IncomingProposal = { ...baseProposal, proposalId: "prop_lnw_2" };
+    proposalManager.ingestProposal(consumedProp);
+    proposalManager.get("prop_lnw_2")!.state = "consumed";
+    const res3 = await proposalManager.labelNotWanted("prop_lnw_2");
+    expect(res3.ok).toBe(false);
+    expect(res3.status).toBe("already_consumed");
+
+    const expiredProp: IncomingProposal = { ...baseProposal, proposalId: "prop_lnw_3", expiresAt: Date.now() - 500 };
+    proposalManager.ingestProposal(expiredProp);
+    const res4 = await proposalManager.labelNotWanted("prop_lnw_3");
+    expect(res4.ok).toBe(false);
+    expect(res4.status).toBe("expired");
+  });
 });

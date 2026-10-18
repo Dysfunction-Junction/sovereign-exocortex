@@ -56,23 +56,34 @@ class ProposalManager {
     return tracked;
   }
 
-  public async labelWanted(proposalId: string): Promise<ProposalApprovalResult> {
-    this.cleanExpired();
-    const item = this.proposals.get(proposalId);
-    if (!item) {
-      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
-    }
+  private checkReplayOrExpiry(item: TrackedProposal): ProposalApprovalResult | null {
     if (item.state === "consumed" || item.state === "approved" || item.state === "in_flight") {
       return { ok: false, status: "already_consumed", error: "Replay prevented: proposal already in flight or consumed" };
     }
     if (item.state === "rejected") {
       return { ok: false, status: "already_rejected", error: "Proposal was previously rejected" };
     }
-    if (Date.now() >= item.expiresAt) {
-      item.state = "expired";
-      this.notify();
+    if (item.state === "expired" || Date.now() >= item.expiresAt) {
+      if (item.state !== "expired") {
+        item.state = "expired";
+        this.notify();
+      }
       return { ok: false, status: "expired", error: "Proposal TTL expired" };
     }
+    if (item.state !== "pending") {
+      return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
+    }
+    return null;
+  }
+
+  public async labelWanted(proposalId: string): Promise<ProposalApprovalResult> {
+    this.cleanExpired();
+    const item = this.proposals.get(proposalId);
+    if (!item) {
+      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+    }
+    const guard = this.checkReplayOrExpiry(item);
+    if (guard) return guard;
 
     item.state = "in_flight";
     this.notify();
@@ -127,14 +138,8 @@ class ProposalManager {
     if (!item) {
       return { ok: false, status: "not_found", error: "Proposal not found or expired" };
     }
-    if (item.state !== "pending") {
-      return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
-    }
-    if (Date.now() >= item.expiresAt) {
-      item.state = "expired";
-      this.notify();
-      return { ok: false, status: "expired", error: "Proposal TTL expired" };
-    }
+    const guard = this.checkReplayOrExpiry(item);
+    if (guard) return guard;
 
     item.state = "in_flight";
     this.notify();
@@ -190,17 +195,8 @@ class ProposalManager {
     if (item.shadow) {
       return this.labelWanted(proposalId);
     }
-    if (item.state === "consumed" || item.state === "approved" || item.state === "in_flight") {
-      return { ok: false, status: "already_consumed", error: "Replay prevented: proposal already in flight or consumed" };
-    }
-    if (item.state === "rejected") {
-      return { ok: false, status: "already_rejected", error: "Proposal was previously rejected" };
-    }
-    if (Date.now() >= item.expiresAt) {
-      item.state = "expired";
-      this.notify();
-      return { ok: false, status: "expired", error: "Proposal TTL expired" };
-    }
+    const guard = this.checkReplayOrExpiry(item);
+    if (guard) return guard;
 
     // Synchronously consume/lock in-flight state BEFORE any await to prevent race condition
     item.state = "in_flight";
@@ -273,9 +269,8 @@ class ProposalManager {
     if (item.shadow) {
       return this.labelNotWanted(proposalId, reason);
     }
-    if (item.state !== "pending") {
-      return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
-    }
+    const guard = this.checkReplayOrExpiry(item);
+    if (guard) return guard;
 
     // Lock synchronously (like approve) so a concurrent approve/reject can't
     // submit the same nonce while this request is in flight.

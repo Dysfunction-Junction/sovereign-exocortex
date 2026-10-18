@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { ExocortexDatabase } from "./db.js";
+import { ExocortexDatabase, ProposalConcurrentModificationError } from "./db.js";
 import { canonicalJsonStringify } from "./canonical.js";
 import type { DeviceRecord, EventIn } from "./schema-types.js";
 
@@ -235,6 +235,121 @@ describe("ExocortexDatabase (v3 SQLite Event Store Driver)", () => {
     expect(labels.length).toBe(1);
     expect(labels[0].label).toBe("wanted");
     expect(labels[0].latency_ms).toBe(120);
+  });
+
+  it("permits legal transitions for SURFACED (-> SUPPRESSED) and rejects direct GATED approval bypass", () => {
+    const ev = db.ingestEvent("dev_phone_galaxy", {
+      event_id: "evt_prop_transitions",
+      kind: "telemetry",
+      ts_device: 6000,
+      schema_ver: 1,
+      payload: { transition_test: true },
+    });
+
+    // 1. GATED cannot bypass directly to APPROVED without being STAGED or SURFACED
+    db.insertProposal({
+      proposal_id: "prop_gated_1",
+      created_seq: ev.event.seq,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "Gated proposal for approval bypass test",
+      action: JSON.stringify({ act: 1 }),
+      action_hash: new Uint8Array([1, 2, 3]),
+      efe: 0.5,
+      risk_term: 0.1,
+      ambiguity_term: 0.05,
+      state: "GATED",
+      shadow: 1,
+      expires_at: Date.now() + 60000,
+      updated_at: Date.now(),
+    });
+    expect(() => db.updateProposalState("prop_gated_1", "APPROVED")).toThrow(/Illegal proposal state transition/);
+    expect(() => db.updateProposalState("prop_gated_1", "REJECTED")).toThrow(/Illegal proposal state transition/);
+
+    // 2. SURFACED -> SUPPRESSED is legal (e.g. cognitive load suppression)
+    db.insertProposal({
+      proposal_id: "prop_surfaced_1",
+      created_seq: ev.event.seq,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "Surfaced proposal for suppression test",
+      action: JSON.stringify({ act: 3 }),
+      action_hash: new Uint8Array([3, 4, 5]),
+      efe: 0.5,
+      risk_term: 0.1,
+      ambiguity_term: 0.05,
+      state: "SURFACED",
+      shadow: 1,
+      expires_at: Date.now() + 60000,
+      updated_at: Date.now(),
+    });
+    db.updateProposalState("prop_surfaced_1", "SUPPRESSED");
+    expect(db.getProposal("prop_surfaced_1")?.state).toBe("SUPPRESSED");
+
+    // 3. GATED -> EXECUTING is permitted for automated Tier-0 policies
+    db.insertProposal({
+      proposal_id: "prop_gated_auto",
+      created_seq: ev.event.seq,
+      policy_type: "PRAGMATIC",
+      tier: 0,
+      summary: "Tier-0 automated execution proposal",
+      action: JSON.stringify({ act: "auto" }),
+      action_hash: new Uint8Array([4, 5, 6]),
+      efe: 0.1,
+      risk_term: 0.01,
+      ambiguity_term: 0.01,
+      state: "GATED",
+      shadow: 0,
+      expires_at: Date.now() + 60000,
+      updated_at: Date.now(),
+    });
+    db.updateProposalState("prop_gated_auto", "EXECUTING");
+    expect(db.getProposal("prop_gated_auto")?.state).toBe("EXECUTING");
+  });
+
+  it("throws ProposalConcurrentModificationError when CAS update detects state divergence", () => {
+    const ev = db.ingestEvent("dev_phone_galaxy", {
+      event_id: "evt_cas_conflict",
+      kind: "telemetry",
+      ts_device: 7000,
+      schema_ver: 1,
+      payload: { cas_test: true },
+    });
+    db.insertProposal({
+      proposal_id: "prop_cas_1",
+      created_seq: ev.event.seq,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "CAS conflict proposal",
+      action: JSON.stringify({ act: "cas" }),
+      action_hash: new Uint8Array([7, 8, 9]),
+      efe: 0.5,
+      risk_term: 0.1,
+      ambiguity_term: 0.05,
+      state: "STAGED",
+      shadow: 1,
+      expires_at: Date.now() + 60000,
+      updated_at: Date.now(),
+    });
+
+    // Simulate CAS failure by intercepting prepare to simulate a lost race (0 changes)
+    const rawPrepare = (db as any).db.prepare.bind((db as any).db);
+    (db as any).db.prepare = (sql: string) => {
+      const stmt = rawPrepare(sql);
+      if (sql.includes("UPDATE proposals SET state = ?")) {
+        return {
+          ...stmt,
+          run: () => ({ changes: 0 }),
+        };
+      }
+      return stmt;
+    };
+
+    try {
+      expect(() => db.updateProposalState("prop_cas_1", "APPROVED")).toThrow(ProposalConcurrentModificationError);
+    } finally {
+      (db as any).db.prepare = rawPrepare;
+    }
   });
 
   it("throws DeviceNotEnrolledError when unknown device attempts ingest", () => {

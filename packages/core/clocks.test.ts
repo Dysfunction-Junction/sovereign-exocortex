@@ -76,4 +76,63 @@ describe('Decay Clocks & Expiry', () => {
     expect(result.nextTier).toBe(LifecycleTier.Archive);
     expect(result.reviewReason).toBe('dormant');
   });
+
+  it('fails closed and archives Review item when tierEnteredAt is missing or invalid', () => {
+    const corruptReviewPattern: WorkflowPattern = {
+      ...basePattern,
+      tier: LifecycleTier.Review,
+      tierEnteredAt: 'not-a-valid-date',
+    };
+    const now = new Date('2026-01-02T00:00:00Z');
+    const result = evaluateClockTransitions(corruptReviewPattern, now);
+    expect(result.changed).toBe(true);
+    expect(result.nextTier).toBe(LifecycleTier.Archive);
+    expect(result.reviewReason).toBe('dormant');
+
+    const missingReviewPattern: WorkflowPattern = {
+      ...basePattern,
+      tier: LifecycleTier.Review,
+      tierEnteredAt: '' as any,
+    };
+    const missingResult = evaluateClockTransitions(missingReviewPattern, now);
+    expect(missingResult.changed).toBe(true);
+    expect(missingResult.nextTier).toBe(LifecycleTier.Archive);
+
+    const undefinedReviewPattern: WorkflowPattern = {
+      ...basePattern,
+      tier: LifecycleTier.Review,
+      tierEnteredAt: undefined as any,
+    };
+    expect(evaluateClockTransitions(undefinedReviewPattern, now).nextTier).toBe(LifecycleTier.Archive);
+
+    const nullReviewPattern: WorkflowPattern = {
+      ...basePattern,
+      tier: LifecycleTier.Review,
+      tierEnteredAt: null as any,
+    };
+    expect(evaluateClockTransitions(nullReviewPattern, now).nextTier).toBe(LifecycleTier.Archive);
+  });
+
+  it('handles exact boundary for review decay', () => {
+    const reviewPattern: WorkflowPattern = {
+      ...basePattern,
+      tier: LifecycleTier.Review,
+      tierEnteredAt: '2026-01-01T00:00:00.000Z',
+    };
+    // Exact 14 days later
+    const exact14Days = new Date('2026-01-15T00:00:00.000Z');
+    const result = evaluateClockTransitions(reviewPattern, exact14Days);
+    expect(result.changed).toBe(true);
+    expect(result.nextTier).toBe(LifecycleTier.Archive);
+
+    // 1 millisecond before 14 days
+    const justBefore = new Date('2026-01-14T23:59:59.999Z');
+    expect(evaluateClockTransitions(reviewPattern, justBefore).changed).toBe(false);
+  });
+
+  it('returns 0 days remaining when expiry timestamp is unparseable', () => {
+    expect(daysUntilExpiry('corrupt-date-string')).toBe(0);
+    expect(daysUntilExpiry(null)).toBe(0);
+    expect(daysUntilExpiry(undefined as any)).toBe(0);
+  });
 });

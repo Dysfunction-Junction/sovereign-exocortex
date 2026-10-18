@@ -247,7 +247,7 @@ export const PROPOSAL_TRANSITIONS: Readonly<Record<ProposalState, readonly Propo
   DRAFT: ["GATED", "SUPPRESSED", "STAGED", "SURFACED", "EXPIRED"],
   GATED: ["SUPPRESSED", "STAGED", "SURFACED", "EXECUTING", "EXPIRED"],
   STAGED: ["SURFACED", "SUPPRESSED", "APPROVED", "REJECTED", "EXPIRED"],
-  SURFACED: ["APPROVED", "REJECTED", "EXPIRED"],
+  SURFACED: ["APPROVED", "REJECTED", "SUPPRESSED", "EXPIRED"],
   APPROVED: ["EXECUTING", "EXPIRED"],
   EXECUTING: ["SUCCEEDED", "FAILED"],
   SUPPRESSED: [],
@@ -265,6 +265,13 @@ export class IllegalProposalTransitionError extends Error {
   ) {
     super(`Illegal proposal state transition for ${proposalId}: ${from} -> ${to}`);
     this.name = "IllegalProposalTransitionError";
+  }
+}
+
+export class ProposalConcurrentModificationError extends Error {
+  constructor(public readonly proposalId: string, public readonly attemptedState: ProposalState) {
+    super(`Concurrent modification detected for proposal ${proposalId} (attempted state: ${attemptedState})`);
+    this.name = "ProposalConcurrentModificationError";
   }
 }
 
@@ -786,9 +793,12 @@ export class ExocortexDatabase {
       if (!PROPOSAL_TRANSITIONS[current.state]?.includes(state)) {
         throw new IllegalProposalTransitionError(proposalId, current.state, state);
       }
-      this.db
+      const res = this.db
         .prepare("UPDATE proposals SET state = ?, updated_at = ? WHERE proposal_id = ? AND state = ?")
         .run(state, Date.now(), proposalId, current.state);
+      if (Number(res.changes) === 0) {
+        throw new ProposalConcurrentModificationError(proposalId, state);
+      }
     });
   }
 

@@ -17,12 +17,12 @@ export function isClockExpired(
   if (!expiryTimestamp) return true;
   const expiry = typeof expiryTimestamp === 'string' ? new Date(expiryTimestamp) : expiryTimestamp;
   // Fail closed: an unparseable timestamp is treated as expired (like null), never as "never expires"
-  if (isNaN(expiry.getTime())) return true;
+  if (Number.isNaN(expiry.getTime())) return true;
   return now.getTime() >= expiry.getTime();
 }
 
 /**
- * Calculates remaining days on a clock (fractional). Returns 0 if expired.
+ * Calculates remaining days on a clock (fractional). Returns 0 if expired, null, or unparseable (fail-closed).
  */
 export function daysUntilExpiry(
   expiryTimestamp: string | Date | null,
@@ -30,6 +30,7 @@ export function daysUntilExpiry(
 ): number {
   if (!expiryTimestamp) return 0;
   const expiry = typeof expiryTimestamp === 'string' ? new Date(expiryTimestamp) : expiryTimestamp;
+  if (Number.isNaN(expiry.getTime())) return 0;
   const diffMs = expiry.getTime() - now.getTime();
   return Math.max(0, diffMs / (1000 * 60 * 60 * 24));
 }
@@ -63,9 +64,8 @@ export function evaluateClockTransitions(
 
   // Review tier evaluation (14 days in review -> Archive)
   if (pattern.tier === LifecycleTier.Review) {
-    const reviewEnteredAt = new Date(pattern.tierEnteredAt);
-    const msInReview = now.getTime() - reviewEnteredAt.getTime();
-    if (msInReview >= CONSTANTS.REVIEW_TO_ARCHIVE_MS) {
+    const reviewTime = pattern.tierEnteredAt ? new Date(pattern.tierEnteredAt).getTime() : NaN;
+    if (Number.isNaN(reviewTime) || (now.getTime() - reviewTime >= CONSTANTS.REVIEW_TO_ARCHIVE_MS)) {
       return {
         nextTier: LifecycleTier.Archive,
         reviewReason: 'dormant',
