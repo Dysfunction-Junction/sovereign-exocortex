@@ -753,6 +753,47 @@ export class CognitiveModeGate {
   }
 }
 
+function toBool(raw: unknown): boolean | undefined {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'string') {
+    const s = raw.trim().toLowerCase();
+    if (s === 'true' || s === '1') return true;
+    if (s === 'false' || s === '0') return false;
+  }
+  if (typeof raw === 'number') {
+    if (raw === 1) return true;
+    if (raw === 0) return false;
+  }
+  return undefined;
+}
+
+const VALID_INTERRUPTION_FILTERS = new Set(['ALL', 'PRIORITY', 'NONE', 'ALARMS', 'UNKNOWN'] as const);
+
+function normalizeInterruptionFilter(raw: unknown): ContextualSignals['interruptionFilter'] {
+  if (typeof raw === 'number') {
+    switch (raw) {
+      case 1: return 'ALL';
+      case 2: return 'PRIORITY';
+      case 3: return 'NONE';
+      case 4: return 'ALARMS';
+      case 0: return 'UNKNOWN';
+      default: return undefined;
+    }
+  }
+  if (typeof raw === 'string') {
+    const cleaned = raw.trim().toUpperCase().replace(/^INTERRUPTION_FILTER_/, '');
+    if (cleaned === '1') return 'ALL';
+    if (cleaned === '2') return 'PRIORITY';
+    if (cleaned === '3') return 'NONE';
+    if (cleaned === '4') return 'ALARMS';
+    if (cleaned === '0') return 'UNKNOWN';
+    if (VALID_INTERRUPTION_FILTERS.has(cleaned as any)) {
+      return cleaned as ContextualSignals['interruptionFilter'];
+    }
+  }
+  return undefined;
+}
+
 /**
  * Map a PredictionContext snapshot to ContextualSignals for the CognitiveModeGate.
  */
@@ -761,6 +802,26 @@ export function contextToSignals(ctx: PredictionContext | undefined): Contextual
   const screenUpper = ctx.device?.screen_state?.toUpperCase();
   const screenState: 'ON' | 'OFF' | 'UNLOCKED' | undefined =
     screenUpper === 'ON' ? 'ON' : screenUpper === 'OFF' ? 'OFF' : screenUpper === 'UNLOCKED' ? 'UNLOCKED' : undefined;
+
+  const rawRecord = ctx as Record<string, unknown>;
+  const focusRecord = rawRecord.focus as Record<string, unknown> | undefined;
+  const audioRecord = ctx.audio as Record<string, unknown> | undefined;
+
+  const rawFilter = rawRecord.interruption_filter ?? rawRecord.interruptionFilter ?? focusRecord?.interruption_filter;
+  const interruptionFilter = normalizeInterruptionFilter(rawFilter);
+
+  const rawDnd = rawRecord.dnd_active ?? rawRecord.dndActive ?? focusRecord?.dnd_active;
+  const parsedDnd = toBool(rawDnd);
+  const dndActive = parsedDnd !== undefined
+    ? parsedDnd
+    : interruptionFilter === 'ALL'
+      ? false
+      : interruptionFilter && interruptionFilter !== 'UNKNOWN'
+        ? true
+        : undefined;
+
+  const rawCarAudio = rawRecord.car_audio_connected ?? rawRecord.carAudioConnected ?? audioRecord?.car_audio_connected;
+  const carAudioConnected = toBool(rawCarAudio);
 
   return {
     foregroundApp: ctx.app?.package,
@@ -778,7 +839,10 @@ export function contextToSignals(ctx: PredictionContext | undefined): Contextual
     physicalState: (ctx.physical_surface?.state && ctx.physical_surface.state !== 'unknown' ? ctx.physical_surface.state : undefined) ??
       (ctx.ambient?.physical_state && ctx.ambient.physical_state !== 'unknown' ? ctx.ambient.physical_state : undefined),
     networkMetered: ctx.network_telemetry?.connected === false ? undefined : (ctx.network_telemetry?.metered ?? ctx.device?.metered),
-    appTransitions: ((ctx as Record<string, unknown>).app_transitions ?? (ctx as Record<string, unknown>).transitions) as ContextualSignals['appTransitions'],
-    clipboardIntent: (ctx as Record<string, unknown>).clipboard_intent as ContextualSignals['clipboardIntent'],
+    carAudioConnected,
+    interruptionFilter,
+    dndActive,
+    appTransitions: (rawRecord.app_transitions ?? rawRecord.transitions ?? rawRecord.appTransitions) as ContextualSignals['appTransitions'],
+    clipboardIntent: (rawRecord.clipboard_intent ?? rawRecord.clipboardIntent) as ContextualSignals['clipboardIntent'],
   };
 }

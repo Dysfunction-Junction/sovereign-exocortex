@@ -26,6 +26,14 @@ export function isValidDwell(n: unknown): n is number {
   return typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 60_000;
 }
 
+export function hasNonZeroHash(hash: unknown): hash is Uint8Array {
+  if (!hash || !(hash instanceof Uint8Array || Buffer.isBuffer(hash))) return false;
+  for (let i = 0; i < hash.length; i++) {
+    if (hash[i] !== 0) return true;
+  }
+  return false;
+}
+
 export const ALLOWED_CLIPBOARD_ENTITIES = new Set([
   "URL",
   "CODE",
@@ -351,70 +359,82 @@ export class PreCognitiveHost {
           }
         }
 
-        if (this.processedPreWarmEventIds.has(ev.event_id)) {
+        const rawEvId = typeof ev.event_id === "string" && ev.event_id.trim().length > 0 ? ev.event_id.trim() : undefined;
+        const hashStr = hasNonZeroHash(ev.hash)
+          ? `h_${Buffer.from(ev.hash).toString("hex")}`
+          : undefined;
+        const dedupeId = rawEvId ?? hashStr ?? `evt_${deviceId}_${ev.ts_device}_${ev.seq ?? 0}`;
+
+        if (this.processedPreWarmEventIds.has(dedupeId)) {
           continue;
         }
         if (this.processedPreWarmEventIds.size > 5000) {
           const oldest = this.processedPreWarmEventIds.values().next().value;
           if (oldest) this.processedPreWarmEventIds.delete(oldest);
         }
-        this.processedPreWarmEventIds.add(ev.event_id);
+        this.processedPreWarmEventIds.add(dedupeId);
 
         const isFresh = (now - ev.ts_device) <= RECENCY_WINDOW_MS;
 
-        // App Transitions -> Markov Model & Speculative Action Pre-Warming
-        const transitions = Array.isArray(payload?.appTransitions)
-          ? payload.appTransitions
-          : payload?.event === "APP_TRANSITION" && typeof payload?.from === "string" && typeof payload?.to === "string"
-            ? [{ from: payload.from, to: payload.to, dwell_ms: payload.dwell_ms }]
-            : [];
+        try {
+          // App Transitions -> Markov Model & Speculative Action Pre-Warming (supports transitions, app_transitions, appTransitions)
+          const rawTransitions = [payload?.appTransitions, payload?.transitions, payload?.app_transitions].find(Array.isArray);
+          const transitions = Array.isArray(rawTransitions)
+            ? rawTransitions.slice(0, 500)
+            : (payload?.event === "APP_TRANSITION" || payload?.event === "APP_TRANSITIONS") && typeof payload?.from === "string" && typeof payload?.to === "string"
+              ? [{ from: payload.from, to: payload.to, dwell_ms: payload.dwell_ms }]
+              : [];
 
-        const markov = this.getMarkovModel(deviceId);
-        for (const t of transitions) {
-          if (t && typeof t.from === "string" && typeof t.to === "string") {
-            markov.recordTransition(t);
-            if (isFresh) {
-              const predictions = markov.predictNextApp(t.to, 1);
-              if (predictions.length > 0 && predictions[0].smoothedProbability >= 0.35 && predictions[0].count >= 2) {
-                const next = predictions[0];
-                const preWarmId = `prop_precog_${deviceId}_${next.to.replace(/[^a-zA-Z0-9]/g, "_")}`;
-                this.preStage(
-                  deviceId,
-                  {
-                    proposalId: preWarmId,
-                    targetApp: next.to,
-                    action: `Pre-stage speculative action for ${next.to}`,
-                    probability: next.smoothedProbability,
-                    preWarmedAt: now,
-                  },
-                  now,
-                );
+          const markov = this.getMarkovModel(deviceId);
+          for (const t of transitions) {
+            if (t && typeof t.from === "string" && typeof t.to === "string") {
+              markov.recordTransition(t);
+              if (isFresh) {
+                const predictions = markov.predictNextApp(t.to, 1);
+                if (predictions.length > 0 && predictions[0].smoothedProbability >= 0.35 && predictions[0].count >= 2) {
+                  const next = predictions[0];
+                  const preWarmId = `prop_precog_${deviceId}_${next.to.replace(/[^a-zA-Z0-9]/g, "_")}`;
+                  this.preStage(
+                    deviceId,
+                    {
+                      proposalId: preWarmId,
+                      targetApp: next.to,
+                      action: `Pre-stage speculative action for ${next.to}`,
+                      probability: next.smoothedProbability,
+                      preWarmedAt: now,
+                    },
+                    now,
+                  );
+                }
               }
             }
           }
-        }
 
-        // Clipboard Intent -> Immediate Speculative Pre-Warming (Redacted for privacy)
-        if (isFresh && payload?.clipboardIntent && typeof payload.clipboardIntent === "object") {
-          const ci = payload.clipboardIntent as Record<string, unknown>;
-          const rawType = String(ci.entity_type ?? "CLIPBOARD").toUpperCase();
-          const intentType = ALLOWED_CLIPBOARD_ENTITIES.has(rawType) ? rawType : "CLIPBOARD";
-          const hasContent = Boolean(ci.value || ci.snippet);
-          if (hasContent) {
-            const sanitizedEvId = ev.event_id.replace(/[^a-zA-Z0-9_-]/g, "");
-            const preWarmId = `prop_intent_${deviceId}_${sanitizedEvId}`;
-            this.preStage(
-              deviceId,
-              {
-                proposalId: preWarmId,
-                targetApp: "companion",
-                action: `Process clipboard ${intentType}`,
-                probability: 0.95,
-                preWarmedAt: now,
-              },
-              now,
-            );
+          // Clipboard Intent -> Immediate Speculative Pre-Warming (supports clipboard_intent & clipboardIntent; redacted for privacy)
+          const rawClip = payload?.clipboardIntent ?? payload?.clipboard_intent;
+          if (isFresh && rawClip && typeof rawClip === "object") {
+            const ci = rawClip as Record<string, unknown>;
+            const rawType = String(ci.entity_type ?? ci.entityType ?? "CLIPBOARD").toUpperCase();
+            const intentType = ALLOWED_CLIPBOARD_ENTITIES.has(rawType) ? rawType : "CLIPBOARD";
+            const hasContent = Boolean(ci.value || ci.snippet);
+            if (hasContent) {
+              const sanitizedEvId = dedupeId.replace(/[^a-zA-Z0-9_-]/g, "");
+              const preWarmId = `prop_intent_${deviceId}_${sanitizedEvId}`;
+              this.preStage(
+                deviceId,
+                {
+                  proposalId: preWarmId,
+                  targetApp: "companion",
+                  action: `Process clipboard ${intentType}`,
+                  probability: 0.95,
+                  preWarmedAt: now,
+                },
+                now,
+              );
+            }
           }
+        } catch (preWarmErr) {
+          console.warn("[precognitive-host] error processing event pre-warming:", preWarmErr);
         }
       }
     }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Neo4jSyncService } from "./neo4j-sync.js";
+import { Neo4jSyncService, labelForType, safeRelType } from "./neo4j-sync.js";
 import { issueToken } from "./jwt.js";
 import { setDatabase } from "./db-host.js";
 import { ExocortexDatabase } from "@exocortex/core/db";
@@ -147,7 +147,18 @@ test("POST /v3/world-model/neo4j/sync enforces admin:write scope", async () => {
   setDatabase(db);
   const port = await listen();
 
+  const origFetch = globalThis.fetch;
   try {
+    globalThis.fetch = (async (url, init) => {
+      if (String(url).includes("/db/neo4j/tx/commit")) {
+        return {
+          ok: true,
+          json: async () => ({ results: [], errors: [] }),
+        } as Response;
+      }
+      return origFetch(url, init);
+    }) as typeof fetch;
+
     // 1. Read-only admin cannot trigger sync -> 403
     const readRes = await fetch(`http://127.0.0.1:${port}/v3/world-model/neo4j/sync`, {
       method: "POST",
@@ -165,9 +176,35 @@ test("POST /v3/world-model/neo4j/sync enforces admin:write scope", async () => {
     assert.equal(data.ok, true);
     assert.ok("result" in data);
   } finally {
+    globalThis.fetch = origFetch;
     server.close();
     setDatabase(null);
   }
+});
+
+test("Neo4jSyncService labelForType & safeRelType: prevents Cypher syntax errors and injection", () => {
+  // Allowlisted types mapped cleanly to PascalCase
+  assert.equal(labelForType("person"), "Person");
+  assert.equal(labelForType("PROJECT"), "Project");
+  assert.equal(labelForType("routine"), "Routine");
+  assert.equal(labelForType("context_state"), "ContextState");
+
+  // Non-allowlisted types sanitized as valid Cypher identifiers starting with ASCII letter
+  assert.equal(labelForType("CustomType"), "CustomType");
+  assert.equal(labelForType("123Numeric"), "Type_123Numeric");
+  assert.equal(labelForType("3D_MODEL"), "Type_3D_MODEL");
+  assert.equal(labelForType("a`b; DROP n;"), "a_b__DROP_n_");
+  assert.equal(labelForType(""), "Generic");
+  assert.equal(labelForType(null), "Generic");
+  assert.equal(labelForType(undefined), "Generic");
+
+  // safeRelType validation
+  assert.equal(safeRelType("WORKS_ON"), "WORKS_ON");
+  assert.equal(safeRelType("RELATED"), "RELATED");
+  assert.equal(safeRelType("lower_case"), "RELATED");
+  assert.equal(safeRelType("123_INVALID"), "RELATED");
+  assert.equal(safeRelType("REL`DROP"), "RELATED");
+  assert.equal(safeRelType(null), "RELATED");
 });
 
 test("GET /v3/world-model/neo4j/analytics enforces scope and returns computed metrics", async () => {

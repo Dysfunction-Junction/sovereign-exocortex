@@ -331,6 +331,61 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     expect(signals.networkMetered).toBe(false);
   });
 
+  it('correctly maps carAudioConnected, interruptionFilter, and dndActive via contextToSignals', () => {
+    // 1. Android NativeHardwareTelemetry format (root level properties and focus object)
+    const nativeSignals = contextToSignals({
+      audio: { output_type: 'speaker', car_audio_connected: true } as any,
+      car_audio_connected: true,
+      focus: { interruption_filter: 'PRIORITY', dnd_active: true },
+      dnd_active: true,
+      interruption_filter: 'PRIORITY',
+    } as any);
+
+    expect(nativeSignals.carAudioConnected).toBe(true);
+    expect(nativeSignals.interruptionFilter).toBe('PRIORITY');
+    expect(nativeSignals.dndActive).toBe(true);
+
+    // 2. Numeric and prefixed interruptionFilter mapping
+    const numericSignals = contextToSignals({
+      interruption_filter: 2,
+    } as any);
+    expect(numericSignals.interruptionFilter).toBe('PRIORITY');
+    expect(numericSignals.dndActive).toBe(true);
+
+    const prefixSignals = contextToSignals({
+      interruption_filter: 'INTERRUPTION_FILTER_PRIORITY',
+    } as any);
+    expect(prefixSignals.interruptionFilter).toBe('PRIORITY');
+    expect(prefixSignals.dndActive).toBe(true);
+
+    // 3. INTERRUPTION_FILTER_ALL derives dndActive: false when not explicitly set
+    const allFilterSignals = contextToSignals({
+      interruption_filter: 'INTERRUPTION_FILTER_ALL',
+    } as any);
+    expect(allFilterSignals.interruptionFilter).toBe('ALL');
+    expect(allFilterSignals.dndActive).toBe(false);
+
+    // 4. Strict boolean parsing: "false" does not coerce to true, null remains undefined
+    const strictBoolSignals = contextToSignals({
+      dnd_active: 'false',
+      car_audio_connected: null,
+    } as any);
+    expect(strictBoolSignals.dndActive).toBe(false);
+    expect(strictBoolSignals.carAudioConnected).toBeUndefined();
+
+    // 5. Unrecognized filter string safely produces undefined
+    const invalidFilterSignals = contextToSignals({
+      interruption_filter: 'BOGUS_FILTER',
+    } as any);
+    expect(invalidFilterSignals.interruptionFilter).toBeUndefined();
+
+    // 6. Absence preserves undefined without coercing to false
+    const emptySignals = contextToSignals({});
+    expect(emptySignals.carAudioConnected).toBeUndefined();
+    expect(emptySignals.interruptionFilter).toBeUndefined();
+    expect(emptySignals.dndActive).toBeUndefined();
+  });
+
   it('merges lastSignals when partial signals are supplied to evaluateProposal', () => {
     // First classify with inCall: true
     gate.classifyMode({ inCall: true });

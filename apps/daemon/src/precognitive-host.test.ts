@@ -543,4 +543,74 @@ test("PreCognitiveHost speculative action pre-warming: Markov transitions and cl
   assert.equal(statusAfterExpiry.preWarmedAction, undefined);
 });
 
+test("PreCognitiveHost: supports native Android transitions & clipboard_intent keys and survives undefined event_id", () => {
+  const now = 300_000;
+  const host = PreCognitiveHost.createIsolatedForTest(() => now);
+  const fakeDb = {} as any;
+
+  // 1. Android NativeTelemetrySync format: event "APP_TRANSITIONS" with "transitions" array
+  const nativeEvents = [
+    {
+      seq: 1,
+      device_id: "phone-android-native",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: now,
+      ts_device: now,
+      // NOTE: event_id is intentionally omitted / undefined
+      payload: JSON.stringify({
+        event: "APP_TRANSITIONS",
+        appTransitions: {}, // non-array object must not shadow valid transitions array
+        transitions: [
+          { from: "com.android.chrome", to: "com.google.android.apps.maps", dwell_ms: 12000 },
+          { from: "com.android.chrome", to: "com.google.android.apps.maps", dwell_ms: 15000 },
+          { from: "com.slack", to: "com.android.chrome", dwell_ms: 3000 },
+        ],
+      }),
+    },
+  ];
+
+  // Must not throw even without event_id
+  assert.doesNotThrow(() => {
+    host.onEventsAppended(nativeEvents as any, fakeDb);
+  });
+
+  const status = host.getStatus("phone-android-native");
+  assert.equal(status.isPreStaged, true);
+  assert.ok(status.preWarmedAction);
+  assert.equal(status.preWarmedAction.targetApp, "com.google.android.apps.maps");
+
+  // 2. Android NativeTelemetrySync format: event "CLIPBOARD_INTENT" with "clipboard_intent" object
+  const clipEvent = [
+    {
+      seq: 2,
+      device_id: "phone-android-native",
+      kind: "telemetry",
+      schema_ver: 1,
+      prev_hash: new Uint8Array(32),
+      hash: new Uint8Array(32),
+      ts_server: now,
+      ts_device: now,
+      // NOTE: event_id is undefined
+      payload: JSON.stringify({
+        event: "CLIPBOARD_INTENT",
+        clipboard_intent: {
+          entity_type: "url",
+          value: "https://example.com/item",
+        },
+      }),
+    },
+  ];
+
+  assert.doesNotThrow(() => {
+    host.onEventsAppended(clipEvent as any, fakeDb);
+  });
+
+  const clipStatus = host.getStatus("phone-android-native");
+  assert.equal(clipStatus.isPreStaged, true);
+  assert.equal(clipStatus.preWarmedAction?.action, "Process clipboard URL");
+});
+
 

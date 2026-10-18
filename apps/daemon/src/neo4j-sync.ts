@@ -60,33 +60,36 @@ export interface GraphQueryResult {
   matchedEntityIds: string[];
 }
 
-function labelForType(type: string): string {
-  switch (type.toUpperCase()) {
-    case "PERSON":
-      return "Person";
-    case "PROJECT":
-      return "Project";
-    case "DEVICE":
-      return "Device";
-    case "GOAL":
-      return "Goal";
-    case "TOPIC":
-      return "Topic";
-    case "CONTEXT_STATE":
-      return "ContextState";
-    case "FILE":
-      return "File";
-    case "CODE_MODULE":
-      return "CodeModule";
-    case "LOCATION":
-      return "Location";
-    default:
-      return type.replace(/[^A-Za-z0-9]/g, "") || "Generic";
+const ALLOWED_LABELS: Record<string, string> = {
+  PERSON: "Person",
+  PROJECT: "Project",
+  DEVICE: "Device",
+  GOAL: "Goal",
+  TOPIC: "Topic",
+  CONTEXT_STATE: "ContextState",
+  FILE: "File",
+  CODE_MODULE: "CodeModule",
+  LOCATION: "Location",
+  ROUTINE: "Routine",
+};
+
+export function labelForType(type: unknown): string {
+  if (typeof type !== "string") return "Generic";
+  const upper = type.trim().toUpperCase();
+  if (ALLOWED_LABELS[upper]) {
+    return ALLOWED_LABELS[upper];
   }
+  // Sanitize non-allowlisted types: alphanumeric + underscores only, max 48 chars
+  const sanitized = type.replace(/[^A-Za-z0-9_]/g, "_").slice(0, 48);
+  if (!sanitized) return "Generic";
+  // Cypher identifiers must start with an ASCII letter
+  return /^[A-Za-z]/.test(sanitized) ? sanitized : `Type_${sanitized}`;
 }
 
-function safeRelType(rel: string): string {
-  return /^[A-Z][A-Z0-9_]*$/u.test(rel) ? rel : "RELATED";
+export function safeRelType(rel: unknown): string {
+  if (typeof rel !== "string") return "RELATED";
+  const trimmed = rel.trim();
+  return /^[A-Z][A-Z0-9_]{0,48}$/u.test(trimmed) ? trimmed : "RELATED";
 }
 
 export class GraphQueryRejectedError extends Error {
