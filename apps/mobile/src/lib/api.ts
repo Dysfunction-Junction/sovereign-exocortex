@@ -54,9 +54,14 @@ const SUMMARIES_CLIENT_FETCH_TIMEOUT_MS = 30000;
 async function authedFetch(path: string, init?: RequestInit): Promise<Response> {
   let targets = await getConnectionTargets();
   if (targets.length === 0) throw new ProxyNotConfiguredError();
-  // Approval/proposal routes exist only on the exocortex gateway (Plan B). The Plan A LAN proxy answers
-  // 404 for them, and a 404 is not failed over, so skip it whenever a gateway is configured.
-  if (path.startsWith("/v3/") || path === "/network/approve") {
+  // Exocortex daemon routes (/v3/*, /world-model/*, /network/*) exist only on the exocortex gateway.
+  // The Plan A Pieces OS LAN proxy (8787) answers 404 for them, and a 404 is not failed over,
+  // so route directly to the gateway whenever configured.
+  const isExocortexRoute =
+    path.startsWith("/v3/") ||
+    path.startsWith("/world-model/") ||
+    path.startsWith("/network/");
+  if (isExocortexRoute) {
     const gateway = targets.filter((t) => t.mode === "remote");
     if (gateway.length > 0) targets = gateway;
   }

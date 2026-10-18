@@ -62,6 +62,25 @@ test("v3 world-model endpoints integration test", async () => {
     Authorization: `Bearer ${userToken}`,
   };
 
+  // Register unpermitted device (no telemetry:write or admin scopes)
+  const { publicKey: unauthPub } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const unauthDer = unauthPub.export({ format: "der", type: "spki" });
+  memoryDb.registerDevice({
+    device_id: "dev_unauth_node",
+    name: "Unauth Node",
+    platform: "android",
+    pubkey_spki: Buffer.from(unauthDer),
+    key_attested: 1,
+    scopes: ["profile:read"],
+    enrolled_at: Date.now(),
+  });
+
+  const unauthToken = issueToken("dev_unauth_node", TEST_SECRET);
+  const unauthHeaders = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${unauthToken}`,
+  };
+
   // Bind server to ephemeral port
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
@@ -357,6 +376,70 @@ test("v3 world-model endpoints integration test", async () => {
     const text = new TextDecoder().decode(chunk.value);
     assert.ok(text.includes("event: init"));
     await reader.cancel();
+
+    // Scope verification on /world-model/state
+    const noAuthStateRes = await fetch(`${baseUrl}/world-model/state`);
+    assert.equal(noAuthStateRes.status, 401);
+
+    const unauthStateRes = await fetch(`${baseUrl}/world-model/state`, {
+      headers: unauthHeaders,
+    });
+    assert.equal(unauthStateRes.status, 403);
+
+    const userStateRes = await fetch(`${baseUrl}/world-model/state`, {
+      headers: userHeaders,
+    });
+    assert.equal(userStateRes.status, 200);
+    const userStateData = await userStateRes.json();
+    assert.equal(userStateData.ok, true);
+
+    // Scope verification on /world-model/telemetry
+    const unauthTelemRes = await fetch(`${baseUrl}/world-model/telemetry`, {
+      method: "POST",
+      headers: unauthHeaders,
+      body: JSON.stringify({ signals: { inCall: false } }),
+    });
+    assert.equal(unauthTelemRes.status, 403);
+
+    // Strict validation rejection on string boolean
+    const badTelemRes = await fetch(`${baseUrl}/world-model/telemetry`, {
+      method: "POST",
+      headers: userHeaders,
+      body: JSON.stringify({ signals: { inCall: "false" } }),
+    });
+    assert.equal(badTelemRes.status, 400);
+
+    const userTelemRes = await fetch(`${baseUrl}/world-model/telemetry`, {
+      method: "POST",
+      headers: userHeaders,
+      body: JSON.stringify({ signals: { inCall: false } }),
+    });
+    assert.equal(userTelemRes.status, 200);
+
+    // Scope verification on /world-model/observation
+    const unauthObsRes = await fetch(`${baseUrl}/world-model/observation`, {
+      method: "POST",
+      headers: unauthHeaders,
+      body: JSON.stringify({
+        invariantId: "inv_clean_test_suite",
+        observedState: true,
+        observedAt: Date.now(),
+        confidence: 0.9,
+      }),
+    });
+    assert.equal(unauthObsRes.status, 403);
+
+    const userObsRes = await fetch(`${baseUrl}/world-model/observation`, {
+      method: "POST",
+      headers: userHeaders,
+      body: JSON.stringify({
+        invariantId: "inv_clean_test_suite",
+        observedState: true,
+        observedAt: Date.now(),
+        confidence: 0.9,
+      }),
+    });
+    assert.equal(userObsRes.status, 200);
   } finally {
     setPendingFetcherForTest(null);
     setPendingSpeculatorForTest(null);

@@ -525,7 +525,9 @@ export function linkEventToGraph(
   const clipObj = (event.clipboard_intent ??
     (isRecordObj(payload.clipboard_intent)
       ? (payload.clipboard_intent as Record<string, unknown>)
-      : null)) as ClipboardIntentInput | null;
+      : isRecordObj(payload.clipboardIntent)
+        ? (payload.clipboardIntent as Record<string, unknown>)
+        : null)) as ClipboardIntentInput | null;
 
   let matchedIntentEntityId: string | undefined;
 
@@ -570,15 +572,19 @@ export function linkEventToGraph(
 
   // 4g. Resolve empirical app transitions (Track 3)
   const rawTransitions = (
-    Array.isArray(event.app_transitions)
-      ? event.app_transitions
-      : Array.isArray(payload.transitions)
-        ? payload.transitions
-        : []
+    [
+      event.app_transitions,
+      payload.app_transitions,
+      payload.appTransitions,
+      payload.transitions,
+    ].find(Array.isArray) ?? []
   ) as AppTransitionInput[];
 
   const seenTransitionsInEvent = new Set<string>();
+  const MAX_LINKED_TRANSITIONS = 50;
+  let transitionCount = 0;
   for (const tr of rawTransitions) {
+    if (transitionCount >= MAX_LINKED_TRANSITIONS) break;
     if (!tr || typeof tr.from !== 'string' || typeof tr.to !== 'string') continue;
     const fromPkg = tr.from.trim();
     const toPkg = tr.to.trim();
@@ -620,6 +626,7 @@ export function linkEventToGraph(
       recordMatch(toEntity);
       const dwellWeight = typeof tr.dwell_ms === 'number' && tr.dwell_ms > 5000 ? 0.85 : 0.65;
       graph.addEdge(fromEntity.id, toEntity.id, 'TRANSITIONS_TO', dwellWeight);
+      transitionCount++;
     }
   }
 

@@ -50,6 +50,11 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
     throw new TypeError("invalid telemetry: signals must be an object");
   }
   const s = signals as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (s[key] === null && key !== "manualOverrideMode") {
+      delete s[key];
+    }
+  }
   for (const key of ["foregroundApp", "windowTitle"]) {
     if (s[key] !== undefined && typeof s[key] !== "string") {
       throw new TypeError(`invalid telemetry: ${key} must be a string`);
@@ -74,6 +79,30 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
   }
   if (s.manualOverrideMode !== undefined && s.manualOverrideMode !== null && typeof s.manualOverrideMode !== "string") {
     throw new TypeError("invalid telemetry: manualOverrideMode must be a string or null");
+  }
+  for (const key of ["inCall", "networkMetered", "carAudioConnected", "dndActive"]) {
+    if (s[key] !== undefined && typeof s[key] !== "boolean") {
+      throw new TypeError(`invalid telemetry: ${key} must be a boolean`);
+    }
+  }
+  for (const key of ["audioOutput", "motionState", "thermalStatus", "physicalState", "interruptionFilter"]) {
+    if (s[key] !== undefined && typeof s[key] !== "string") {
+      throw new TypeError(`invalid telemetry: ${key} must be a string`);
+    }
+  }
+  if (s.thermalHeadroom !== undefined && (typeof s.thermalHeadroom !== "number" || !Number.isFinite(s.thermalHeadroom))) {
+    throw new TypeError("invalid telemetry: thermalHeadroom must be a finite number");
+  }
+  if (s.appTransitions !== undefined) {
+    if (!Array.isArray(s.appTransitions)) {
+      throw new TypeError("invalid telemetry: appTransitions must be an array");
+    }
+    if (s.appTransitions.length > 50) {
+      s.appTransitions = s.appTransitions.slice(0, 50);
+    }
+  }
+  if (s.clipboardIntent !== undefined && (typeof s.clipboardIntent !== "object" || s.clipboardIntent === null || Array.isArray(s.clipboardIntent))) {
+    throw new TypeError("invalid telemetry: clipboardIntent must be an object");
   }
 }
 

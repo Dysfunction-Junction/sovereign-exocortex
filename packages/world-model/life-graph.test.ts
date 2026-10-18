@@ -117,4 +117,38 @@ describe('LivingLifeGraph (Pillar 1)', () => {
     expect(predictions[0].predictedId).toBe('task_typecheck');
     expect(predictions[0].probability).toBeGreaterThan(predictions[1].probability);
   });
+
+  it('sanitizes NaN and non-finite values in entity activation, stimulation, and spreading', () => {
+    // 1. Existing entity at 0.2 falls back to existing activation when upserted with NaN
+    const initial = graph.addEntity({ id: 'nan_test', name: 'NaN Entity', type: 'TOPIC', activation: 0.2 });
+    expect(initial.activation).toBeCloseTo(0.2);
+
+    const reAdd = graph.addEntity({ id: 'nan_test', name: 'NaN Entity', type: 'TOPIC', activation: NaN });
+    expect(reAdd.activation).toBeCloseTo(0.2);
+
+    // 2. Stimulate with NaN falls back to default amount (0.5), boosting 0.2 -> 0.7
+    graph.stimulate('nan_test', NaN);
+    expect(graph.getEntity('nan_test')!.activation).toBeCloseTo(0.7);
+
+    graph.addEntity({ id: 'target_node', name: 'Target', type: 'TOPIC', activation: 0.5 });
+    graph.addEdge('nan_test', 'target_node', 'TRIGGERS', 0.8);
+
+    // 3. depthLimit = 0 preserves the source entity only (no traversal)
+    const zeroDepth = graph.spreadActivation(['nan_test'], 1.0, 0.6, 0);
+    expect(zeroDepth.size).toBe(1);
+    expect(zeroDepth.get('nan_test')).toBe(1.0);
+
+    // 4. initialEnergy = 0 is a valid non-spreading level
+    const zeroEnergy = graph.spreadActivation(['nan_test'], 0, 0.6, 2);
+    expect(zeroEnergy.get('nan_test')).toBe(0);
+
+    // 5. edgeVisitBudget = NaN safely defaults without throwing or dropping
+    const nanBudget = graph.spreadActivation(['nan_test'], 1.0, 0.6, 2, NaN);
+    expect(nanBudget.size).toBe(2);
+
+    const predictions = graph.predictNextState('nan_test');
+    expect(predictions.length).toBe(1);
+    expect(Number.isFinite(predictions[0].probability)).toBe(true);
+  });
 });
+

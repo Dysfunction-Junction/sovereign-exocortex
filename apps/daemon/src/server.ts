@@ -262,7 +262,7 @@ function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: 
     rel = "index.html";
   } else if (pathname.startsWith("/assets/") || pathname === "/favicon.png" || pathname === "/favicon.ico") {
     rel = pathname.slice(1);
-  } else if (!pathname.startsWith("/v3/") && !pathname.startsWith("/mobile/") && !pathname.startsWith("/network/") && (req.headers.accept?.includes("text/html") || !extname(pathname))) {
+  } else if (!pathname.startsWith("/v3/") && !pathname.startsWith("/mobile/") && !pathname.startsWith("/network/") && !pathname.startsWith("/world-model/") && (req.headers.accept?.includes("text/html") || !extname(pathname))) {
     rel = "index.html";
   } else {
     return false;
@@ -547,18 +547,39 @@ export const server = createServer(async (req, res) => {
   }
 
   if (method === "GET" && url.pathname === "/world-model/state") {
-    sendJson(res, 200, {
-      ok: true,
-      state: defaultWorldModelHost.getStatus(),
-    });
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "telemetry:write", "approval:write", "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: state inspection requires telemetry:write, approval:write, admin, or admin:read scope" });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        state: defaultWorldModelHost.getStatus(),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to get world model state", err);
+    }
     return;
   }
 
   if (method === "POST" && url.pathname === "/world-model/telemetry") {
     try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "telemetry:write", "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: telemetry requires telemetry:write scope" });
+        return;
+      }
       const raw = await readBody(req, 64 * 1024);
-      const decoded = raw.length === 0 ? {} : JSON.parse(raw);
-      const signals = (decoded.signals ?? decoded) as import("@exocortex/world-model").ContextualSignals;
+      let decoded: unknown;
+      try {
+        decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+      const sObj = decoded as { signals?: unknown };
+      const signals = (sObj && typeof sObj === "object" && "signals" in sObj ? sObj.signals : decoded) as import("@exocortex/world-model").ContextualSignals;
       const result = defaultWorldModelHost.ingestTelemetry(signals);
       sendJson(res, 200, { ok: true, result });
     } catch (err) {
@@ -569,9 +590,21 @@ export const server = createServer(async (req, res) => {
 
   if (method === "POST" && url.pathname === "/world-model/observation") {
     try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "telemetry:write", "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: observation requires telemetry:write scope" });
+        return;
+      }
       const raw = await readBody(req, 64 * 1024);
-      const decoded = raw.length === 0 ? {} : JSON.parse(raw);
-      const obs = (decoded.observation ?? decoded) as import("@exocortex/world-model").SystemObservation;
+      let decoded: unknown;
+      try {
+        decoded = raw.length === 0 ? {} : JSON.parse(raw);
+      } catch {
+        sendJson(res, 400, { error: "invalid JSON body" });
+        return;
+      }
+      const oObj = decoded as { observation?: unknown };
+      const obs = (oObj && typeof oObj === "object" && "observation" in oObj ? oObj.observation : decoded) as import("@exocortex/world-model").SystemObservation;
       ensureShadowRecorder();
       const result = defaultWorldModelHost.ingestObservation(obs);
       sendJson(res, 200, { ok: true, result });

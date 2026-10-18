@@ -73,13 +73,22 @@ export class LivingLifeGraph {
    */
   public addEntity(entity: Omit<GraphEntity, 'activation' | 'lastActive'> & Partial<Pick<GraphEntity, 'activation' | 'lastActive'>>): GraphEntity {
     const existing = this.entities.get(entity.id);
+    const rawAct = entity.activation ?? existing?.activation ?? 1.0;
+    const activation = typeof rawAct === 'number' && Number.isFinite(rawAct)
+      ? Math.min(1.0, Math.max(0.0, rawAct))
+      : (existing?.activation ?? 1.0);
+    const rawLast = entity.lastActive ?? Date.now();
+    const lastActive = typeof rawLast === 'number' && Number.isFinite(rawLast) && rawLast >= 0
+      ? rawLast
+      : Date.now();
+
     const updated: GraphEntity = {
       id: entity.id,
       type: entity.type,
       name: entity.name,
       properties: { ...(existing?.properties ?? {}), ...(entity.properties ?? {}) },
-      activation: entity.activation ?? existing?.activation ?? 1.0,
-      lastActive: entity.lastActive ?? Date.now(),
+      activation,
+      lastActive,
     };
     this.entities.set(entity.id, updated);
     if (!this.adjacency.has(entity.id)) {
@@ -153,8 +162,12 @@ export class LivingLifeGraph {
   public stimulate(entityId: string, amount: number = 0.5, observedAt: number = Date.now()): void {
     const entity = this.entities.get(entityId);
     if (!entity) return;
-    entity.activation = Math.min(1.0, entity.activation + amount);
-    entity.lastActive = Math.max(observedAt, this.decayedAt.get(entity) ?? -Infinity);
+    const validAmount = typeof amount === "number" && Number.isFinite(amount) ? amount : 0.5;
+    const validObservedAt = typeof observedAt === "number" && Number.isFinite(observedAt) && observedAt >= 0
+      ? observedAt
+      : Date.now();
+    entity.activation = Math.min(1.0, Math.max(0.0, entity.activation + validAmount));
+    entity.lastActive = Math.max(validObservedAt, this.decayedAt.get(entity) ?? -Infinity);
     this.decayedAt.delete(entity);
   }
 
@@ -199,30 +212,43 @@ export class LivingLifeGraph {
     depthLimit: number = 3,
     edgeVisitBudget: number = Infinity,
   ): Map<string, number> {
+    const safeEnergy = typeof initialEnergy === "number" && Number.isFinite(initialEnergy)
+      ? Math.min(1.0, Math.max(0.0, initialEnergy))
+      : 1.0;
+    const safeRetention = typeof retentionRate === "number" && Number.isFinite(retentionRate)
+      ? Math.min(1.0, Math.max(0.0, retentionRate))
+      : 0.6;
+    const safeDepth = typeof depthLimit === "number" && Number.isFinite(depthLimit)
+      ? Math.min(10, Math.max(0, Math.floor(depthLimit)))
+      : 3;
+    const safeBudget = typeof edgeVisitBudget === "number" && Number.isFinite(edgeVisitBudget) && edgeVisitBudget >= 0
+      ? edgeVisitBudget
+      : Infinity;
+
     const activationLevels = new Map<string, number>();
     const queue: Array<{ id: string; energy: number; depth: number }> = [];
 
     for (const id of sourceIds) {
       if (this.entities.has(id)) {
-        activationLevels.set(id, initialEnergy);
-        queue.push({ id, energy: initialEnergy, depth: 0 });
+        activationLevels.set(id, safeEnergy);
+        queue.push({ id, energy: safeEnergy, depth: 0 });
       }
     }
 
     let cursor = 0;
     let edgeVisits = 0;
-    while (cursor < queue.length && edgeVisits < edgeVisitBudget) {
+    while (cursor < queue.length && edgeVisits < safeBudget) {
       const current = queue[cursor++];
-      if (current.depth >= depthLimit || current.energy < 0.05) continue;
+      if (current.depth >= safeDepth || current.energy < 0.05) continue;
 
       const outgoingEdgeIds = this.adjacency.get(current.id) || new Set();
       for (const edgeId of outgoingEdgeIds) {
-        if (edgeVisits >= edgeVisitBudget) break;
+        if (edgeVisits >= safeBudget) break;
         edgeVisits++;
         const edge = this.edges.get(edgeId);
         if (!edge) continue;
 
-        const transferredEnergy = current.energy * edge.weight * retentionRate;
+        const transferredEnergy = current.energy * edge.weight * safeRetention;
         const targetId = edge.targetId;
         const prevLevel = activationLevels.get(targetId) ?? 0;
         const newLevel = Math.min(1.0, prevLevel + transferredEnergy);
@@ -271,6 +297,13 @@ export class LivingLifeGraph {
     maxHops: number = 2,
     minWeightThreshold: number = 0.1
   ): { entities: GraphEntity[]; edges: GraphEdge[] } {
+    const safeHops = typeof maxHops === "number" && Number.isFinite(maxHops) && maxHops >= 0
+      ? Math.min(10, Math.floor(maxHops))
+      : 2;
+    const safeMinWeight = typeof minWeightThreshold === "number" && Number.isFinite(minWeightThreshold)
+      ? Math.max(0.0, minWeightThreshold)
+      : 0.1;
+
     const visitedEntities = new Set<string>();
     const matchedEdges = new Set<string>();
     const queue: Array<{ id: string; hop: number }> = [];
@@ -284,12 +317,12 @@ export class LivingLifeGraph {
 
     while (queue.length > 0) {
       const { id, hop } = queue.shift()!;
-      if (hop >= maxHops) continue;
+      if (hop >= safeHops) continue;
 
       const outgoing = this.adjacency.get(id) ?? new Set();
       for (const edgeId of outgoing) {
         const edge = this.edges.get(edgeId);
-        if (!edge || edge.weight < minWeightThreshold) continue;
+        if (!edge || edge.weight < safeMinWeight) continue;
 
         matchedEdges.add(edge.id);
         if (!visitedEntities.has(edge.targetId)) {
@@ -321,11 +354,11 @@ export class LivingLifeGraph {
       const edge = this.edges.get(edgeId);
       if (!edge) continue;
       const target = this.entities.get(edge.targetId);
-      if (!target) continue;
+      if (!target || !Number.isFinite(target.activation) || target.activation <= 0) continue;
 
       // Score combines edge transition weight, observation count, and target entity base activation
-      const score = edge.weight * Math.log1p(edge.observedCount) * target.activation;
-      if (score > 0) {
+      const score = edge.weight * Math.log1p(Math.max(0, edge.observedCount)) * target.activation;
+      if (Number.isFinite(score) && score > 0) {
         candidates.push({ edge, entity: target, score });
         totalScore += score;
       }

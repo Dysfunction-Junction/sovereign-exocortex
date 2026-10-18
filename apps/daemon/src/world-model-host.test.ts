@@ -346,3 +346,57 @@ test("WorldModelHost: rejects invalid or uncalibrated observations", () => {
   });
   assert.equal(typeof outcomeNum.surprisalNats, "number");
 });
+
+test("WorldModelHost: validateSignals strictly enforces types and rejects coerced string booleans or NaN", () => {
+  const host = WorldModelHost.createIsolatedForTest();
+
+  // String boolean for inCall must throw TypeError
+  assert.throws(
+    () => host.ingestTelemetry({ inCall: "false" as any }),
+    /invalid telemetry: inCall must be a boolean/,
+  );
+
+  // String boolean for networkMetered must throw TypeError
+  assert.throws(
+    () => host.ingestTelemetry({ networkMetered: "true" as any }),
+    /invalid telemetry: networkMetered must be a boolean/,
+  );
+
+  // NaN for thermalHeadroom must throw TypeError
+  assert.throws(
+    () => host.ingestTelemetry({ thermalHeadroom: NaN }),
+    /invalid telemetry: thermalHeadroom must be a finite number/,
+  );
+
+  // Non-array appTransitions must throw TypeError
+  assert.throws(
+    () => host.ingestTelemetry({ appTransitions: "bad" as any }),
+    /invalid telemetry: appTransitions must be an array/,
+  );
+
+  // Non-object clipboardIntent must throw TypeError
+  assert.throws(
+    () => host.ingestTelemetry({ clipboardIntent: "bad" as any }),
+    /invalid telemetry: clipboardIntent must be an object/,
+  );
+
+  // Valid signals ingest cleanly
+  const result = host.ingestTelemetry({
+    inCall: false,
+    networkMetered: true,
+    thermalHeadroom: 0.85,
+    appTransitions: [{ from: "app_a", to: "app_b" }],
+    clipboardIntent: { entity_type: "url", value: "https://example.com" },
+  });
+  assert.ok(result);
+
+  // Null fields (serialized by mobile when unknown) normalize cleanly without throwing
+  const nullResult = host.ingestTelemetry({
+    inCall: null as any,
+    networkMetered: null as any,
+    thermalHeadroom: null as any,
+    manualOverrideMode: null,
+  });
+  assert.ok(nullResult);
+});
+
