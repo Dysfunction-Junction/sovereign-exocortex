@@ -377,17 +377,17 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     };
 
     // On unmetered network -> auto executes
-    const unmeteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: false });
+    const unmeteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: false, hourOfDay: 14 });
     expect(unmeteredDecision.action).toBe('SILENT_AUTO_EXECUTE');
 
     // On metered network -> suppressed and queued to preserve cellular bandwidth
-    const meteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: true });
+    const meteredDecision = gate.evaluateProposal(syncProposal, { networkMetered: true, hourOfDay: 14 });
     expect(meteredDecision.action).toBe('SUPPRESS_AND_QUEUE');
     expect(meteredDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
     expect(meteredDecision.reason).toContain('Metered network connection');
 
     // In pocket + metered network -> metered gate takes precedence over pocket auto-execute
-    const pocketMeteredDecision = gate.evaluateProposal(syncProposal, { physicalState: 'in_pocket', networkMetered: true });
+    const pocketMeteredDecision = gate.evaluateProposal(syncProposal, { physicalState: 'in_pocket', networkMetered: true, hourOfDay: 14 });
     expect(pocketMeteredDecision.action).toBe('SUPPRESS_AND_QUEUE');
     expect(pocketMeteredDecision.targetDelivery).toBe('BACKGROUND_QUEUE');
     expect(pocketMeteredDecision.reason).toContain('Metered network connection');
@@ -404,7 +404,7 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     };
 
     // When screen is ON, user is actively holding/interacting with device -> prompt allowed
-    const decision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket', screenState: 'ON' });
+    const decision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket', screenState: 'ON', hourOfDay: 14 });
     expect(decision.action).toBe('ALLOW_PROMPT');
     expect(decision.targetDelivery).toBe('GLASS_MODAL');
   });
@@ -420,11 +420,11 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     };
 
     // Step 1: In pocket -> suppressed
-    const pocketDecision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket' });
+    const pocketDecision = gate.evaluateProposal(proposal, { physicalState: 'in_pocket', hourOfDay: 14 });
     expect(pocketDecision.action).toBe('SUPPRESS_AND_QUEUE');
 
     // Step 2: ContextTracker TTL expires, emitting physicalState: undefined -> no longer suppressed
-    const expiredDecision = gate.evaluateProposal(proposal, { physicalState: undefined });
+    const expiredDecision = gate.evaluateProposal(proposal, { physicalState: undefined, hourOfDay: 14 });
     expect(expiredDecision.action).toBe('ALLOW_PROMPT');
   });
 
@@ -446,6 +446,7 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     const mode = gate.classifyMode({
       screenState: 'ON',
       idleDurationMs: 60_000,
+      hourOfDay: 14,
       timestamp: now,
       appTransitions: [
         { from: 'com.slack', to: 'com.chrome', dwell_ms: 3000, ts: now - 5000 },

@@ -230,8 +230,8 @@ export class CognitiveModeGate {
       return this.currentMode;
     }
 
-    // 5. Rest & Recovery hours (quiet hours for non-focus apps: 23:00 to 06:00)
-    if (hour >= 23 || hour < 6) {
+    // 5. Rest & Recovery hours (quiet hours for non-focus apps: 23:00 to 06:00 when screen is not actively ON)
+    if ((hour >= 23 || hour < 6) && effective.screenState !== 'ON') {
       this.currentMode = 'REST_RECOVERY';
       return this.currentMode;
     }
