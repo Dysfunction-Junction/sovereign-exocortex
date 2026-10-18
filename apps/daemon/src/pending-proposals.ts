@@ -180,6 +180,8 @@ export interface PendingProposal {
   shadow?: boolean;
 }
 
+const warnedMalformedProposals = new Set<string>();
+
 export async function buildPendingProposals(
   db: ExocortexDatabase,
   fetcher: PendingFetcher = defaultPendingFetcher,
@@ -196,6 +198,19 @@ export async function buildPendingProposals(
   const out: PendingProposal[] = [];
   for (const r of reg) {
     if (!r || typeof r.proposalId !== "string" || typeof r.approvalNonce !== "string" || !r.approvalNonce) continue;
+    if (
+      r.actionPayload !== undefined &&
+      r.actionPayload !== null &&
+      (typeof r.actionPayload !== "object" ||
+        Array.isArray(r.actionPayload) ||
+        (Object.getPrototypeOf(r.actionPayload) !== Object.prototype && Object.getPrototypeOf(r.actionPayload) !== null))
+    ) {
+      if (!warnedMalformedProposals.has(r.proposalId)) {
+        warnedMalformedProposals.add(r.proposalId);
+        console.warn(`[pending-proposals] skipping proposal ${JSON.stringify(r.proposalId)}: invalid actionPayload (must be plain object)`);
+      }
+      continue;
+    }
     const row = db.getProposal(r.proposalId);
     if (!row || (row.state !== "SURFACED" && row.state !== "STAGED")) continue;
     const regExp = toMs(r.expiresAt);
@@ -210,7 +225,7 @@ export async function buildPendingProposals(
       requiresBiometric: true,
       approvalNonce: r.approvalNonce,
       expiresAt,
-      ...(r.actionPayload && typeof r.actionPayload === "object" ? { actionPayload: r.actionPayload } : {}),
+      ...(r.actionPayload ? { actionPayload: r.actionPayload } : {}),
     });
   }
   return orderRecordedBatches(db, out, (item) => item.proposalId);

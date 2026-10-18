@@ -659,5 +659,154 @@ describe('CognitiveModeGate (Pillar 2)', () => {
     // In DEEP_FOCUS with urgency 0.3, it should be suppressed and queued, not allowed
     expect(staleDecision.action).toBe('SUPPRESS_AND_QUEUE');
   });
+
+  it('does not mutate frozen signals objects in classifyMode', () => {
+    const frozenSignals = Object.freeze({
+      carAudioConnected: true,
+      audioOutput: 'car_audio',
+      motionState: 'walking',
+      foregroundApp: 'com.spotify.music',
+    });
+
+    expect(() => {
+      const mode = gate.classifyMode(frozenSignals);
+      expect(mode).toBeDefined();
+    }).not.toThrow();
+
+    expect(frozenSignals.motionState).toBe('walking');
+  });
+
+  it('does not mutate frozen proposal objects in evaluateProposal and clamps non-finite values', () => {
+    const frozenProposal = Object.freeze({
+      id: 'prop_frozen_test',
+      candidateId: 'cand_frozen',
+      summary: 'Frozen proposal test',
+      urgency: 0.1,
+      confidence: NaN, // non-finite
+      estimatedRisk: 0.5,
+    });
+
+    gate.classifyMode({ foregroundApp: 'Code.exe' }); // DEEP_FOCUS
+
+    const decision = gate.evaluateProposal(frozenProposal);
+    expect(decision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decision.confidence).toBe(0); // Clamped from NaN
+    expect((frozenProposal as any).stagedAt).toBeUndefined();
+  });
+
+  it('fails closed when confidence or risk are non-finite or out of range', () => {
+    gate.classifyMode({ foregroundApp: 'Code.exe' }); // DEEP_FOCUS
+
+    // proposal with Infinity confidence and negative risk
+    const anomalousProposal: ProposalEnvelope = {
+      id: 'prop_anom',
+      candidateId: 'cand_anom',
+      summary: 'Anomalous proposal',
+      urgency: 0.2,
+      confidence: Infinity,
+      estimatedRisk: -Infinity,
+      suggestedAction: { heavyNetwork: false },
+    };
+
+    const decision = gate.evaluateProposal(anomalousProposal);
+    expect(decision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decision.confidence).toBe(0); // Clamped from Infinity
+
+    // Undefined confidence and risk should not crash .toFixed() formatting
+    const undefinedScoresProposal: ProposalEnvelope = {
+      id: 'prop_undef',
+      candidateId: 'cand_undef',
+      summary: 'Undefined scores proposal',
+      urgency: 0.2,
+      confidence: undefined as any,
+      estimatedRisk: undefined as any,
+    };
+
+    const decision2 = gate.evaluateProposal(undefinedScoresProposal);
+    expect(decision2.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(decision2.confidence).toBe(0);
+
+    // Staging a proposal with NaN stagedAt sanitizes to a finite timestamp and cleans numeric fields
+    const nanStagedProposal: ProposalEnvelope = {
+      id: 'prop_nan_staged',
+      candidateId: 'cand_nan_staged',
+      summary: 'NaN staged proposal',
+      urgency: NaN,
+      confidence: NaN,
+      estimatedRisk: NaN,
+      stagedAt: NaN,
+    };
+    gate.evaluateProposal(nanStagedProposal);
+    const queued = gate.getPendingQueue().find(p => p.id === 'prop_nan_staged');
+    expect(queued).toBeDefined();
+    expect(Number.isFinite(queued!.stagedAt)).toBe(true);
+    expect(queued!.stagedAt).toBeGreaterThan(0);
+    expect(queued!.urgency).toBe(0);
+    expect(queued!.confidence).toBe(0);
+    expect(queued!.estimatedRisk).toBe(1); // Fail closed risk
+
+    // Finite out-of-range values: confidence = 5 (> 1) and risk = -0.5 (< 0)
+    // Under HIGH_VELOCITY mode, this must NOT allow prompt (fails closed to confidence: 0, risk: 1)
+    const mode = gate.classifyMode({
+      screenState: 'ON',
+      idleDurationMs: 0,
+      timestamp: Date.now(),
+      appTransitions: [
+        { from: 'com.app1', to: 'com.app2', dwell_ms: 2000, ts: Date.now() - 4000 },
+        { from: 'com.app2', to: 'com.app3', dwell_ms: 2000, ts: Date.now() - 2000 },
+        { from: 'com.app3', to: 'com.app1', dwell_ms: 2000, ts: Date.now() },
+      ],
+    }); // Sets HIGH_VELOCITY_EXECUTION mode
+    expect(mode).toBe('HIGH_VELOCITY_EXECUTION');
+
+    // Control proposal with valid high confidence (0.9) must allow prompt in HIGH_VELOCITY mode
+    const controlProposal: ProposalEnvelope = {
+      id: 'prop_ctrl',
+      candidateId: 'cand_ctrl',
+      summary: 'Valid high confidence proposal',
+      urgency: 0.2,
+      confidence: 0.9,
+      estimatedRisk: 0.3,
+    };
+    const ctrlDecision = gate.evaluateProposal(controlProposal);
+    expect(ctrlDecision.mode).toBe('HIGH_VELOCITY_EXECUTION');
+    expect(ctrlDecision.action).toBe('ALLOW_PROMPT');
+
+    // Out-of-range proposal fails closed to confidence: 0 and is suppressed
+    const outOfRangeProposal: ProposalEnvelope = {
+      id: 'prop_oor',
+      candidateId: 'cand_oor',
+      summary: 'Out of range proposal',
+      urgency: 0.2,
+      confidence: 5.0, // > 1
+      estimatedRisk: -0.5, // < 0
+    };
+    const oorDecision = gate.evaluateProposal(outOfRangeProposal);
+    expect(oorDecision.mode).toBe('HIGH_VELOCITY_EXECUTION');
+    expect(oorDecision.action).toBe('SUPPRESS_AND_QUEUE');
+    expect(oorDecision.confidence).toBe(0);
+
+    // Emergency cutoff clamp: urgency: 1.5 (> 1) in DEEP_FOCUS must breach cutoff and ALLOW_PROMPT
+    gate.classifyMode({ foregroundApp: 'Code.exe' }); // DEEP_FOCUS
+    const emergencyProposal: ProposalEnvelope = {
+      id: 'prop_emerg',
+      candidateId: 'cand_emerg',
+      summary: 'Critical emergency proposal',
+      urgency: 1.5, // Clamped to 1.0 (>= cutoff 0.9), must breach
+      confidence: 0.8,
+      estimatedRisk: 0.1,
+    };
+    const emergDecision = gate.evaluateProposal(emergencyProposal);
+    expect(emergDecision.mode).toBe('DEEP_FOCUS');
+    expect(emergDecision.action).toBe('ALLOW_PROMPT');
+
+    // Malformed proposal envelope or missing id fails closed to DROP
+    const nullDecision = gate.evaluateProposal(null as any);
+    expect(nullDecision.action).toBe('DROP');
+    expect(nullDecision.targetDelivery).toBe('NONE');
+
+    const emptyIdDecision = gate.evaluateProposal({ id: '', candidateId: 'c1', summary: 's1', urgency: 0.5, confidence: 0.5, estimatedRisk: 0.1 });
+    expect(emptyIdDecision.action).toBe('DROP');
+  });
 });
 

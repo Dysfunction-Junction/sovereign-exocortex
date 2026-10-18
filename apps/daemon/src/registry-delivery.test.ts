@@ -414,3 +414,47 @@ test("surfaceTestProposal respects process.env.SHADOW === '0' and creates shadow
   }
 });
 
+test("buildPendingProposals fails closed when actionPayload is an array or primitive", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  device(db, "dev_a", p256());
+  proposal(db, "pol_valid");
+  proposal(db, "pol_array");
+  proposal(db, "pol_primitive");
+  proposal(db, "pol_none");
+
+  const fetcher: PendingFetcher = async () => [
+    {
+      proposalId: "pol_valid",
+      approvalNonce: "nonce-1",
+      expiresAt: Date.now() + 60_000,
+      actionPayload: { command: "test" },
+    },
+    {
+      proposalId: "pol_array",
+      approvalNonce: "nonce-2",
+      expiresAt: Date.now() + 60_000,
+      actionPayload: ["not", "an", "object"] as unknown as Record<string, unknown>,
+    },
+    {
+      proposalId: "pol_primitive",
+      approvalNonce: "nonce-3",
+      expiresAt: Date.now() + 60_000,
+      actionPayload: 12345 as unknown as Record<string, unknown>,
+    },
+    {
+      proposalId: "pol_none",
+      approvalNonce: "nonce-4",
+      expiresAt: Date.now() + 60_000,
+    },
+  ];
+
+  const result = await buildPendingProposals(db, fetcher, Date.now(), null);
+  assert.equal(result.length, 2);
+  const valid = result.find((p) => p.proposalId === "pol_valid");
+  const none = result.find((p) => p.proposalId === "pol_none");
+  assert.ok(valid, "pol_valid should be present");
+  assert.deepEqual(valid.actionPayload, { command: "test" });
+  assert.ok(none, "pol_none should be present");
+  assert.equal(none.actionPayload, undefined);
+});
+

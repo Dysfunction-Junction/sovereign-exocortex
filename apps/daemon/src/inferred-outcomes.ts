@@ -184,7 +184,15 @@ export function isStateMatching(observed: unknown, target: unknown): boolean {
       : typeof observed === "string" && observed.trim() !== "" && !Number.isNaN(Number(observed)) && Number(observed) === target;
   }
   if (typeof target === "string") {
-    return String(observed) === target;
+    if (
+      typeof observed === "string" ||
+      typeof observed === "number" ||
+      typeof observed === "boolean" ||
+      typeof observed === "bigint"
+    ) {
+      return String(observed) === target;
+    }
+    return false;
   }
   if (target === null || target === undefined) {
     return observed === target;

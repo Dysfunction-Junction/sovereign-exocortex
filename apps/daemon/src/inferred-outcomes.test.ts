@@ -711,4 +711,17 @@ describe("Inferred Outcome Label Engine", () => {
     assert.equal(report.ignoredCount, 0);
     assert.equal(report.results[0].label, "unresolvable");
   });
+
+  test("isStateMatching does not accidentally coerce null, undefined, or objects to target strings", () => {
+    assert.equal(isStateMatching("active", "active"), true);
+    assert.equal(isStateMatching(123, "123"), true);
+    assert.equal(isStateMatching(true, "true"), true);
+
+    // Negative cases: null, undefined, objects, or arrays should never match literal string names
+    assert.equal(isStateMatching(null, "null"), false);
+    assert.equal(isStateMatching(undefined, "undefined"), false);
+    assert.equal(isStateMatching({}, "[object Object]"), false);
+    assert.equal(isStateMatching([], ""), false);
+    assert.equal(isStateMatching({}, ""), false);
+  });
 });

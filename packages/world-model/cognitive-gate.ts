@@ -173,7 +173,10 @@ export class CognitiveModeGate {
    * Classify the user's cognitive state given environmental, temporal, and behavioural signals.
    */
   public classifyMode(signals: ContextualSignals): CognitiveMode {
-    this.lastSignals = signals;
+    if (!signals || typeof signals !== 'object') {
+      return this.currentMode;
+    }
+    this.lastSignals = { ...signals };
     const effective = this.lastSignals;
 
     // 1. Manual override takes highest priority
@@ -289,16 +292,46 @@ export class CognitiveModeGate {
   /**
    * Filter and route a speculative proposal through the attentional gate.
    */
-  public evaluateProposal(proposal: ProposalEnvelope, signals?: ContextualSignals): GateDecision {
+  public evaluateProposal(rawProposal: ProposalEnvelope, signals?: ContextualSignals): GateDecision {
     const effectiveSignals: ContextualSignals = signals
       ? { ...this.lastSignals, ...signals }
       : this.lastSignals;
     const activeMode = signals ? this.classifyMode(effectiveSignals) : this.currentMode;
     const now = Date.now();
 
-    const urgency = Number.isFinite(proposal.urgency)
-      ? Math.max(0, Math.min(1, proposal.urgency))
-      : 0;
+    if (!rawProposal || typeof rawProposal !== 'object' || typeof rawProposal.id !== 'string' || !rawProposal.id.trim()) {
+      return {
+        action: 'DROP',
+        mode: activeMode,
+        reason: 'Malformed proposal: missing or invalid proposal envelope or id (fail closed).',
+        targetDelivery: 'NONE',
+        confidence: 0,
+        evaluatedAt: now,
+      };
+    }
+
+    const rawU = rawProposal.urgency;
+    const rawC = rawProposal.confidence;
+    const rawR = rawProposal.estimatedRisk;
+
+    // For interruption gating, emergency cutoffs must not be silenced if urgency > 1
+    const urgency = typeof rawU === 'number' && Number.isFinite(rawU) ? Math.max(0, Math.min(1, rawU)) : 0;
+    // For confidence and risk, fail closed: out-of-range values reset to minimal confidence / maximum risk
+    const confidence = typeof rawC === 'number' && Number.isFinite(rawC) && rawC >= 0 && rawC <= 1 ? rawC : 0;
+    const risk = typeof rawR === 'number' && Number.isFinite(rawR) && rawR >= 0 && rawR <= 1 ? rawR : 1;
+
+    const stagedAt = typeof rawProposal.stagedAt === 'number' && Number.isFinite(rawProposal.stagedAt) && rawProposal.stagedAt > 0 && rawProposal.stagedAt <= now
+      ? rawProposal.stagedAt
+      : now;
+
+    const proposal: ProposalEnvelope = {
+      ...rawProposal,
+      urgency,
+      confidence,
+      estimatedRisk: risk,
+      stagedAt,
+    };
+
     const isThrottling =
       (typeof effectiveSignals.thermalHeadroom === 'number' && effectiveSignals.thermalHeadroom >= this.config.thermalThrottlingCutoff) ||
       effectiveSignals.thermalStatus === 'throttling';
@@ -310,12 +343,8 @@ export class CognitiveModeGate {
     const canAutoExecute =
       !isThrottling &&
       isAutoExecuteAllowlisted(proposal) &&
-      Number.isFinite(proposal.confidence) &&
-      Number.isFinite(proposal.estimatedRisk) &&
-      proposal.confidence <= 1 &&
-      proposal.estimatedRisk >= 0 &&
-      proposal.confidence >= this.config.autoExecuteMinConfidence &&
-      proposal.estimatedRisk <= this.config.autoExecuteMaxRisk;
+      confidence >= this.config.autoExecuteMinConfidence &&
+      risk <= this.config.autoExecuteMaxRisk;
 
     // Thermal Headroom Protection: Suppress speculative and background workloads under thermal exhaustion
     if (isThrottling && urgency < this.config.emergencyUrgencyCutoff) {
@@ -325,7 +354,7 @@ export class CognitiveModeGate {
         mode: activeMode,
         reason: `Thermal exhaustion: device throttling (${typeof effectiveSignals.thermalHeadroom === 'number' ? `headroom ${effectiveSignals.thermalHeadroom.toFixed(2)}` : 'status throttling'}). Workload staged for cooldown.`,
         targetDelivery: 'BACKGROUND_QUEUE',
-        confidence: proposal.confidence,
+        confidence,
         evaluatedAt: now,
       };
     }
@@ -345,7 +374,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Metered network connection: network-intensive proposal (${proposal.category ?? 'network_sync'}) queued until unmetered Wi-Fi/Ethernet is available.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -359,7 +388,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `In-call/meeting: Safe proposal executed silently without disturbing conversation.`,
           targetDelivery: 'SILENT_EXECUTE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -369,7 +398,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `In-call/meeting: Critical emergency urgency ${urgency.toFixed(2)} breaches call suppression gate.`,
           targetDelivery: 'GLASS_MODAL',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -379,7 +408,7 @@ export class CognitiveModeGate {
         mode: activeMode,
         reason: `In-call/meeting active: non-emergency interruptions suppressed to preserve conversation flow.`,
         targetDelivery: 'BACKGROUND_QUEUE',
-        confidence: proposal.confidence,
+        confidence,
         evaluatedAt: now,
       };
     }
@@ -397,7 +426,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `In-vehicle / Car Audio: Safe routine action executed silently without visual distraction.`,
           targetDelivery: 'SILENT_EXECUTE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -407,7 +436,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `In-vehicle / Car Audio: Critical emergency urgency ${urgency.toFixed(2)} allowed.`,
           targetDelivery: 'GLASS_MODAL',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -417,7 +446,7 @@ export class CognitiveModeGate {
         mode: activeMode,
         reason: `In-vehicle / Car Audio connected: visual modals suppressed for driving safety.`,
         targetDelivery: 'BACKGROUND_QUEUE',
-        confidence: proposal.confidence,
+        confidence,
         evaluatedAt: now,
       };
     }
@@ -436,7 +465,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Zen/DND active: Safe routine action executed silently without visual interruption.`,
           targetDelivery: 'SILENT_EXECUTE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -448,7 +477,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Zen/DND total silence (interruption filter NONE): all visual interruptions suppressed.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -458,7 +487,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Zen/DND active: Critical emergency urgency ${urgency.toFixed(2)} allowed through filter.`,
           targetDelivery: 'GLASS_MODAL',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -468,7 +497,7 @@ export class CognitiveModeGate {
         mode: activeMode,
         reason: `Zen/DND active (${effectiveSignals.interruptionFilter ?? 'ACTIVE'}): non-emergency notifications suppressed.`,
         targetDelivery: 'BACKGROUND_QUEUE',
-        confidence: proposal.confidence,
+        confidence,
         evaluatedAt: now,
       };
     }
@@ -485,7 +514,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Physical surface (${effectiveSignals.physicalState}): Safe routine proposal executed silently without activating display.`,
           targetDelivery: 'SILENT_EXECUTE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -495,7 +524,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Physical surface (${effectiveSignals.physicalState}): Critical emergency urgency ${urgency.toFixed(2)} breaches pocket suppression gate.`,
           targetDelivery: 'GLASS_MODAL',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -505,7 +534,7 @@ export class CognitiveModeGate {
         mode: activeMode,
         reason: `Device is ${effectiveSignals.physicalState === 'in_pocket' ? 'in pocket' : 'face down'}: visual modals suppressed to prevent phantom touches and save power.`,
         targetDelivery: 'BACKGROUND_QUEUE',
-        confidence: proposal.confidence,
+        confidence,
         evaluatedAt: now,
       };
     }
@@ -530,7 +559,7 @@ export class CognitiveModeGate {
       );
 
       // Do not breach safety: proposal must be low risk or have high urgency
-      const isSafeOrUrgent = proposal.estimatedRisk <= this.config.autoExecuteMaxRisk || urgency >= 0.8;
+      const isSafeOrUrgent = risk <= this.config.autoExecuteMaxRisk || urgency >= 0.8;
 
       if (isExactMatch && isSafeOrUrgent) {
         return {
@@ -538,7 +567,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Clipboard Intent Surface: Immediate match for ${clipIntent.action} (${clipIntent.entity_type}).`,
           targetDelivery: 'GLASS_MODAL',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -551,9 +580,9 @@ export class CognitiveModeGate {
           return {
             action: 'SILENT_AUTO_EXECUTE',
             mode: activeMode,
-            reason: `Deep Focus: Confidence ${proposal.confidence.toFixed(2)} meets threshold and risk ${proposal.estimatedRisk.toFixed(2)} is trivial. Executing silently without disturbing flow.`,
+            reason: `Deep Focus: Confidence ${confidence.toFixed(2)} meets threshold and risk ${risk.toFixed(2)} is trivial. Executing silently without disturbing flow.`,
             targetDelivery: 'SILENT_EXECUTE',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -564,7 +593,7 @@ export class CognitiveModeGate {
             mode: activeMode,
             reason: `Deep Focus: Urgency ${urgency.toFixed(2)} exceeds critical cutoff (${this.config.deepFocusUrgencyCutoff}). Breaching gate.`,
             targetDelivery: 'GLASS_MODAL',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -576,7 +605,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Deep Focus: Preserving flow state. Urgency ${urgency.toFixed(2)} is below cutoff. Queued for post-focus review.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -589,18 +618,18 @@ export class CognitiveModeGate {
             mode: activeMode,
             reason: `High Velocity: Safe routine pre-execution completed silently.`,
             targetDelivery: 'SILENT_EXECUTE',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
 
-        if (proposal.confidence >= 0.5 || urgency >= 0.6) {
+        if (confidence >= 0.5 || urgency >= 0.6) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
             reason: `High Velocity: Pre-staged for instant 1-tap biometric glass authorization.`,
             targetDelivery: 'GLASS_MODAL',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -611,20 +640,20 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `High Velocity: Low confidence proposal queued to avoid context clutter.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
 
       case 'EXPLORATORY_LEARNING': {
         // Exploratory Learning: Allow helpful context and insights
-        if (proposal.confidence >= 0.6 || urgency >= 0.5) {
+        if (confidence >= 0.6 || urgency >= 0.5) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
             reason: `Exploratory Learning: Contextual proposal surfaced for review.`,
             targetDelivery: 'GLASS_MODAL',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -635,7 +664,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Exploratory Learning: Marginally relevant proposal queued.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -648,18 +677,18 @@ export class CognitiveModeGate {
             mode: activeMode,
             reason: `Maintenance: Background maintenance executed automatically.`,
             targetDelivery: 'SILENT_EXECUTE',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
 
-        if (urgency >= 0.3 || proposal.confidence >= 0.4) {
+        if (urgency >= 0.3 || confidence >= 0.4) {
           return {
             action: 'ALLOW_PROMPT',
             mode: activeMode,
             reason: `Maintenance: Surface binary 1-tap approval during ambient window.`,
             targetDelivery: 'GLASS_MODAL',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -669,7 +698,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Maintenance: Proposal below minimal relevance threshold.`,
           targetDelivery: 'NONE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -682,7 +711,7 @@ export class CognitiveModeGate {
             mode: activeMode,
             reason: `Rest Recovery: Life/critical threshold exceeded (${urgency.toFixed(2)}). Emergency glass alert allowed.`,
             targetDelivery: 'GLASS_MODAL',
-            confidence: proposal.confidence,
+            confidence,
             evaluatedAt: now,
           };
         }
@@ -693,7 +722,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Rest Recovery: Suppressing all non-emergency interruptions during quiet hours. Staged for morning briefing.`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -706,7 +735,7 @@ export class CognitiveModeGate {
           mode: activeMode,
           reason: `Unknown cognitive mode '${String(activeMode)}': suppressed and queued (fail closed).`,
           targetDelivery: 'BACKGROUND_QUEUE',
-          confidence: proposal.confidence,
+          confidence,
           evaluatedAt: now,
         };
       }
@@ -717,8 +746,7 @@ export class CognitiveModeGate {
    * Queue a proposal for delayed execution or batched morning surfacing.
    */
   private queueProposal(proposal: ProposalEnvelope): void {
-    if (this.queuedProposals.some(p => p.id === proposal.id)) return;
-    proposal.stagedAt = proposal.stagedAt ?? Date.now();
+    if (!proposal.id || this.queuedProposals.some(p => p.id === proposal.id)) return;
     this.queuedProposals.push(proposal);
     if (this.queuedProposals.length > MAX_QUEUED_PROPOSALS) {
       this.queuedProposals.splice(0, this.queuedProposals.length - MAX_QUEUED_PROPOSALS);
