@@ -497,10 +497,21 @@ function logHash(prev: string, ts: number, action: string, itemId: string): stri
 }
 
 /** Min-max to [0,1]; a lone value (or all-equal values) maps to 1. */
-function minMax(xs: number[]): number[] {
-  if (xs.length === 0) return [];
-  const lo = Math.min(...xs);
-  const hi = Math.max(...xs);
-  if (hi === lo) return xs.map(() => 1);
-  return xs.map((x) => (x - lo) / (hi - lo));
+export function minMax(xs: number[]): number[] {
+  let lo = Infinity, hi = -Infinity;
+  for (const x of xs) {
+    if (Number.isFinite(x)) {
+      if (x < lo) lo = x;
+      if (x > hi) hi = x;
+    }
+  }
+  if (lo === Infinity) return xs.map(() => 0); // no finite values
+  const span = hi - lo;
+  return xs.map((x) =>
+    !Number.isFinite(x)
+      ? 0
+      : span === 0 || !Number.isFinite(span)
+        ? 1
+        : Math.min(1, Math.max(0, (x - lo) / span))
+  );
 }

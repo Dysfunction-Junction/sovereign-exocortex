@@ -17,22 +17,27 @@ import {
 } from "./peer-channels.js";
 import { TrafficControlRegistry } from "./traffic-control.js";
 
-function argument(name: string): string {
-  const args = process.argv.slice(2);
-  const inline = args.find((value) => value.startsWith(`${name}=`));
-  if (inline) return inline.slice(name.length + 1);
-  const index = args.indexOf(name);
-  const value = index >= 0 ? args[index + 1] : undefined;
-  if (!value) throw new Error(`Missing required argument: ${name}`);
-  return value;
-}
-
 function optionalArgument(name: string): string | undefined {
   const args = process.argv.slice(2);
   const inline = args.find((value) => value.startsWith(`${name}=`));
-  if (inline) return inline.slice(name.length + 1);
+  if (inline) {
+    const val = inline.slice(name.length + 1);
+    return val.length > 0 ? val : undefined;
+  }
   const index = args.indexOf(name);
-  return index >= 0 ? args[index + 1] : undefined;
+  if (index >= 0) {
+    const next = args[index + 1];
+    if (next && !next.startsWith("--")) {
+      return next.length > 0 ? next : undefined;
+    }
+  }
+  return undefined;
+}
+
+function argument(name: string): string {
+  const val = optionalArgument(name);
+  if (!val) throw new Error(`Missing required argument: ${name}`);
+  return val;
 }
 
 function response(data: unknown) {

@@ -106,12 +106,12 @@ export class ArchiveClient {
         if (typeof h?.itemId !== "string" || typeof h.title !== "string") continue;
         hits.push({
           itemId: h.itemId,
-          score: typeof h.score === "number" ? Math.round(h.score * 100) / 100 : 0,
+          score: typeof h.score === "number" && Number.isFinite(h.score) ? Math.min(1, Math.max(0, Math.round(h.score * 100) / 100)) : 0,
           kind: String(h.kind ?? "other"),
           source: String(h.source ?? ""),
           title: h.title,
           path: String(h.path ?? ""),
-          ts: typeof h.ts === "number" ? h.ts : 0,
+          ts: typeof h.ts === "number" && Number.isFinite(h.ts) ? Math.max(0, h.ts) : 0,
           snippet: String(h.snippet ?? "").slice(0, MAX_SNIPPET),
           untrusted: true,
         });

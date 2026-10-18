@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Databank, type Embedder } from "../databank.js";
+import { Databank, minMax, type Embedder } from "../databank.js";
 import { archiveMemories } from "../archive.js";
 import { DatabankKeys } from "../crypto.js";
 import { chunkText } from "../text.js";
@@ -205,5 +205,31 @@ describe("Databank", () => {
     assert.deepEqual(chunkText("   "), []);
     assert.equal(chunkText("short").length, 1);
     assert.ok(chunkText("x".repeat(5000)).length >= 6);
+  });
+
+  it("search produces stable finite scores and handles unmatched terms gracefully", async () => {
+    await note("TestDoc", "unique words to match query");
+    const hitsEmpty = await bank.search("nonexistenttermthatcannotmatchanything");
+    assert.deepEqual(hitsEmpty, []);
+
+    const hitsMatch = await bank.search("unique");
+    assert.ok(hitsMatch.length > 0);
+    for (const h of hitsMatch) {
+      assert.ok(Number.isFinite(h.score));
+      assert.ok(h.score >= 0 && h.score <= 1.0);
+    }
+  });
+
+  it("minMax normalizes correctly and never produces NaN or gives non-finite inputs max score", () => {
+    // [NaN, 1]: single finite value maps to 1, NaN maps to 0
+    assert.deepEqual(minMax([NaN, 1]), [0, 1]);
+    // [NaN, NaN]: no finite values maps all to 0
+    assert.deepEqual(minMax([NaN, NaN]), [0, 0]);
+    // [Infinity, 2, 3]: Infinity maps to 0, 2 maps to 0, 3 maps to 1
+    assert.deepEqual(minMax([Infinity, 2, 3]), [0, 0, 1]);
+    // [5, 5]: equal values map to 1
+    assert.deepEqual(minMax([5, 5]), [1, 1]);
+    // Empty array maps to []
+    assert.deepEqual(minMax([]), []);
   });
 });

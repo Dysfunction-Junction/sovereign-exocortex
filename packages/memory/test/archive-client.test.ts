@@ -23,17 +23,34 @@ function fakeFetch(status: number, body: unknown, seen: Array<{ url: string; aut
 
 test("ArchiveClient returns untrusted, clipped hits and sends the bearer token", async () => {
   const seen: Array<{ url: string; auth: string | null; body: string }> = [];
-  const c = new ArchiveClient({ baseUrl: "https://bank.example/", token: "tok-123", fetchImpl: fakeFetch(200, { hits: [hit(), { bogus: true }] }, seen) });
+  const c = new ArchiveClient({
+    baseUrl: "https://bank.example/",
+    token: "tok-123",
+    fetchImpl: fakeFetch(200, { hits: [hit(), hit({ score: NaN, ts: NaN }), { bogus: true }] }, seen),
+  });
   const r = await c.search("beach trip", 3);
   assert.equal(r.available, true);
   if (!r.available) return;
-  assert.equal(r.hits.length, 1, "malformed hits are dropped");
+  assert.equal(r.hits.length, 2, "malformed hits are dropped, valid hits sanitized");
   assert.equal(r.hits[0].untrusted, true);
   assert.equal(r.hits[0].score, 0.81);
   assert.equal(r.hits[0].snippet.length, 300);
+  assert.equal(r.hits[1].score, 0);
+  assert.equal(r.hits[1].ts, 0);
   assert.equal(seen[0].url, "https://bank.example/search");
   assert.equal(seen[0].auth, "Bearer tok-123");
   assert.deepEqual(JSON.parse(seen[0].body), { q: "beach trip", k: 3 });
+});
+
+test("ArchiveClient sanitizes raw JSON 1e999 (Infinity) score and ts to 0", async () => {
+  const rawFetch = (async () =>
+    new Response('{"hits":[{"itemId":"' + "b".repeat(32) + '","title":"Inf","score":1e999,"ts":1e999}]}', { status: 200 })) as unknown as typeof fetch;
+  const c = new ArchiveClient({ baseUrl: "https://bank.example/", token: "tok-123", fetchImpl: rawFetch });
+  const r = await c.search("inf", 1);
+  assert.equal(r.available, true);
+  if (!r.available) return;
+  assert.equal(r.hits[0].score, 0);
+  assert.equal(r.hits[0].ts, 0);
 });
 
 test("ArchiveClient never throws: locked, wrong token, server error, junk and timeouts all map to unavailable", async () => {

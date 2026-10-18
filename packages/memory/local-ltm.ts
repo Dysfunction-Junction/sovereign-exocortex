@@ -48,7 +48,9 @@ function computeSimilarity(queryTokens: Set<string>, docTokens: Set<string>): nu
 // similarity ranks results rather than gating them; the floor only drops
 // clearly unrelated text that also has zero keyword overlap.
 const SEMANTIC_WEIGHT = 0.7;
-const MIN_COSINE = Number(process.env.EXOCORTEX_EMBED_MIN_COSINE ?? "0.5");
+const raw = process.env.EXOCORTEX_EMBED_MIN_COSINE?.trim();
+const parsed = raw ? Number(raw) : NaN;
+const MIN_COSINE = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1.0 ? parsed : 0.5;
 
 export interface LocalLTMOptions {
   /** Optional semantic embedder. Omit (or null) for pure token-overlap search. */

@@ -119,6 +119,8 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const cl = Number(req.headers["content-length"]);
+  if (Number.isFinite(cl) && cl > MAX_BODY) return null;
   const chunks: Buffer[] = [];
   let n = 0;
   for await (const c of req) {
