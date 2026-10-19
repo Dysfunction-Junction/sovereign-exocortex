@@ -159,4 +159,26 @@ Across 4 consecutive Triad Fusion cycles, deep audits and surgical hardening wer
   - Monorepo scripts: `pnpm desktop:build` and `pnpm desktop:dev`.
 - **Git Commit**: `feat(desktop): scaffold Tauri 2.0 native Windows desktop application and installer bundles` (`476b0d4`).
 
+---
+
+## 7. Zero-Config Desktop Architecture & Mobile Separation
+
+- **Problem Identified**: The initial desktop build packaged the mobile companion frontend with default redirection to `/setup`, presenting Android-specific permissions (Accessibility Service, Android Notification Listener, SMS Backfill, Biometrics) and requiring manual proxy/gateway connection hurdles despite running locally on the PC where all data lives.
+- **Architectural Separation**:
+  - **Loopback Origin Allowance (`apps/daemon/src/server.ts`)**: Allowed `tauri.localhost` and exact loopback origins so Tauri's WebView2 auto-discovery `/mobile/local-config` succeeds over loopback without 403 origin blocks.
+  - **Zero-Config Desktop Launch (`apps/mobile/src/App.tsx`, `apps/mobile/src/lib/config.ts`)**: Added `isDesktopApp()` helper. On desktop, the application defaults `isConfigured()` to `true` and launches directly into `/brain` (the 3D Living Brain interactive graph), connecting instantly to local services (`127.0.0.1:8788`, `127.0.0.1:8787`, and PiecesOS `127.0.0.1:39300`).
+  - **Isolating Mobile-Only Permissions (`apps/mobile/src/pages/Status.tsx`, `apps/mobile/src/pages/Setup.tsx`, `apps/mobile/src/components/PermissionsPanel.tsx`)**:
+    - Completely removed Android accessibility service warnings, Android app allowlists, Android notification capture switches, SMS backfill, and phone biometrics from the desktop view.
+    - Added dedicated **Windows Workstation Node** HUD card in `Status.tsx` displaying daemon, proxy, PiecesOS, and SQLite WAL engine states.
+    - Replaced the `/setup` tab on desktop with **Node Hub & Companion Pairing**, displaying the master PC host status and mobile pairing credentials (for scanning/copying from the Galaxy S26 Ultra to the PC).
+- **Verification**:
+  - 100% test pass rate (158/158 mobile tests, 187/187 daemon tests).
+  - 0 TypeScript compiler errors across all monorepo packages.
+  - Rebuilt and verified Tauri release packages:
+    - NSIS Setup: `apps/desktop/src-tauri/target/release/bundle/nsis/Sovereign Exocortex_1.0.0_x64-setup.exe` (2.41 MB)
+    - MSI Installer: `apps/desktop/src-tauri/target/release/bundle/msi/Sovereign Exocortex_1.0.0_x64_en-US.msi` (3.45 MB)
+    - Portable executable: `apps/desktop/src-tauri/target/release/app.exe` (9.64 MB)
+- **Git Commit**: `fix(desktop): zero-config local workstation launch into Living Brain 3D and isolate phone pairing` (`2cabb27`).
+
+
 
