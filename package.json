@@ -8,7 +8,9 @@
     "typecheck": "pnpm -r --stream typecheck",
     "build": "pnpm -r --stream build",
     "exo": "tsx apps/cli/src/index.ts",
-    "start": "tsx apps/daemon/src/index.ts"
+    "start": "tsx apps/daemon/src/index.ts",
+    "desktop:build": "pnpm --filter @exocortex/desktop build",
+    "desktop:dev": "pnpm --filter @exocortex/desktop dev"
   },
   "devDependencies": {
     "typescript": "^5.9.3",
