@@ -1,12 +1,34 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
+use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
 
+#[tauri::command]
+fn get_local_config() -> Result<String, String> {
+    let mut stream = TcpStream::connect("127.0.0.1:8788").map_err(|e| format!("Failed to connect to daemon: {}", e))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
+    let request = "GET /mobile/local-config HTTP/1.1\r\nHost: 127.0.0.1:8788\r\nAccept: application/json\r\nConnection: close\r\n\r\n";
+    stream.write_all(request.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).map_err(|e| format!("Read failed: {}", e))?;
+    let text = String::from_utf8_lossy(&response);
+    if let Some(pos) = text.find("\r\n\r\n") {
+        let body = &text[pos + 4..];
+        Ok(body.to_string())
+    } else {
+        Err("Invalid HTTP response from local daemon".to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![get_local_config])
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

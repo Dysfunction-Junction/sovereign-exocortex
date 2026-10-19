@@ -81,6 +81,32 @@ export async function tryAutoConnectLocalPc(): Promise<boolean> {
   autoConnectPromise = (async () => {
     if (typeof window === "undefined") return false;
 
+    // 0. Primary desktop path: Use native Tauri IPC to fetch loopback credentials without WebView Origin restrictions
+    if ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__) {
+      try {
+        const invoke = (window as any).__TAURI__?.core?.invoke ?? (window as any).__TAURI_INTERNALS__?.invoke;
+        if (typeof invoke === "function") {
+          const raw = await invoke("get_local_config", {});
+          const data = typeof raw === "string" ? JSON.parse(raw) : raw;
+          if (data && data.ok) {
+            const pUrl = data.proxyBaseUrl || "http://127.0.0.1:8787";
+            const pToken = data.proxyToken || "";
+            const rUrl = data.remoteGatewayUrl || "http://127.0.0.1:8788";
+            const rToken = data.remoteGatewayToken || "";
+            await Promise.all([
+              setProxyBaseUrl(pUrl),
+              setProxyToken(pToken),
+              setRemoteGatewayUrl(rUrl),
+              setRemoteGatewayToken(rToken),
+            ]);
+            return true;
+          }
+        }
+      } catch (err) {
+        console.warn("[auto-connect] Native IPC bridge failed, falling back to HTTP fetch:", err);
+      }
+    }
+
     // Check candidate endpoints:
     // 1. Relative (if web dashboard served directly by the daemon or reverse proxy)
     // 2. Default local daemon port 8788

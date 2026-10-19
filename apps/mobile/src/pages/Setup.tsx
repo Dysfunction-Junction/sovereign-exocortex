@@ -79,11 +79,13 @@ export default function Setup() {
       if (savedRemoteToken) setRemoteToken(savedRemoteToken);
       setScreenContext(contextEnabled);
     })().catch(logRejection("setup.loadConfig"));
-    AccessibilityScanner.isAccessibilityServiceEnabled()
-      .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
-      .catch(() => {});
-    fireAndForget(refreshNotifState(), "setup.refreshNotifState");
-    fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+    if (Capacitor.isNativePlatform()) {
+      AccessibilityScanner.isAccessibilityServiceEnabled()
+        .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
+        .catch(() => {});
+      fireAndForget(refreshNotifState(), "setup.refreshNotifState");
+      fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+    }
     recordEventSafe({ type: "screen_view", screen: "setup", timestamp: new Date().toISOString() });
     void flushUsageEvents();
 
@@ -392,18 +394,29 @@ export default function Setup() {
                 setChecking(true);
                 setScanError(null);
                 const ok = await tryAutoConnectLocalPc();
+                const [savedUrl, savedToken, savedRemoteUrl, savedRemoteToken] = await Promise.all([
+                  getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
+                ]);
+                if (savedUrl) setBaseUrl(savedUrl);
+                if (savedToken) setToken(savedToken);
+                if (savedRemoteUrl) setRemoteUrl(savedRemoteUrl);
+                if (savedRemoteToken) setRemoteToken(savedRemoteToken);
                 if (ok) {
-                  const [savedUrl, savedToken, savedRemoteUrl, savedRemoteToken] = await Promise.all([
-                    getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
-                  ]);
-                  if (savedUrl) setBaseUrl(savedUrl);
-                  if (savedToken) setToken(savedToken);
-                  if (savedRemoteUrl) setRemoteUrl(savedRemoteUrl);
-                  if (savedRemoteToken) setRemoteToken(savedRemoteToken);
                   setResult(await deepCheckAfterSave());
                 } else {
-                  setScanError("Could not reach local PC services at http://127.0.0.1:8788/mobile/local-config.");
-                  setResult("unreachable");
+                  try {
+                    const healthRes = await fetch("http://127.0.0.1:8788/mobile/health", { signal: AbortSignal.timeout(2000) });
+                    if (healthRes.ok) {
+                      setResult("ok");
+                      setScanError(null);
+                    } else {
+                      setScanError("Local daemon on port :8788 did not return healthy status.");
+                      setResult("unreachable");
+                    }
+                  } catch {
+                    setScanError("Could not reach local PC services on port 8788. Ensure exocortexd is running.");
+                    setResult("unreachable");
+                  }
                 }
                 setChecking(false);
               }}

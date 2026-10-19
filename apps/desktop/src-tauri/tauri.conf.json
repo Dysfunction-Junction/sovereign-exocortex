@@ -10,6 +10,7 @@
     "beforeBuildCommand": "pnpm --filter @exocortex/mobile build"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Sovereign Exocortex — Living Brain",
