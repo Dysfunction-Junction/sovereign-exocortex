@@ -143,3 +143,20 @@ Across 4 consecutive Triad Fusion cycles, deep audits and surgical hardening wer
 - **Triad Advisory Review**: Fully reviewed, refined, and approved by the Autonomous Triad Advisory Council (`advisor.py`).
 - **All Remote Branches**: Synchronized on `origin/main`.
 
+---
+
+## 6. Native Desktop Application & Windows Installer Packaging (Tauri 2.0)
+
+- **Desktop Workspace (`apps/desktop`)**:
+  - Implemented **Tauri 2.0** architecture with Windows WebView2 hardware-accelerated WebGL 2.0 Direct3D ANGLE pipeline, consuming only ~40MB idle RAM (vs 250MB+ for Electron).
+  - Native Win32 window (1440x900) hosting the 3D Living Brain interactive graph (`apps/mobile/dist`).
+  - Native System Tray integration with `Show Living Brain` and `Quit Sovereign Exocortex`.
+  - Close-to-tray handling: Closing the GUI hides the window while preserving 24/7 background telemetry and active inference event loop.
+- **Compiled Binary Artifacts**:
+  - Standalone NSIS Setup Installer: `apps/desktop/src-tauri/target/release/bundle/nsis/Sovereign Exocortex_1.0.0_x64-setup.exe` (2.41 MB).
+  - Enterprise Windows Installer: `apps/desktop/src-tauri/target/release/bundle/msi/Sovereign Exocortex_1.0.0_x64_en-US.msi` (3.44 MB).
+  - Portable Executable: `apps/desktop/src-tauri/target/release/app.exe`.
+  - Monorepo scripts: `pnpm desktop:build` and `pnpm desktop:dev`.
+- **Git Commit**: `feat(desktop): scaffold Tauri 2.0 native Windows desktop application and installer bundles` (`476b0d4`).
+
+
