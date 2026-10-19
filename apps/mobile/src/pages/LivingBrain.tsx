@@ -15,6 +15,13 @@ import {
   type GraphAnalyticsResponse,
   type GraphQueryResponse,
 } from "../lib/api";
+import {
+  playActionPotential,
+  playSynapticCascade,
+  playLateralInhibitionRelax,
+  isSynapticAudioEnabled,
+  setSynapticAudioEnabled,
+} from "../lib/synapticAudio";
 
 const TYPE_COLORS: Record<string, string> = {
   PERSON: "#fb923c",        // Amber / Orange
@@ -73,11 +80,97 @@ export default function LivingBrain() {
   const [nlQueryRunning, setNlQueryRunning] = useState(false);
   const [nlQueryResult, setNlQueryResult] = useState<GraphQueryResponse["result"] | null>(null);
   const [nlQueryError, setNlQueryError] = useState<string | null>(null);
+  const [audioEnabled, setAudioEnabled] = useState(true);
+
+  useEffect(() => {
+    isSynapticAudioEnabled().then(setAudioEnabled).catch(() => {});
+  }, []);
+
+  const toggleAudio = async () => {
+    const next = !audioEnabled;
+    setAudioEnabled(next);
+    await setSynapticAudioEnabled(next);
+  };
+
+  const selectedNodeRef = useRef<GraphNode | null>(null);
+  selectedNodeRef.current = selectedNode;
+
+  // 2-Hop Synaptic Subgroup & Circuit Calculation
+  const synapticCircuit = useMemo(() => {
+    if (!selectedNode || !graphData) {
+      return {
+        hop1NodeIds: new Set<string>(),
+        hop2NodeIds: new Set<string>(),
+        activeNodeIds: new Set<string>(),
+        hop1EdgeIds: new Set<string>(),
+        hop2EdgeIds: new Set<string>(),
+        activeEdgeIds: new Set<string>(),
+      };
+    }
+
+    const selId = selectedNode.id;
+    const hop1NodeIds = new Set<string>();
+    const hop1EdgeIds = new Set<string>();
+
+    // 1-Hop: Direct neighbors & incident edges
+    for (const edge of graphData.edges) {
+      if (edge.sourceId === selId) {
+        hop1NodeIds.add(edge.targetId);
+        hop1EdgeIds.add(edge.id);
+      } else if (edge.targetId === selId) {
+        hop1NodeIds.add(edge.sourceId);
+        hop1EdgeIds.add(edge.id);
+      }
+    }
+
+    // 2-Hop: Neighbors of 1-hop nodes
+    const hop2NodeIds = new Set<string>();
+    const hop2EdgeIds = new Set<string>();
+
+    for (const edge of graphData.edges) {
+      const sInHop1 = hop1NodeIds.has(edge.sourceId);
+      const tInHop1 = hop1NodeIds.has(edge.targetId);
+
+      if (sInHop1 && edge.targetId !== selId && !hop1NodeIds.has(edge.targetId)) {
+        hop2NodeIds.add(edge.targetId);
+        hop2EdgeIds.add(edge.id);
+      } else if (tInHop1 && edge.sourceId !== selId && !hop1NodeIds.has(edge.sourceId)) {
+        hop2NodeIds.add(edge.sourceId);
+        hop2EdgeIds.add(edge.id);
+      } else if (sInHop1 && tInHop1) {
+        // Cross-connections within the 1-hop cluster
+        hop1EdgeIds.add(edge.id);
+      }
+    }
+
+    const activeNodeIds = new Set<string>([selId, ...hop1NodeIds, ...hop2NodeIds]);
+    const activeEdgeIds = new Set<string>([...hop1EdgeIds, ...hop2EdgeIds]);
+
+    return {
+      hop1NodeIds,
+      hop2NodeIds,
+      activeNodeIds,
+      hop1EdgeIds,
+      hop2EdgeIds,
+      activeEdgeIds,
+    };
+  }, [selectedNode, graphData]);
+
+  const synapticCircuitRef = useRef(synapticCircuit);
+  synapticCircuitRef.current = synapticCircuit;
 
   const handleNodeClick = useCallback((node: GraphNode) => {
     setSelectedNode(node);
+
+    // Procedural bio-electrical cascade audio
+    void playActionPotential(1.0);
+    void playSynapticCascade(1);
+    setTimeout(() => {
+      void playSynapticCascade(2);
+    }, 110);
+
     if (fgRef.current && node.x !== undefined && node.y !== undefined && node.z !== undefined) {
-      const distance = 80;
+      const distance = 85;
       const distRatio = 1 + distance / Math.hypot(node.x, node.y, node.z);
       fgRef.current.cameraPosition(
         { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
@@ -86,6 +179,25 @@ export default function LivingBrain() {
       );
     }
   }, []);
+
+  const handleDeselect = useCallback(() => {
+    setSelectedNode((prev) => {
+      if (prev) {
+        void playLateralInhibitionRelax();
+      }
+      return null;
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        handleDeselect();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleDeselect]);
 
   // Load initial full snapshot
   const loadGraph = useCallback(async () => {
@@ -248,50 +360,208 @@ export default function LivingBrain() {
         .backgroundColor("rgba(7, 8, 14, 0.98)")
         .nodeLabel((node: GraphNode) => {
           const act = ((node.activation ?? 0) * 100).toFixed(0);
-          return `<div style="background: rgba(15, 20, 35, 0.92); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-family: sans-serif; box-shadow: 0 4px 20px rgba(0,0,0,0.6);">
+          const selNode = selectedNodeRef.current;
+          const circuit = synapticCircuitRef.current;
+          let roleBadge = "";
+          if (selNode) {
+            if (node.id === selNode.id) {
+              roleBadge = `<div style="font-size: 10px; color: #38bdf8; font-weight: 700; margin-top: 2px; text-transform: uppercase;">⚡ Active Initiator</div>`;
+            } else if (circuit.hop1NodeIds.has(node.id)) {
+              roleBadge = `<div style="font-size: 10px; color: #38bdf8; font-weight: 600; margin-top: 2px; text-transform: uppercase;">1-Hop Synaptic Partner</div>`;
+            } else if (circuit.hop2NodeIds.has(node.id)) {
+              roleBadge = `<div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-top: 2px; text-transform: uppercase;">2-Hop Cascade Leaf</div>`;
+            } else {
+              roleBadge = `<div style="font-size: 10px; color: #64748b; margin-top: 2px; font-style: italic;">Inhibited Peripheral</div>`;
+            }
+          }
+          return `<div style="background: rgba(15, 20, 35, 0.94); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-family: sans-serif; box-shadow: 0 4px 20px rgba(0,0,0,0.6);">
             <div style="font-weight: 700; color: #ffffff; font-size: 13px;">${node.name}</div>
             <div style="font-size: 11px; color: ${node.color}; margin-top: 2px; text-transform: uppercase; font-weight: 600;">${node.type}</div>
+            ${roleBadge}
             <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Activation: <span style="color:#38bdf8; font-weight:700;">${act}%</span></div>
           </div>`;
         })
         .nodeThreeObject((node: GraphNode) => {
           const group = new THREE.Group();
-          const radius = Math.max(2, 2 + (node.activation ?? 0) * 6);
-          const color = new THREE.Color(node.color ?? getNodeColor(node.type));
+          const selNode = selectedNodeRef.current;
+          const circuit = synapticCircuitRef.current;
+          const act = node.activation ?? 0;
+          const baseColor = new THREE.Color(node.color ?? getNodeColor(node.type));
 
-          // Core Sphere
-          const geometry = new THREE.SphereGeometry(radius, 16, 16);
-          const material = new THREE.MeshLambertMaterial({
-            color,
+          const isSelected = Boolean(selNode && selNode.id === node.id);
+          const isHop1 = Boolean(selNode && circuit.hop1NodeIds.has(node.id));
+          const isHop2 = Boolean(selNode && circuit.hop2NodeIds.has(node.id));
+          const isInhibited = Boolean(selNode && !isSelected && !isHop1 && !isHop2);
+
+          if (isInhibited) {
+            // Lateral Inhibition: dormant, faded, tiny slate core
+            const geom = new THREE.SphereGeometry(1.2, 8, 8);
+            const mat = new THREE.MeshBasicMaterial({
+              color: 0x1e293b,
+              transparent: true,
+              opacity: 0.10,
+            });
+            group.add(new THREE.Mesh(geom, mat));
+            return group;
+          }
+
+          if (isSelected) {
+            // Initiator Neuron: action potential focal point
+            const radius = Math.max(5.0, 5.0 + act * 7);
+            const geom = new THREE.SphereGeometry(radius, 24, 24);
+            const mat = new THREE.MeshLambertMaterial({
+              color: baseColor,
+              emissive: baseColor,
+              emissiveIntensity: 0.8,
+              transparent: true,
+              opacity: 1.0,
+            });
+            group.add(new THREE.Mesh(geom, mat));
+
+            // Inner Bioluminescent Aura
+            const innerGlowGeo = new THREE.SphereGeometry(radius * 1.5, 16, 16);
+            const innerGlowMat = new THREE.MeshBasicMaterial({
+              color: 0x38bdf8,
+              transparent: true,
+              opacity: 0.5,
+              wireframe: true,
+            });
+            group.add(new THREE.Mesh(innerGlowGeo, innerGlowMat));
+
+            // Outer Pulsing Halo
+            const outerHaloGeo = new THREE.SphereGeometry(radius * 2.2, 12, 12);
+            const outerHaloMat = new THREE.MeshBasicMaterial({
+              color: baseColor,
+              transparent: true,
+              opacity: 0.25,
+              wireframe: true,
+            });
+            group.add(new THREE.Mesh(outerHaloGeo, outerHaloMat));
+            return group;
+          }
+
+          if (isHop1) {
+            // 1-Hop Primary Branch: vibrant, high conductance
+            const radius = Math.max(3.4, 3.4 + act * 6);
+            const geom = new THREE.SphereGeometry(radius, 18, 18);
+            const mat = new THREE.MeshLambertMaterial({
+              color: baseColor,
+              emissive: baseColor,
+              emissiveIntensity: 0.4,
+              transparent: true,
+              opacity: 0.95,
+            });
+            group.add(new THREE.Mesh(geom, mat));
+
+            const glowGeo = new THREE.SphereGeometry(radius * 1.4, 12, 12);
+            const glowMat = new THREE.MeshBasicMaterial({
+              color: 0x38bdf8,
+              transparent: true,
+              opacity: 0.35,
+              wireframe: true,
+            });
+            group.add(new THREE.Mesh(glowGeo, glowMat));
+            return group;
+          }
+
+          if (isHop2) {
+            // 2-Hop Secondary Cascade: medium presence
+            const radius = Math.max(2.4, 2.4 + act * 5);
+            const geom = new THREE.SphereGeometry(radius, 16, 16);
+            const mat = new THREE.MeshLambertMaterial({
+              color: baseColor,
+              emissive: baseColor,
+              emissiveIntensity: 0.2,
+              transparent: true,
+              opacity: 0.80,
+            });
+            group.add(new THREE.Mesh(geom, mat));
+
+            const glowGeo = new THREE.SphereGeometry(radius * 1.25, 12, 12);
+            const glowMat = new THREE.MeshBasicMaterial({
+              color: 0xa78bfa,
+              transparent: true,
+              opacity: 0.20,
+              wireframe: true,
+            });
+            group.add(new THREE.Mesh(glowGeo, glowMat));
+            return group;
+          }
+
+          // Default Baseline (no node selected)
+          const radius = Math.max(2, 2 + act * 6);
+          const geom = new THREE.SphereGeometry(radius, 16, 16);
+          const mat = new THREE.MeshLambertMaterial({
+            color: baseColor,
             transparent: true,
             opacity: 0.9,
           });
-          const sphere = new THREE.Mesh(geometry, material);
-          group.add(sphere);
+          group.add(new THREE.Mesh(geom, mat));
 
-          // Glowing Aura for active nodes
-          if ((node.activation ?? 0) > 0.4) {
+          if (act > 0.4) {
             const glowGeo = new THREE.SphereGeometry(radius * 1.5, 12, 12);
             const glowMat = new THREE.MeshBasicMaterial({
-              color,
+              color: baseColor,
               transparent: true,
-              opacity: (node.activation ?? 0) * 0.25,
+              opacity: act * 0.25,
               wireframe: true,
             });
-            const glow = new THREE.Mesh(glowGeo, glowMat);
-            group.add(glow);
+            group.add(new THREE.Mesh(glowGeo, glowMat));
           }
 
           return group;
         })
-        .linkColor(() => "rgba(99, 102, 241, 0.25)")
-        .linkWidth(1.2)
-        .linkDirectionalParticles(2)
-        .linkDirectionalParticleWidth(1.6)
-        .linkDirectionalParticleSpeed(0.005)
-        .linkDirectionalParticleColor(() => "#38bdf8")
+        .linkColor((link: any) => {
+          const selNode = selectedNodeRef.current;
+          if (!selNode) return "rgba(99, 102, 241, 0.25)";
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return "rgba(56, 189, 248, 0.95)";
+          if (circuit.hop2EdgeIds.has(link.id)) return "rgba(167, 139, 250, 0.75)";
+          return "rgba(15, 23, 42, 0.04)";
+        })
+        .linkWidth((link: any) => {
+          const selNode = selectedNodeRef.current;
+          if (!selNode) return 1.2;
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return 3.2;
+          if (circuit.hop2EdgeIds.has(link.id)) return 1.8;
+          return 0.2;
+        })
+        .linkDirectionalParticles((link: any) => {
+          const selNode = selectedNodeRef.current;
+          if (!selNode) return 2;
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return 6;
+          if (circuit.hop2EdgeIds.has(link.id)) return 3;
+          return 0;
+        })
+        .linkDirectionalParticleWidth((link: any) => {
+          const selNode = selectedNodeRef.current;
+          if (!selNode) return 1.6;
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return 2.6;
+          if (circuit.hop2EdgeIds.has(link.id)) return 1.8;
+          return 0;
+        })
+        .linkDirectionalParticleSpeed((link: any) => {
+          const selNode = selectedNodeRef.current;
+          if (!selNode) return 0.005;
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return 0.016;
+          if (circuit.hop2EdgeIds.has(link.id)) return 0.009;
+          return 0;
+        })
+        .linkDirectionalParticleColor((link: any) => {
+          const circuit = synapticCircuitRef.current;
+          if (circuit.hop1EdgeIds.has(link.id)) return "#38bdf8";
+          if (circuit.hop2EdgeIds.has(link.id)) return "#a78bfa";
+          return "#38bdf8";
+        })
         .onNodeClick((node: GraphNode) => {
           handleNodeClick(node);
+        })
+        .onBackgroundClick(() => {
+          handleDeselect();
         });
 
       fgRef.current = fg;
@@ -322,7 +592,53 @@ export default function LivingBrain() {
     return () => {
       ro.disconnect();
     };
-  }, [filteredData, loading, autoRotate, handleNodeClick]);
+  }, [filteredData, loading, autoRotate, handleNodeClick, handleDeselect]);
+
+  // Hebbian synaptic clustering & dynamic force adjustment
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+
+    try {
+      fg.refresh();
+    } catch {
+      // non-fatal
+    }
+
+    const linkForce = fg.d3Force("link");
+    if (!linkForce) return;
+
+    if (selectedNode) {
+      linkForce
+        .distance((link: any) => {
+          const sId = typeof link.source === "object" ? link.source.id : link.source;
+          const tId = typeof link.target === "object" ? link.target.id : link.target;
+          const isHop1 =
+            (sId === selectedNode.id && synapticCircuit.hop1NodeIds.has(tId)) ||
+            (tId === selectedNode.id && synapticCircuit.hop1NodeIds.has(sId));
+          if (isHop1) return 24; // Tight 1-hop orbit
+          const isHop2 =
+            synapticCircuit.hop1NodeIds.has(sId) ||
+            synapticCircuit.hop1NodeIds.has(tId) ||
+            synapticCircuit.hop2NodeIds.has(sId) ||
+            synapticCircuit.hop2NodeIds.has(tId);
+          if (isHop2) return 42; // Orbiting 2-hop cluster
+          return 85; // Lateral inhibition peripheral relaxation
+        })
+        .strength((link: any) => {
+          const sId = typeof link.source === "object" ? link.source.id : link.source;
+          const tId = typeof link.target === "object" ? link.target.id : link.target;
+          if (sId === selectedNode.id || tId === selectedNode.id) return 1.0;
+          if (synapticCircuit.hop1NodeIds.has(sId) || synapticCircuit.hop1NodeIds.has(tId)) return 0.65;
+          return 0.15;
+        });
+
+      fg.d3ReheatSimulation();
+    } else {
+      linkForce.distance(55).strength(0.45);
+      fg.d3ReheatSimulation();
+    }
+  }, [selectedNode, synapticCircuit]);
 
   // Clean up WebGL on component unmount
   useEffect(() => {
@@ -378,6 +694,61 @@ export default function LivingBrain() {
     <div style={{ position: "relative", width: "100%", height: "calc(100svh - 110px)", minHeight: "650px", overflow: "hidden", background: "#07080e" }}>
       {/* 3D WebGL Canvas Container */}
       <div ref={containerRef} style={{ width: "100%", height: "100%", outline: "none" }} />
+
+      {/* Active Synaptic Circuit Floating Banner */}
+      {selectedNode && (
+        <div style={{
+          position: "absolute",
+          top: 76,
+          left: "50%",
+          transform: "translateX(-50%)",
+          background: "rgba(10, 15, 30, 0.92)",
+          backdropFilter: "blur(20px)",
+          border: "1px solid rgba(56, 189, 248, 0.4)",
+          borderRadius: "16px",
+          padding: "8px 18px",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          boxShadow: "0 8px 32px rgba(56, 189, 248, 0.22)",
+          zIndex: 12,
+          pointerEvents: "auto",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "#38bdf8",
+              boxShadow: "0 0 10px #38bdf8",
+            }} />
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#ffffff" }}>
+              Synaptic Circuit: <span style={{ color: "#38bdf8" }}>{selectedNode.name}</span>
+            </span>
+          </div>
+          <div style={{ fontSize: "11px", color: "#94a3b8" }}>
+            1-hop: <span style={{ color: "#38bdf8", fontWeight: 700 }}>{synapticCircuit.hop1NodeIds.size}</span> · 
+            2-hop: <span style={{ color: "#a78bfa", fontWeight: 700 }}>{synapticCircuit.hop2NodeIds.size}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleDeselect}
+            title="Release synaptic circuit (Click empty space or Esc)"
+            style={{
+              background: "rgba(239, 68, 68, 0.15)",
+              border: "1px solid rgba(239, 68, 68, 0.35)",
+              borderRadius: "8px",
+              padding: "4px 9px",
+              color: "#fca5a5",
+              fontSize: "11px",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            ✕ Release Focus
+          </button>
+        </div>
+      )}
 
       {/* Top Floating Control Bar */}
       <div style={{
@@ -533,12 +904,36 @@ export default function LivingBrain() {
             {autoRotate ? "Orbiting" : "Orbit"}
           </button>
 
+          {/* Synaptic Audio Toggle */}
+          <button
+            type="button"
+            onClick={toggleAudio}
+            title={audioEnabled ? "Synaptic Audio: Active (Click to mute)" : "Synaptic Audio: Muted (Click to unmute)"}
+            style={{
+              background: audioEnabled ? "rgba(56, 189, 248, 0.2)" : "rgba(13, 17, 30, 0.85)",
+              backdropFilter: "blur(16px)",
+              border: `1px solid ${audioEnabled ? "rgba(56, 189, 248, 0.5)" : "rgba(255, 255, 255, 0.1)"}`,
+              borderRadius: "12px",
+              padding: "8px 12px",
+              color: audioEnabled ? "#38bdf8" : "#64748b",
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span>{audioEnabled ? "🔊" : "🔇"}</span>
+            <span style={{ fontSize: "11px" }}>{audioEnabled ? "Sound ON" : "Muted"}</span>
+          </button>
+
           {/* Reset Camera */}
           <button
             type="button"
             onClick={() => {
               fgRef.current?.cameraPosition({ x: 0, y: 0, z: 220 }, { x: 0, y: 0, z: 0 }, 1000);
-              setSelectedNode(null);
+              handleDeselect();
             }}
             style={{
               background: "rgba(13, 17, 30, 0.85)",
