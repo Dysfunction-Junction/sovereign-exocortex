@@ -3,7 +3,9 @@ import TabBar from "./TabBar";
 import BiometricApprovalModal from "./BiometricApprovalModal";
 import { StatusIcon, BrainIcon, SparklesIcon, RecentIcon, SearchIcon, SetupIcon } from "./Icons";
 
-const NAV_ITEMS = [
+import { isDesktopApp } from "../lib/config";
+
+const MOBILE_NAV_ITEMS = [
   { path: "/status", label: "Status & HUD", icon: StatusIcon },
   { path: "/brain", label: "Living Brain 3D", icon: BrainIcon },
   { path: "/ask", label: "Ask AI", icon: SparklesIcon },
@@ -12,11 +14,22 @@ const NAV_ITEMS = [
   { path: "/setup", label: "Setup", icon: SetupIcon },
 ];
 
+const DESKTOP_NAV_ITEMS = [
+  { path: "/brain", label: "Living Brain 3D", icon: BrainIcon },
+  { path: "/status", label: "Workstation Node", icon: StatusIcon },
+  { path: "/ask", label: "Ask AI", icon: SparklesIcon },
+  { path: "/recent", label: "Recent Telemetry", icon: RecentIcon },
+  { path: "/search", label: "Semantic Search", icon: SearchIcon },
+  { path: "/setup", label: "Node Hub & Pairing", icon: SetupIcon },
+];
+
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const pathname = location.pathname;
   const isBrain = pathname === "/brain";
+  const isDesktop = isDesktopApp();
+  const navItems = isDesktop ? DESKTOP_NAV_ITEMS : MOBILE_NAV_ITEMS;
 
   return (
     <div className={`app-shell ${isBrain ? "is-brain-view" : ""}`}>
@@ -26,11 +39,11 @@ export default function Layout() {
           className="desktop-brand"
           role="button"
           tabIndex={0}
-          onClick={() => navigate("/status")}
+          onClick={() => navigate(isDesktop ? "/brain" : "/status")}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              navigate("/status");
+              navigate(isDesktop ? "/brain" : "/status");
             }
           }}
         >
@@ -42,7 +55,7 @@ export default function Layout() {
         </div>
 
         <nav className="desktop-nav">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const isActive = pathname === item.path;
             const Icon = item.icon;
             return (

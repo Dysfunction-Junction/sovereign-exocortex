@@ -61,6 +61,15 @@ export interface ConnectionTarget {
   mode: "lan" | "remote";
 }
 
+export function isDesktopApp(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(
+    (window as any).__TAURI_INTERNALS__ ||
+    (window as any).__TAURI__ ||
+    !Capacitor.isNativePlatform()
+  );
+}
+
 let autoConnectPromise: Promise<boolean> | null = null;
 
 /**
@@ -78,7 +87,7 @@ export async function tryAutoConnectLocalPc(): Promise<boolean> {
     // 3. Localhost 8788
     const origin = window.location?.origin;
     const candidates = [
-      ...(origin && origin.startsWith("http") ? [`${origin}/mobile/local-config`] : []),
+      ...(origin && origin.startsWith("http") && !origin.includes("tauri.localhost") ? [`${origin}/mobile/local-config`] : []),
       "http://127.0.0.1:8788/mobile/local-config",
       "http://localhost:8788/mobile/local-config",
     ];
@@ -99,12 +108,16 @@ export async function tryAutoConnectLocalPc(): Promise<boolean> {
           remoteGatewayUrl?: string;
           remoteGatewayToken?: string;
         };
-        if (data && data.ok && data.proxyBaseUrl && data.remoteGatewayUrl) {
+        if (data && data.ok) {
+          const pUrl = data.proxyBaseUrl || "http://127.0.0.1:8787";
+          const pToken = data.proxyToken || "";
+          const rUrl = data.remoteGatewayUrl || "http://127.0.0.1:8788";
+          const rToken = data.remoteGatewayToken || "";
           await Promise.all([
-            setProxyBaseUrl(data.proxyBaseUrl),
-            setProxyToken(data.proxyToken ?? ""),
-            setRemoteGatewayUrl(data.remoteGatewayUrl),
-            setRemoteGatewayToken(data.remoteGatewayToken ?? ""),
+            setProxyBaseUrl(pUrl),
+            setProxyToken(pToken),
+            setRemoteGatewayUrl(rUrl),
+            setRemoteGatewayToken(rToken),
           ]);
           return true;
         }
@@ -125,23 +138,33 @@ export async function getConnectionTargets(): Promise<ConnectionTarget[]> {
     getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
   ]);
 
-  // On desktop / PC browser, if credentials are unconfigured, auto-connect to the local daemon
-  if ((!lanUrl || !lanToken) && (!remoteUrl || !remoteToken) && !Capacitor.isNativePlatform()) {
-    const autoConnected = await tryAutoConnectLocalPc().catch(() => false);
-    if (autoConnected) {
-      [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
-        getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
-      ]);
+  // On desktop / PC browser, automatically pair with the local daemon and proxy
+  if (isDesktopApp()) {
+    if ((!lanUrl || !lanToken) && (!remoteUrl || !remoteToken)) {
+      const autoConnected = await tryAutoConnectLocalPc().catch(() => false);
+      if (autoConnected) {
+        [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
+          getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
+        ]);
+      }
     }
+    // Guaranteed local defaults when running on PC
+    if (!lanUrl) lanUrl = "http://127.0.0.1:8787";
+    if (!remoteUrl) remoteUrl = "http://127.0.0.1:8788";
   }
 
   const targets: ConnectionTarget[] = [];
-  if (lanUrl && lanToken) targets.push({ baseUrl: lanUrl, token: lanToken, mode: "lan" });
-  if (remoteUrl && remoteToken) targets.push({ baseUrl: remoteUrl, token: remoteToken, mode: "remote" });
+  if (lanUrl && (lanToken || isDesktopApp())) {
+    targets.push({ baseUrl: lanUrl, token: lanToken ?? "", mode: "lan" });
+  }
+  if (remoteUrl && (remoteToken || isDesktopApp())) {
+    targets.push({ baseUrl: remoteUrl, token: remoteToken ?? "", mode: "remote" });
+  }
   return targets;
 }
 
 export async function isConfigured(): Promise<boolean> {
+  if (isDesktopApp()) return true;
   return (await getConnectionTargets()).length > 0;
 }
 

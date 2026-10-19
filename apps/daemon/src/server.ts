@@ -351,10 +351,18 @@ export const server = createServer(async (req, res) => {
     }
 
     const origin = req.headers.origin;
-    if (origin) {
+    if (origin && origin !== "null") {
       try {
-        const originHost = new URL(origin).hostname;
-        if (originHost !== "localhost" && originHost !== "127.0.0.1" && originHost !== "[::1]") {
+        const originUrl = new URL(origin);
+        const originHost = originUrl.hostname;
+        const isAllowedOrigin =
+          originHost === "localhost" ||
+          originHost === "127.0.0.1" ||
+          originHost === "[::1]" ||
+          originHost === "tauri.localhost" ||
+          originUrl.protocol === "tauri:" ||
+          originUrl.protocol === "app:";
+        if (!isAllowedOrigin) {
           sendJson(res, 403, { error: "forbidden: origin not allowed" });
           return;
         }

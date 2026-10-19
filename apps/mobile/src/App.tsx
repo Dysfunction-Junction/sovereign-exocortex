@@ -9,7 +9,7 @@ import Search from "./pages/Search";
 import { flushUsageEvents } from "./lib/flush";
 import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
-import { isScreenContextEnabled, isNotificationCaptureEnabled, isConfigured } from "./lib/config";
+import { isScreenContextEnabled, isNotificationCaptureEnabled, isConfigured, isDesktopApp } from "./lib/config";
 import { startPassiveCaptureListener } from "./lib/passiveCapture";
 import { startNotificationCaptureListener } from "./lib/notificationCapture";
 import { runSmsBackfill } from "./lib/smsBackfill";
@@ -27,12 +27,19 @@ const USAGE_FLUSH_INTERVAL_MS = 5 * 60 * 1000;
 import Layout from "./components/Layout";
 
 function RootRedirect() {
-  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [target, setTarget] = useState<string | null>(null);
   useEffect(() => {
-    isConfigured().then(setConfigured).catch(() => setConfigured(false));
+    if (isDesktopApp()) {
+      // Desktop workstation launches directly into the Living Brain 3D visualization
+      setTarget("/brain");
+      return;
+    }
+    isConfigured()
+      .then((configured) => setTarget(configured ? "/status" : "/setup"))
+      .catch(() => setTarget("/setup"));
   }, []);
-  if (configured === null) return null;
-  return <Navigate to={configured ? "/status" : "/setup"} replace />;
+  if (target === null) return null;
+  return <Navigate to={target} replace />;
 }
 
 export default function App() {

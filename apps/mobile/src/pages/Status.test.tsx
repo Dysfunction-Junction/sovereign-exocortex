@@ -49,6 +49,12 @@ vi.mock("../lib/api", () => ({
     calibrated: true,
     minSamples: 5,
   }),
+  getLivingGraphContext: vi.fn().mockResolvedValue({
+    cognitiveMode: "CALM",
+    entityCount: 10,
+    edgeCount: 20,
+    activeEntities: [],
+  }),
   ProxyNotConfiguredError: class extends Error {},
   HomeNodeUnreachableError: class extends Error {},
 }));

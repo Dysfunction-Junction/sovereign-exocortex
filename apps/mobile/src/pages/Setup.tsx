@@ -64,6 +64,9 @@ export default function Setup() {
 
   useEffect(() => {
     (async () => {
+      if (!Capacitor.isNativePlatform()) {
+        await tryAutoConnectLocalPc().catch(() => false);
+      }
       const [savedUrl, savedToken, savedRemoteUrl, savedRemoteToken, contextEnabled] =
         await Promise.all([
           getProxyBaseUrl(), getProxyToken(),
@@ -347,68 +350,115 @@ export default function Setup() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Setup Bridge</h1>
+        <h1>{Capacitor.isNativePlatform() ? "Setup Bridge" : "Node Hub & Companion Pairing"}</h1>
         <p className="hint">
-          Connect your Android device to PiecesOS via <strong>Plan A</strong> (LAN proxy at home) or{" "}
-          <strong>Plan B</strong> (remote gateway away). Automatic failover kicks in when away from home.
+          {Capacitor.isNativePlatform()
+            ? "Connect your Android device to PiecesOS via Plan A (LAN proxy at home) or Plan B (remote gateway away). Automatic failover kicks in when away from home."
+            : "Workstation daemon status and companion pairing credentials for mobile devices."}
         </p>
       </div>
 
       {!Capacitor.isNativePlatform() && (
-        <div className="card" style={{ background: "linear-gradient(135deg, rgba(16,185,129,0.15) 0%, var(--surface) 100%)", borderColor: "rgba(16,185,129,0.3)", marginBottom: 16 }}>
-          <div className="card-row" style={{ marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Local PC Auto-Connect</span>
-            <span className="badge success">Localhost</span>
+        <>
+          <div className="card" style={{ background: "linear-gradient(135deg, rgba(16,185,129,0.12) 0%, var(--surface) 100%)", borderColor: "rgba(16,185,129,0.3)", marginBottom: 16 }}>
+            <div className="card-row" style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="status-pulse-live" />
+                <span style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>Local Workstation Node Active</span>
+              </div>
+              <span className="badge success">Localhost Online</span>
+            </div>
+            <p className="hint" style={{ fontSize: 13, margin: "0 0 16px" }}>
+              This desktop workstation communicates directly with your local Sovereign Exocortex daemon and PiecesOS engine. All database telemetry, world model beliefs, and vector embeddings reside on this PC.
+            </p>
+            <div className="metrics-grid" style={{ marginBottom: 14 }}>
+              <div className="metric-box">
+                <div className="metric-label">Daemon API (:8788)</div>
+                <div className="metric-val" style={{ fontSize: 13, color: "var(--ok)" }}>Connected</div>
+              </div>
+              <div className="metric-box">
+                <div className="metric-label">Proxy Bus (:8787)</div>
+                <div className="metric-val" style={{ fontSize: 13, color: "var(--ok)" }}>Connected</div>
+              </div>
+              <div className="metric-box">
+                <div className="metric-label">PiecesOS (:39300)</div>
+                <div className="metric-val" style={{ fontSize: 13, color: "var(--ok)" }}>Connected</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="secondary"
+              onClick={async () => {
+                setChecking(true);
+                setScanError(null);
+                const ok = await tryAutoConnectLocalPc();
+                if (ok) {
+                  const [savedUrl, savedToken, savedRemoteUrl, savedRemoteToken] = await Promise.all([
+                    getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
+                  ]);
+                  if (savedUrl) setBaseUrl(savedUrl);
+                  if (savedToken) setToken(savedToken);
+                  if (savedRemoteUrl) setRemoteUrl(savedRemoteUrl);
+                  if (savedRemoteToken) setRemoteToken(savedRemoteToken);
+                  setResult(await deepCheckAfterSave());
+                } else {
+                  setScanError("Could not reach local PC services at http://127.0.0.1:8788/mobile/local-config.");
+                  setResult("unreachable");
+                }
+                setChecking(false);
+              }}
+              disabled={checking}
+              style={{ width: "100%" }}
+            >
+              {checking ? "Checking Local Endpoints…" : "⚡ Refresh Local Endpoints"}
+            </button>
+            {scanError && <p className="status-error" style={{ marginTop: 10, fontSize: 13 }}>{scanError}</p>}
           </div>
-          <p className="hint" style={{ fontSize: 13, margin: "0 0 14px" }}>
-            Detected desktop browser on PC. Connect directly to your local PiecesOS proxy (:8787) and Exocortex daemon (:8788) with one click.
-          </p>
-          <button
-            type="button"
-            onClick={async () => {
-              setChecking(true);
-              setScanError(null);
-              const ok = await tryAutoConnectLocalPc();
-              if (ok) {
-                const [savedUrl, savedToken, savedRemoteUrl, savedRemoteToken] = await Promise.all([
-                  getProxyBaseUrl(), getProxyToken(), getRemoteGatewayUrl(), getRemoteGatewayToken(),
-                ]);
-                if (savedUrl) setBaseUrl(savedUrl);
-                if (savedToken) setToken(savedToken);
-                if (savedRemoteUrl) setRemoteUrl(savedRemoteUrl);
-                if (savedRemoteToken) setRemoteToken(savedRemoteToken);
-                setResult(await deepCheckAfterSave());
-              } else {
-                setScanError("Could not reach local PC services at http://127.0.0.1:8788/mobile/local-config. Please ensure daemon is running.");
-                setResult("unreachable");
-              }
-              setChecking(false);
-            }}
-            disabled={checking}
-            style={{ width: "100%" }}
-          >
-            ⚡ Auto-Connect to Local PC
-          </button>
-          {scanError && <p className="status-error" style={{ marginTop: 10, fontSize: 13 }}>{scanError}</p>}
-        </div>
+
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-row" style={{ marginBottom: 8 }}>
+              <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Mobile Companion Pairing (Galaxy S26 Ultra)</span>
+              <span className="badge primary">Pairing Hub</span>
+            </div>
+            <p className="hint" style={{ fontSize: 13, margin: "0 0 14px" }}>
+              Your PC is the sovereign master node. Use the pairing credentials below to connect your Android companion app to this workstation.
+            </p>
+            <div className="setup-fields">
+              <div className="input-group">
+                <label className="input-label">Localhost / LAN Proxy Target</label>
+                <input type="text" readOnly value={baseUrl || "http://127.0.0.1:8787"} />
+              </div>
+              <div className="input-group">
+                <label className="input-label">Exocortex Gateway Target</label>
+                <input type="text" readOnly value={remoteUrl || "http://127.0.0.1:8788"} />
+              </div>
+              {remoteToken && (
+                <div className="input-group">
+                  <label className="input-label">Gateway Access Token</label>
+                  <input type="password" readOnly value={remoteToken} />
+                </div>
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {Capacitor.isNativePlatform() && (
-        <div className="card" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.12) 0%, var(--surface) 100%)", marginBottom: 16 }}>
-          <div className="card-row" style={{ marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Instant QR Pairing</span>
-            <span className="badge primary">Fastest</span>
+        <>
+          <div className="card" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.12) 0%, var(--surface) 100%)", marginBottom: 16 }}>
+            <div className="card-row" style={{ marginBottom: 8 }}>
+              <span style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>Instant QR Pairing</span>
+              <span className="badge primary">Fastest</span>
+            </div>
+            <p className="hint" style={{ fontSize: 13, margin: "0 0 14px" }}>
+              Scan the connection QR code generated by the PC proxy script to configure and test automatically.
+            </p>
+            <button onClick={handleScanToConnect} disabled={checking} style={{ width: "100%" }}>
+              <ScanIcon size={18} />
+              {checking ? "Checking…" : "Scan to Connect"}
+            </button>
+            {scanError && <p className="status-error" style={{ marginTop: 10, fontSize: 13 }}>{scanError}</p>}
           </div>
-          <p className="hint" style={{ fontSize: 13, margin: "0 0 14px" }}>
-            Scan the connection QR code generated by the PC proxy script to configure and test automatically.
-          </p>
-          <button onClick={handleScanToConnect} disabled={checking} style={{ width: "100%" }}>
-            <ScanIcon size={18} />
-            {checking ? "Checking…" : "Scan to Connect"}
-          </button>
-          {scanError && <p className="status-error" style={{ marginTop: 10, fontSize: 13 }}>{scanError}</p>}
-        </div>
-      )}
 
       <div className="setup-card">
         <div className="setup-card-header">
@@ -763,6 +813,8 @@ export default function Setup() {
           </div>
         )}
       </div>
+        </>
+      )}
     </div>
   );
 }

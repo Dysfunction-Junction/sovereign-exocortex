@@ -304,7 +304,11 @@ export default function Status() {
             <RefreshIcon size={14} /> Refresh
           </button>
         </div>
-        <p className="hint">Live bridge health and diagnostics between Android and your PC's PiecesOS.</p>
+        <p className="hint">
+          {Capacitor.isNativePlatform()
+            ? "Live bridge health and diagnostics between Android and your PC's PiecesOS."
+            : "Live node health, world model state, and local engine diagnostics on this workstation."}
+        </p>
       </div>
 
       {state.kind === "loading" && (
@@ -375,8 +379,8 @@ export default function Status() {
                 <div className="metric-val">{state.version}</div>
               </div>
               <div className="metric-box">
-                <div className="metric-label">Allowlist</div>
-                <div className="metric-val">{allowlist.size} apps</div>
+                <div className="metric-label">{Capacitor.isNativePlatform() ? "Allowlist" : "Workstation"}</div>
+                <div className="metric-val">{Capacitor.isNativePlatform() ? `${allowlist.size} apps` : "Windows Host"}</div>
               </div>
             </div>
           </div>
@@ -384,7 +388,39 @@ export default function Status() {
           <AnticipationRing />
           <AmbientGraphHud />
 
-          {!contextEnabled && (
+          {!Capacitor.isNativePlatform() && (
+            <div className="card" style={{ marginTop: 20 }}>
+              <div className="card-row" style={{ marginBottom: 12 }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 16 }}>Windows Workstation Node</h3>
+                  <p className="hint" style={{ margin: "2px 0 0", fontSize: 13 }}>
+                    Host daemon, vector databanks, and living world model active on this PC.
+                  </p>
+                </div>
+                <span className="badge success">Localhost Online</span>
+              </div>
+              <div className="metrics-grid">
+                <div className="metric-box">
+                  <div className="metric-label">Daemon API</div>
+                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:8788</div>
+                </div>
+                <div className="metric-box">
+                  <div className="metric-label">Proxy Bus</div>
+                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:8787</div>
+                </div>
+                <div className="metric-box">
+                  <div className="metric-label">PiecesOS Engine</div>
+                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:39300</div>
+                </div>
+                <div className="metric-box">
+                  <div className="metric-label">World Model Store</div>
+                  <div className="metric-val" style={{ fontSize: 13 }}>SQLite (WAL)</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {Capacitor.isNativePlatform() && !contextEnabled && (
             <p className="hint setup-note">
               Screen context is off. Enable it in Setup to capture on-screen text.
             </p>

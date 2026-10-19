@@ -36,12 +36,7 @@ export function PermissionsPanel() {
   }, [refresh]);
 
   if (!isNative()) {
-    return (
-      <div className="card">
-        <h3>Phone permissions</h3>
-        <p className="hint">Available in the Android app.</p>
-      </div>
-    );
+    return null;
   }
 
   const grant = async (name: PermissionName) => {
