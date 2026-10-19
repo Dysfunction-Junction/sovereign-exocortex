@@ -18,6 +18,7 @@ export type EntityType =
   | 'CONTEXT_STATE'
   | 'TOPIC'
   | 'DOC'
+  | 'TASK'
   | 'INTENT';
 
 export type RelationType =

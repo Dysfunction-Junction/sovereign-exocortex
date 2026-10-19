@@ -14,6 +14,7 @@ import { PermissionsPanel } from "../components/PermissionsPanel";
 import { RefreshIcon } from "../components/Icons";
 import { AnticipationRing } from "../components/AnticipationRing";
 import { AmbientGraphHud } from "../components/AmbientGraphHud";
+import { IntegrationsHub } from "../components/IntegrationsHub";
 
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
 
@@ -419,6 +420,8 @@ export default function Status() {
               </div>
             </div>
           )}
+
+          <IntegrationsHub />
 
           {Capacitor.isNativePlatform() && !contextEnabled && (
             <p className="hint setup-note">

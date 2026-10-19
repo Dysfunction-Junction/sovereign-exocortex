@@ -923,3 +923,70 @@ export async function queryNeo4jLivingGraph(query: string, mode: "nl" | "cypher"
   return res.json() as Promise<GraphQueryResponse>;
 }
 
+export interface ChannelClientStatus {
+  id: "obsidian" | "notion" | "gmail";
+  name: string;
+  description: string;
+  status: "connected" | "disconnected" | "syncing" | "error";
+  itemCount: number;
+  lastSyncAt?: string;
+  configSummary?: string;
+  error?: string;
+  airGapped: boolean;
+}
+
+export interface ChannelsResponse {
+  ok: boolean;
+  airGap: boolean;
+  channels: ChannelClientStatus[];
+}
+
+export async function getChannels(): Promise<ChannelsResponse> {
+  const res = await authedFetch("/v3/channels");
+  if (!res.ok) {
+    throw new Error(`Failed to query channels: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<ChannelsResponse>;
+}
+
+export async function toggleAirGap(active: boolean): Promise<{ ok: boolean; airGap: boolean }> {
+  const res = await authedFetch("/v3/channels/air-gap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active }),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to toggle air-gap: HTTP ${res.status}`);
+  }
+  return res.json() as Promise<{ ok: boolean; airGap: boolean }>;
+}
+
+export async function syncChannel(id: string): Promise<{ ok: boolean; status: ChannelClientStatus; result: unknown }> {
+  const res = await authedFetch(`/v3/channels/${id}/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to sync channel ${id}: ${errText}`);
+  }
+  return res.json() as Promise<{ ok: boolean; status: ChannelClientStatus; result: unknown }>;
+}
+
+export async function configureChannel(
+  id: string,
+  config: Record<string, unknown>
+): Promise<{ ok: boolean; status: ChannelClientStatus }> {
+  const res = await authedFetch(`/v3/channels/${id}/configure`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to configure channel ${id}: ${errText}`);
+  }
+  return res.json() as Promise<{ ok: boolean; status: ChannelClientStatus }>;
+}
+
+

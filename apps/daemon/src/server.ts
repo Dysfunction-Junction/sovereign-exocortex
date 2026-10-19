@@ -29,6 +29,7 @@ import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
 import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
+import { defaultChannelManager } from "./channels/channel-manager.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -101,6 +102,9 @@ if (process.env.NODE_ENV !== "test") {
 
   // Attach automated Neo4j Living Brain real-time sync
   defaultNeo4jSyncService.attachToHost(defaultWorldModelHost);
+
+  // Attach integration channels master manager
+  defaultChannelManager.attachToWorldModel(defaultWorldModelHost);
 }
 
 
@@ -1237,6 +1241,77 @@ export const server = createServer(async (req, res) => {
       res.on("error", cleanup);
     } catch (err) {
       sendInternalError(res, "failed to stream world model graph", err);
+    }
+    return;
+  }
+
+  // --- Integration Channels & Air-Gap API (/v3/channels) ---
+
+  if (method === "GET" && url.pathname === "/v3/channels") {
+    try {
+      const channels = await defaultChannelManager.getChannels();
+      sendJson(res, 200, {
+        ok: true,
+        airGap: defaultChannelManager.isAirGapActive(),
+        channels,
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query channels", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname === "/v3/channels/air-gap") {
+    try {
+      const raw = await readBody(req, 16 * 1024);
+      const body = raw ? JSON.parse(raw) : {};
+      defaultChannelManager.setAirGapMode(Boolean(body.active));
+      sendJson(res, 200, {
+        ok: true,
+        airGap: defaultChannelManager.isAirGapActive(),
+      });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to toggle air-gap mode", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname.startsWith("/v3/channels/") && url.pathname.endsWith("/configure")) {
+    try {
+      const parts = url.pathname.split("/");
+      const channelId = parts[3] as import("./channels/types.js").ChannelId;
+      const raw = await readBody(req, 64 * 1024);
+      const config = raw ? JSON.parse(raw) : {};
+      await defaultChannelManager.configureChannel(channelId, config);
+      const status = await defaultChannelManager.getChannel(channelId);
+      sendJson(res, 200, { ok: true, status });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to configure channel", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname.startsWith("/v3/channels/") && url.pathname.endsWith("/sync")) {
+    try {
+      const parts = url.pathname.split("/");
+      const channelId = parts[3] as import("./channels/types.js").ChannelId;
+      const result = await defaultChannelManager.syncChannel(channelId);
+      const status = await defaultChannelManager.getChannel(channelId);
+      sendJson(res, 200, { ok: true, result, status });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to sync channel", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
+  if (method === "DELETE" && url.pathname.startsWith("/v3/channels/")) {
+    try {
+      const parts = url.pathname.split("/");
+      const channelId = parts[3] as import("./channels/types.js").ChannelId;
+      await defaultChannelManager.disconnectChannel(channelId);
+      sendJson(res, 200, { ok: true, channelId, status: "disconnected" });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to disconnect channel", reason: err instanceof Error ? err.message : String(err) });
     }
     return;
   }
