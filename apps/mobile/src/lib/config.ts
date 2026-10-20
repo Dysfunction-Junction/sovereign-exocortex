@@ -166,7 +166,7 @@ export async function getConnectionTargets(): Promise<ConnectionTarget[]> {
 
   // On desktop / PC browser, automatically pair with the local daemon and proxy
   if (isDesktopApp()) {
-    if ((!lanUrl || !lanToken) && (!remoteUrl || !remoteToken)) {
+    if (!lanToken || !remoteToken) {
       const autoConnected = await tryAutoConnectLocalPc().catch(() => false);
       if (autoConnected) {
         [lanUrl, lanToken, remoteUrl, remoteToken] = await Promise.all([
@@ -176,7 +176,7 @@ export async function getConnectionTargets(): Promise<ConnectionTarget[]> {
     }
     // Guaranteed local defaults when running on PC
     if (!lanUrl) lanUrl = "http://127.0.0.1:8787";
-    if (!remoteUrl) remoteUrl = "http://127.0.0.1:8788";
+    remoteUrl = "http://127.0.0.1:8788";
   }
 
   const targets: ConnectionTarget[] = [];

@@ -421,8 +421,6 @@ export default function Status() {
             </div>
           )}
 
-          <IntegrationsHub />
-
           {Capacitor.isNativePlatform() && !contextEnabled && (
             <p className="hint setup-note">
               Screen context is off. Enable it in Setup to capture on-screen text.
@@ -720,6 +718,8 @@ export default function Status() {
           )}
         </>
       )}
+
+      <IntegrationsHub />
 
       <PermissionsPanel />
     </div>

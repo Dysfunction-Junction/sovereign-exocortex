@@ -1,5 +1,5 @@
 import { Preferences } from "@capacitor/preferences";
-import { getConnectionTargets } from "./config";
+import { getConnectionTargets, isDesktopApp } from "./config";
 
 export class ProxyNotConfiguredError extends Error {
   constructor() {
@@ -62,8 +62,18 @@ async function authedFetch(path: string, init?: RequestInit): Promise<Response> 
     path.startsWith("/world-model/") ||
     path.startsWith("/network/");
   if (isExocortexRoute) {
-    const gateway = targets.filter((t) => t.mode === "remote");
-    if (gateway.length > 0) targets = gateway;
+    const isDesktop = isDesktopApp();
+    const daemonTarget = targets.find((t) => t.baseUrl.includes(":8788")) || {
+      baseUrl: "http://127.0.0.1:8788",
+      token: targets[0]?.token ?? "",
+      mode: "lan" as const,
+    };
+    targets = isDesktop
+      ? [daemonTarget]
+      : (targets.filter((t) => !t.baseUrl.includes(":8787")).length > 0
+          ? targets.filter((t) => !t.baseUrl.includes(":8787"))
+          : targets);
+
   }
 
   const baseTimeout = path.startsWith("/mobile/recent/assets")
