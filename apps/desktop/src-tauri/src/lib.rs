@@ -8,7 +8,12 @@ use tauri::{
 };
 
 fn log_desktop(msg: &str) {
-    let path = "C:\\Users\\micha\\AppData\\Local\\Sovereign Exocortex\\desktop.log";
+    let log_dir = std::env::var("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
+        .join("Sovereign Exocortex");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let path = log_dir.join("desktop.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "[{:?}] {}", std::time::SystemTime::now(), msg);
     }

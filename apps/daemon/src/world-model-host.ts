@@ -213,13 +213,15 @@ export class WorldModelHost {
   }
 
   /**
-   * Seed Michael's core sovereign ecosystem entities, projects, routines, and hardware nodes.
+   * Seed the operator's core sovereign ecosystem entities, projects, routines, and hardware nodes.
    */
   private seedEcosystemGraph(): void {
+    const selfId = process.env.EXOCORTEX_OPERATOR_ID || "person_operator";
+    const selfName = process.env.EXOCORTEX_OPERATOR_NAME || "Operator";
     // 1. Core Human & Hardware Nodes
-    this.lifeGraph.addEntity({ id: "person_michael", name: "Michael", type: "PERSON" });
-    this.lifeGraph.addEntity({ id: "device_host_pc", name: "Windows 11 Workstation", type: "DEVICE" });
-    this.lifeGraph.addEntity({ id: "device_phone_galaxy_s26", name: "Samsung Galaxy S26 Ultra", type: "DEVICE" });
+    this.lifeGraph.addEntity({ id: selfId, name: selfName, type: "PERSON" });
+    this.lifeGraph.addEntity({ id: "device_host_pc", name: "Primary Workstation", type: "DEVICE" });
+    this.lifeGraph.addEntity({ id: "device_phone_galaxy_s26", name: "Mobile Companion", type: "DEVICE" });
 
     // 2. Active Projects & Invariants
     this.lifeGraph.addEntity({ id: "project_sovereign_exocortex", name: "Sovereign Exocortex Monorepo", type: "PROJECT" });
@@ -233,11 +235,11 @@ export class WorldModelHost {
     this.lifeGraph.addEntity({ id: "state_deep_focus", name: "Deep Focus Flow State", type: "CONTEXT_STATE" });
 
     // 4. Multi-Relational Associative Edges
-    this.lifeGraph.addEdge("person_michael", "project_sovereign_exocortex", "WORKS_ON", 1.0);
-    this.lifeGraph.addEdge("person_michael", "project_bear_house_classic", "WORKS_ON", 0.95);
-    this.lifeGraph.addEdge("person_michael", "project_cafeteria_menu", "WORKS_ON", 0.9);
-    this.lifeGraph.addEdge("person_michael", "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0);
-    this.lifeGraph.addEdge("person_michael", "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0);
+    this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0);
+    this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95);
+    this.lifeGraph.addEdge(selfId, "project_cafeteria_menu", "WORKS_ON", 0.9);
+    this.lifeGraph.addEdge(selfId, "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0);
+    this.lifeGraph.addEdge(selfId, "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0);
 
     this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);

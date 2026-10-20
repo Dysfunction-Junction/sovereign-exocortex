@@ -38,7 +38,7 @@ const humanize = (id: string): string =>
 
 export function seedFromComms(graph: LivingLifeGraph, events: CommsSeedEvent[], opts: CommsSeedOptions = {}): CommsSeedResult {
   const now = opts.now ?? Date.now();
-  const selfId = opts.selfId ?? 'person_michael';
+  const selfId = opts.selfId ?? (typeof process !== 'undefined' ? process.env?.EXOCORTEX_OPERATOR_ID : undefined) ?? 'person_operator';
   const minContacts = opts.minContacts ?? 5;
 
   const stats = new Map<string, { count: number; last: number; labels: Set<string> }>();

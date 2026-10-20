@@ -7,6 +7,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync, watch, type FSWatcher } from "node:fs";
 import { join, extname, basename, relative } from "node:path";
+import { homedir } from "node:os";
 import type { ChannelAdapter, ChannelStatus, SyncResult, IngestedDocument } from "./types.js";
 
 export interface ObsidianConfig {
@@ -22,7 +23,11 @@ export interface ParsedMarkdown {
   frontmatter: Record<string, unknown>;
 }
 
-const DEFAULT_VAULT_PATH = "C:\\Users\\micha\\Vault";
+export function getDefaultVaultPath(): string {
+  return process.env.OBSIDIAN_VAULT_PATH || join(homedir(), "Vault");
+}
+
+const DEFAULT_VAULT_PATH = getDefaultVaultPath();
 // Exclude embeds ![[...]] from wikilinks
 const WIKILINK_REGEX = /(?<!\!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
 const TAG_REGEX = /(?:^|\s)#([a-zA-Z0-9_\-/]+)/g;

@@ -6,7 +6,8 @@ RequiresMountsFor=/mnt/databank
 After=network-online.target
 
 [Service]
-User=michael
+# Set to the service user (e.g. databank or your primary user account)
+User=databank
 EnvironmentFile=/etc/databank.env
 ExecStart=/usr/local/bin/node /opt/databank/databank.mjs serve
 Restart=on-failure

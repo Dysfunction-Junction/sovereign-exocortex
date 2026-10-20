@@ -19,7 +19,7 @@ describe("email-triage", () => {
     });
 
     it("does not flag real human senders", () => {
-      assert.equal(isAutomatedSender("micha@example.com"), false);
+      assert.equal(isAutomatedSender("operator@example.com"), false);
       assert.equal(isAutomatedSender("Alice Smith <alice.smith@client.org>"), false);
       assert.equal(isAutomatedSender("bob_engineer@gmail.com"), false);
     });
@@ -37,7 +37,7 @@ describe("email-triage", () => {
     });
 
     it("returns false for direct human headers", () => {
-      assert.equal(hasBulkHeaders({ "Message-ID": "<abc@example.com>", "To": "micha@example.com" }), false);
+      assert.equal(hasBulkHeaders({ "Message-ID": "<abc@example.com>", "To": "operator@example.com" }), false);
     });
   });
 
@@ -71,11 +71,11 @@ describe("email-triage", () => {
 
   describe("isMutualCorrespondent", () => {
     it("returns true when user and another participant are present", () => {
-      assert.equal(isMutualCorrespondent(["micha@example.com", "colleague@work.com"], "micha@example.com"), true);
+      assert.equal(isMutualCorrespondent(["operator@example.com", "colleague@work.com"], "operator@example.com"), true);
     });
 
     it("returns false when user is not a participant", () => {
-      assert.equal(isMutualCorrespondent(["other@work.com", "someone@work.com"], "micha@example.com"), false);
+      assert.equal(isMutualCorrespondent(["other@work.com", "someone@work.com"], "operator@example.com"), false);
     });
   });
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Opens the LUKS volume, mounts it and starts the databank service.
 #
-#   interactive : ssh -t michael@hplubunhaos sudo databank-unlock
+#   interactive : ssh -t user@databank-host sudo databank-unlock
 #   from the PC : ops/windows/unlock-databank.ps1 pipes a typed passphrase to
 #                 `sudo databank-unlock --stdin` (passphrase on stdin only: never stored on this
 #                 machine, never on a command line, never in a file)

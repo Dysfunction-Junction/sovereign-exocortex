@@ -2,6 +2,7 @@
   "name": "sovereign-exocortex",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "The Sovereign Symbiotic Exocortex: Autonomous Personal Operating System",
   "scripts": {
     "test": "pnpm -r --stream test",

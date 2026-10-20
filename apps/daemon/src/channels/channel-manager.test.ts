@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { ChannelManager } from "./channel-manager.js";
+import { getDefaultVaultPath } from "./obsidian-adapter.js";
 import { AirGapPolicy, AirGapViolationError } from "./air-gap.js";
 
 describe("channel-manager and air-gap", () => {
@@ -8,7 +9,7 @@ describe("channel-manager and air-gap", () => {
 
   beforeEach(() => {
     AirGapPolicy.setAirGapActive(false);
-    manager = new ChannelManager({ obsidianVaultPath: "C:\\Users\\micha\\Vault" });
+    manager = new ChannelManager({ obsidianVaultPath: getDefaultVaultPath() });
   });
 
   it("lists all 3 channels (obsidian, notion, gmail)", async () => {

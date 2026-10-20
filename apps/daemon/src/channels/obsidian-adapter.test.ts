@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseMarkdownFile, ObsidianAdapter } from "./obsidian-adapter.js";
+import { parseMarkdownFile, ObsidianAdapter, getDefaultVaultPath } from "./obsidian-adapter.js";
 
 describe("obsidian-adapter", () => {
   describe("parseMarkdownFile", () => {
@@ -8,7 +8,7 @@ describe("obsidian-adapter", () => {
       const content = `---
 title: Project Exocortex
 tags: ai, world-model
-author: micha
+author: operator
 ---
 
 # Project Exocortex Overview
@@ -20,7 +20,7 @@ We are collaborating with #research and tracking progress under #release-v3.
       const parsed = parseMarkdownFile(content, "default_title");
 
       assert.equal(parsed.title, "Project Exocortex");
-      assert.equal(parsed.frontmatter.author, "micha");
+      assert.equal(parsed.frontmatter.author, "operator");
       assert.ok(parsed.wikilinks.includes("Living Brain"));
       assert.ok(parsed.wikilinks.includes("Active Inference"));
       assert.ok(parsed.tags.includes("ai"));
@@ -46,7 +46,7 @@ We are collaborating with #research and tracking progress under #release-v3.
 
   describe("ObsidianAdapter lifecycle", () => {
     it("reports 100% airGapped: true in getStatus", async () => {
-      const adapter = new ObsidianAdapter("C:\\Users\\micha\\Vault");
+      const adapter = new ObsidianAdapter(getDefaultVaultPath());
       const status = await adapter.getStatus();
       assert.equal(status.id, "obsidian");
       assert.equal(status.airGapped, true);

@@ -13,11 +13,11 @@ key, and the Android attestation chain. Expect to debug those; section 6 lists w
   from this PC should install as an update. If Android reports `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, the signing
   keys differ; uninstalling would erase the app's data, so decide that yourself.
 - A fingerprint (or face) enrolled in Android settings. Approval keys use BIOMETRIC_STRONG only; a PIN will not work.
-- Repos next to this one in `C:\Users\micha\projects`: `autonomous-triad`, `registry-app` (the others are optional).
+- Repos next to this one in your projects directory: `autonomous-triad`, `registry-app` (the others are optional).
 
 ## 1. Build and install the app (PowerShell)
 ```
-cd C:\Users\micha\projects\sovereign-exocortex\apps\mobile
+cd apps\mobile
 pnpm build
 npx cap sync android
 cd android
@@ -43,7 +43,7 @@ $env:TRIAD_SERVER_TOKEN   = "<random>"
 $env:HOME_PROXY_BASE_URL  = "http://127.0.0.1:8787"   # required to start; unused by this test
 $env:HOME_PROXY_TOKEN     = "unused"                   # required to start; unused by this test
 $env:SHADOW               = "0"                        # without this /network/approve answers 423
-cd C:\Users\micha\projects\sovereign-exocortex\apps\daemon
+cd apps\daemon
 ```
 - Window 1: `npx tsx src/mishmash-up.ts` (starts the triad on :8789 and registry-app on :39403 and the other nodes).
 - Window 2: `pnpm start` (gateway on :8788).

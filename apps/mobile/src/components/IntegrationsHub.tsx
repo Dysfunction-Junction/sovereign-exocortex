@@ -232,7 +232,7 @@ export function IntegrationsHub() {
                       } else {
                         setEditingChannel(ch.id);
                         // Do not prefill summary strings into raw inputs to prevent corrupting configs
-                        setConfigInput(ch.id === "obsidian" ? "C:\\Users\\micha\\Vault" : "");
+                        setConfigInput(ch.id === "obsidian" ? (ch.configSummary || "~/Vault") : "");
                         setConfigMode(ch.airGapped ? "offline" : "api");
                       }
                     }}
@@ -322,7 +322,7 @@ export function IntegrationsHub() {
                       onChange={(e) => setConfigInput(e.target.value)}
                       placeholder={
                         ch.id === "obsidian"
-                          ? "C:\\Users\\micha\\Vault"
+                          ? "e.g. C:\\Users\\<Username>\\Vault or ~/Vault"
                           : configMode === "api"
                           ? ch.id === "notion"
                             ? "secret_... or ntn_..."
@@ -361,7 +361,7 @@ export function IntegrationsHub() {
                   </div>
                   <p style={{ margin: "4px 0 0", fontSize: 11, color: "#94a3b8" }}>
                     {ch.id === "obsidian"
-                      ? "Points to your local Obsidian vault directory (default: C:\\Users\\micha\\Vault)."
+                      ? "Points to your local Obsidian vault directory (e.g. C:\\Users\\<Username>\\Vault or ~/Vault)."
                       : configMode === "api"
                       ? ch.id === "notion"
                         ? "Enter Notion Internal Integration token (secret_... or ntn_...)."

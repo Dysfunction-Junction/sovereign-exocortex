@@ -3,7 +3,7 @@
  * Autonomic Nightly Databank Archival Daemon Task for Sovereign Exocortex.
  *
  * Safely and autonomously bridges local hot LTM memories into the encrypted
- * Databank remote vault on Lubuntu (https://hplubunhaos.taild75b88.ts.net:8443).
+ * Databank remote vault on Lubuntu (e.g. https://<databank-host>:8443).
  *
  * Fail-soft by contract:
  * - Always probes ArchiveClient.health() first.

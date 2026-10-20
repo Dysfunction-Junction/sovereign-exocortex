@@ -45,7 +45,7 @@ export function seedFromPastSessions(
   opts: PastSeedOptions = {},
 ): PastSeedResult {
   const now = opts.now ?? Date.now();
-  const selfId = opts.selfId ?? 'person_michael';
+  const selfId = opts.selfId ?? (typeof process !== 'undefined' ? process.env?.EXOCORTEX_OPERATOR_ID : undefined) ?? 'person_operator';
   const minCount = opts.minTopicCount ?? 2;
   const maxPairs = opts.maxCooccurrencePairs ?? 300;
   const ordered = [...sessions].sort((a, b) => a.ts - b.ts);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run from the PC (Git Bash). Bundles the CLI into one file and installs it plus the units
 # on Lubuntu. Does not touch the disk and does not need the vault to be unlocked.
-#   ./deploy.sh michael@100.69.94.119
+#   ./deploy.sh user@databank-host
 set -euo pipefail
 HOST="${1:?usage: deploy.sh user@host}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +17,7 @@ ssh -t "$HOST" 'set -e
   sudo install -m 755 /tmp/databank-unlock.sh /usr/local/bin/databank-unlock
   sudo install -m 755 /tmp/databank-lock.sh /usr/local/bin/databank-lock
   sudo install -m 644 /tmp/databank.service /etc/systemd/system/databank.service
-  [ -f /etc/databank.env ] || sudo install -m 640 -o root -g michael /tmp/databank.env.example /etc/databank.env
+  [ -f /etc/databank.env ] || sudo install -m 640 -o root -g "${SUDO_USER:-$USER}" /tmp/databank.env.example /etc/databank.env
   sudo systemctl daemon-reload
   rm -f /tmp/databank.mjs /tmp/databank-*.sh /tmp/databank.service /tmp/databank.env.example
   node /opt/databank/databank.mjs 2>&1 | head -2

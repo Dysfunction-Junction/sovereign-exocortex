@@ -2,7 +2,7 @@
 
 > **Version:** 1.0.0 (Living Brain Synaptic Edition)  
 > **Status:** Local-First, Shadow-First, Hardware-Attested Autonomous System  
-> **Repository:** `C:\Users\micha\projects\sovereign-exocortex`
+> **Repository:** `sovereign-exocortex`
 
 ---
 
@@ -89,7 +89,7 @@ The desktop interface serves as the primary executive command center, providing 
 │  ● Living Brain 3D  [HIGH_VELOCITY_EXECUTION]  ● Neo4j: 199 nodes      │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│                      ( PERSON: Michael )                               │
+│                      ( PERSON: Operator )                              │
 │                         /           \                                  │
 │                 [CONTRIBUTES_TO]  [OWNS]                               │
 │                       /               \                                │
@@ -331,7 +331,7 @@ Restart-ScheduledTask -TaskName "ExocortexDaemon"
 #### Compiling Desktop Release Packages
 To compile fresh Windows setup installers:
 ```powershell
-cmd.exe /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat" -arch=x64 && set "PATH=C:\Users\micha\.cargo\bin;%PATH%" && cd /d C:\Users\micha\projects\sovereign-exocortex\apps\desktop && npx tauri build'
+cd apps/desktop && npx tauri build
 ```
 Artifacts are emitted to:
 - `apps/desktop/src-tauri/target/release/bundle/nsis/Sovereign Exocortex_1.0.0_x64-setup.exe`

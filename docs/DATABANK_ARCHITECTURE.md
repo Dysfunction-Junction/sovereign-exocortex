@@ -16,7 +16,7 @@ A place for everything that is too big or too old for the PC's hot memory store
 ## Topology
 
 ```
- PC (Windows, i7, Ollama)            Lubuntu (hplubunhaos, Ryzen 5 2600H, 6.7 GB RAM)
+ PC (Windows Workstation, Ollama)    Remote Host (Linux Databank Server)
  ┌──────────────────────┐            ┌──────────────────────────────────────────────┐
  │ exocortexd (hot)     │            │ systemd: databank (node 24)  127.0.0.1:8790    │
  │ LocalLTM memories    │  tailnet   │   Tailscale Serve  https://…ts.net:8443 ──┐    │
@@ -123,12 +123,12 @@ one esbuild-bundled file, no Docker and no node_modules.
    `--yes-wipe` over `ssh -t` (asks for the LUKS passphrase). Copy the LUKS header backup
    it prints off the machine.
 2. On the PC: `databank keygen <file>`; back it up outside the vault; copy it to
-   `/etc/databank.key` on Lubuntu (mode 640 root:michael).
-3. `ops/deploy.sh michael@100.69.94.119`, then edit `/etc/databank.env` (token, key path).
+   `/etc/databank.key` on your server (mode 640 root:<user>).
+3. `ops/deploy.sh <user>@<databank-host>`, then edit `/etc/databank.env` (token, key path).
 4. After every reboot click **Unlock Databank** (`ops/windows/make-shortcuts.ps1` creates the
    Unlock / Lock / Status buttons), then
    `tailscale serve --bg --https=8443 http://127.0.0.1:8790` once.
-5. `databank ingest-dir /home/michael/oldpc-archive --source oldpc`, then
+5. `databank ingest-dir /path/to/archive --source archive`, then
    `databank archive-memories packages/memory/data/memories.jsonl --older-than-days 90`.
 
 ## Tests

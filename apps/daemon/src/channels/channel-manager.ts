@@ -4,7 +4,7 @@
  * Manages Obsidian, Notion, and Gmail adapters, background schedulers, and entity routing.
  */
 
-import { ObsidianAdapter } from "./obsidian-adapter.js";
+import { ObsidianAdapter, getDefaultVaultPath } from "./obsidian-adapter.js";
 import { NotionAdapter } from "./notion-adapter.js";
 import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
@@ -217,5 +217,5 @@ export class ChannelManager {
 }
 
 export const defaultChannelManager = new ChannelManager({
-  obsidianVaultPath: "C:\\Users\\micha\\Vault",
+  obsidianVaultPath: getDefaultVaultPath(),
 });

@@ -14,8 +14,8 @@ Audience: a small local model (Qwen etc.) doing this with no prior context. Foll
 
 Turn the Pieces export folder into a graph in Neo4j so you can query it (people, tags, websites, summaries, how they link).
 
-Export location (Windows): `C:/Users/micha/AppData/Local/Pieces-Exports/2026-10-12_00-19-53`
-Repo: `C:\Users\micha\projects\sovereign-exocortex`, importer lives in `apps/neo4j-import/`.
+Export location (Windows example): `%LOCALAPPDATA%/Pieces-Exports/<export-folder>`
+Repo: `sovereign-exocortex`, importer lives in `apps/neo4j-import/`.
 
 ## 2. Architecture
 
@@ -73,7 +73,7 @@ Out of scope for v1: timeline events, embeddings, markdown body text.
    NEO4J_USERNAME=neo4j
    NEO4J_PASSWORD=<ask the user, never print it>
    NEO4J_DATABASE=neo4j
-   EXPORT_ROOT=C:/Users/micha/AppData/Local/Pieces-Exports/2026-10-12_00-19-53
+   EXPORT_ROOT=C:/Users/<Username>/AppData/Local/Pieces-Exports/<export-folder>
    ```
 3. `npm install` (only dependency: `neo4j-driver`).
 4. `node --env-file=.env src/import.js`

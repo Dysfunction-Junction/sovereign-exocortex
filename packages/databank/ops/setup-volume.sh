@@ -10,7 +10,7 @@
 # serial must match, and wiping needs --yes-wipe. The passphrase is never stored.
 set -euo pipefail
 
-DEVICE="" SERIAL="" WIPE=0 DRY=0 USER_NAME="${SUDO_USER:-michael}"
+DEVICE="" SERIAL="" WIPE=0 DRY=0 USER_NAME="${SUDO_USER:-$USER}"
 MAPPER=databank MOUNT=/mnt/databank CONF=/etc/databank.conf
 
 while [[ $# -gt 0 ]]; do

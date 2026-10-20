@@ -13,7 +13,7 @@ param(
   [switch]$Lock,
   [switch]$Status,
   [switch]$NoPause,
-  [string]$Target = "michael@100.69.94.119"
+  [string]$Target = if ($env:DATABANK_TARGET) { $env:DATABANK_TARGET } else { "user@databank-host" }
 )
 
 $ErrorActionPreference = "Stop"
