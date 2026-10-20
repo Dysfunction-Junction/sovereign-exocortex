@@ -15,6 +15,7 @@ export class ChannelManager {
   private adapters: Map<ChannelId, ChannelAdapter> = new Map();
   private onDocumentIngested?: (doc: IngestedDocument) => void;
   private onEntityIngested?: (entity: IngestedEntity) => void;
+  private worldModelHost?: WorldModelHost;
 
   constructor(options?: {
     obsidianVaultPath?: string;
@@ -56,6 +57,7 @@ export class ChannelManager {
   }
 
   attachToWorldModel(worldModelHost: WorldModelHost): void {
+    this.worldModelHost = worldModelHost;
     const graph = worldModelHost.lifeGraph;
 
     this.onDocumentIngested = (doc) => {
@@ -165,18 +167,26 @@ export class ChannelManager {
     await adapter.configure(config);
   }
 
+  purgeChannel(id: ChannelId): number {
+    if (!this.worldModelHost) return 0;
+    const prefix = `doc:${id}:`;
+    return this.worldModelHost.lifeGraph.removeEntitiesByPrefix(prefix);
+  }
+
   async syncChannel(id: ChannelId): Promise<SyncResult> {
     const adapter = this.adapters.get(id);
     if (!adapter) {
       throw new Error(`Unknown channel: ${id}`);
     }
+    // Purge stale entities before fresh sync to remove deleted/ignored files
+    this.purgeChannel(id);
     return adapter.sync();
   }
 
   async syncAll(): Promise<SyncResult[]> {
     const results: SyncResult[] = [];
-    for (const adapter of this.adapters.values()) {
-      results.push(await adapter.sync());
+    for (const id of this.adapters.keys()) {
+      results.push(await this.syncChannel(id));
     }
     return results;
   }
@@ -187,6 +197,7 @@ export class ChannelManager {
       throw new Error(`Unknown channel: ${id}`);
     }
     await adapter.disconnect();
+    this.purgeChannel(id);
   }
 
   setAirGapMode(active: boolean): void {

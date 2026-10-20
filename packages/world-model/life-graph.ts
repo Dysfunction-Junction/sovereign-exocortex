@@ -380,6 +380,50 @@ export class LivingLifeGraph {
   /**
    * Total entity count.
    */
+  /**
+   * Remove an entity and all its attached edges from the graph.
+   */
+  public removeEntity(id: string): boolean {
+    if (!this.entities.has(id)) return false;
+    this.entities.delete(id);
+    const outgoing = this.adjacency.get(id);
+    if (outgoing) {
+      for (const edgeId of outgoing) {
+        const edge = this.edges.get(edgeId);
+        if (edge) {
+          this.reverseAdjacency.get(edge.targetId)?.delete(edgeId);
+        }
+        this.edges.delete(edgeId);
+      }
+      this.adjacency.delete(id);
+    }
+    const incoming = this.reverseAdjacency.get(id);
+    if (incoming) {
+      for (const edgeId of incoming) {
+        const edge = this.edges.get(edgeId);
+        if (edge) {
+          this.adjacency.get(edge.sourceId)?.delete(edgeId);
+        }
+        this.edges.delete(edgeId);
+      }
+      this.reverseAdjacency.delete(id);
+    }
+    return true;
+  }
+
+  /**
+   * Remove all entities matching an ID prefix and all their attached edges.
+   */
+  public removeEntitiesByPrefix(prefix: string): number {
+    let removed = 0;
+    for (const id of Array.from(this.entities.keys())) {
+      if (id.startsWith(prefix)) {
+        if (this.removeEntity(id)) removed++;
+      }
+    }
+    return removed;
+  }
+
   public get entityCount(): number {
     return this.entities.size;
   }

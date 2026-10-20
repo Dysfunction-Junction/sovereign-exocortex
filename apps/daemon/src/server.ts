@@ -1304,6 +1304,18 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  if (method === "POST" && url.pathname.startsWith("/v3/channels/") && url.pathname.endsWith("/purge")) {
+    try {
+      const parts = url.pathname.split("/");
+      const channelId = parts[3] as import("./channels/types.js").ChannelId;
+      const count = defaultChannelManager.purgeChannel(channelId);
+      sendJson(res, 200, { ok: true, channelId, purgedCount: count });
+    } catch (err) {
+      sendJson(res, 400, { error: "failed to purge channel", reason: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+
   if (method === "DELETE" && url.pathname.startsWith("/v3/channels/")) {
     try {
       const parts = url.pathname.split("/");

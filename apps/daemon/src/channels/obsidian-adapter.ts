@@ -29,6 +29,44 @@ const TAG_REGEX = /(?:^|\s)#([a-zA-Z0-9_\-/]+)/g;
 const FRONTMATTER_REGEX = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /**
+ * Detects whether a path or file is an auto-generated machine dump or anchor artifact.
+ */
+export function isMachineArtifact(relPath: string, fileName: string): boolean {
+  const normalized = relPath.replace(/\\/g, "/").toLowerCase();
+  if (
+    normalized.includes("markdown/anchors") ||
+    normalized.includes("/anchors/") ||
+    normalized.startsWith("anchors/") ||
+    normalized.includes("/.obsidian") ||
+    normalized.includes("/.trash") ||
+    normalized.includes("/attachments") ||
+    normalized.includes("/assets") ||
+    normalized.includes("/templates")
+  ) {
+    return true;
+  }
+  const baseNameWithoutExt = fileName.replace(/\.md$/i, "");
+  // Ignore SHA-256, MD5, and long hex hashes (like Pieces raw asset dumps)
+  if (/^[0-9a-f]{16,64}$/i.test(baseNameWithoutExt)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Derives structured topic tags from the relative directory path.
+ * e.g., "Projects/Sovereign Exocortex/Note.md" -> ["projects", "sovereign-exocortex"]
+ */
+export function deriveFolderTags(relPath: string): string[] {
+  const normalized = relPath.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  const dirParts = parts.slice(0, -1);
+  return dirParts
+    .map((p) => p.trim().toLowerCase().replace(/[^a-z0-9_\-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter((p) => p.length > 1 && !p.startsWith("."));
+}
+
+/**
  * Parses raw markdown text extracting title, frontmatter, tags, and wikilinks.
  */
 export function parseMarkdownFile(content: string, fallbackTitle: string): ParsedMarkdown {
@@ -182,6 +220,11 @@ export class ObsidianAdapter implements ChannelAdapter {
           const fallbackTitle = basename(filePath, extname(filePath));
           const parsed = parseMarkdownFile(content, fallbackTitle);
           const relPath = relative(this.vaultPath, filePath);
+          const folderTags = deriveFolderTags(relPath);
+          const combinedTags = Array.from(new Set([...parsed.tags, ...folderTags]));
+          if (combinedTags.length === 0) {
+            combinedTags.push("vault");
+          }
 
           const doc: IngestedDocument = {
             id: `doc:obsidian:${relPath.replace(/\\/g, "/")}`,
@@ -189,7 +232,7 @@ export class ObsidianAdapter implements ChannelAdapter {
             title: parsed.title,
             body: parsed.body,
             sourcePath: filePath,
-            tags: parsed.tags,
+            tags: combinedTags,
             wikilinks: parsed.wikilinks,
             metadata: parsed.frontmatter,
             createdAt: fileStat?.birthtimeMs || Date.now(),
@@ -290,12 +333,19 @@ export class ObsidianAdapter implements ChannelAdapter {
 
   private async handleFileChange(fullPath: string): Promise<void> {
     if (!existsSync(fullPath)) return;
+    const relPath = relative(this.vaultPath, fullPath);
+    if (isMachineArtifact(relPath, basename(fullPath))) return;
+
     try {
       const content = await readFile(fullPath, "utf-8");
       const fileStat = await stat(fullPath).catch(() => null);
       const fallbackTitle = basename(fullPath, extname(fullPath));
       const parsed = parseMarkdownFile(content, fallbackTitle);
-      const relPath = relative(this.vaultPath, fullPath);
+      const folderTags = deriveFolderTags(relPath);
+      const combinedTags = Array.from(new Set([...parsed.tags, ...folderTags]));
+      if (combinedTags.length === 0) {
+        combinedTags.push("vault");
+      }
 
       const doc: IngestedDocument = {
         id: `doc:obsidian:${relPath.replace(/\\/g, "/")}`,
@@ -303,7 +353,7 @@ export class ObsidianAdapter implements ChannelAdapter {
         title: parsed.title,
         body: parsed.body,
         sourcePath: fullPath,
-        tags: parsed.tags,
+        tags: combinedTags,
         wikilinks: parsed.wikilinks,
         metadata: parsed.frontmatter,
         createdAt: fileStat?.birthtimeMs || Date.now(),
@@ -326,6 +376,9 @@ export class ObsidianAdapter implements ChannelAdapter {
       for (const entry of entries) {
         if (entry.name.startsWith(".")) continue; // Skip all dot-dirs
         const full = join(dir, entry.name);
+        const rel = relative(this.vaultPath, full);
+        if (isMachineArtifact(rel, entry.name)) continue;
+
         if (entry.isDirectory()) {
           await this.scanMarkdownFiles(full, results, maxDepth, depth + 1);
         } else if (entry.isFile() && extname(entry.name).toLowerCase() === ".md") {

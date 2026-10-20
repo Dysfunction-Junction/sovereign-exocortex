@@ -81,6 +81,7 @@ export default function LivingBrain() {
   const [nlQueryResult, setNlQueryResult] = useState<GraphQueryResponse["result"] | null>(null);
   const [nlQueryError, setNlQueryError] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
+  const [hideFloatingOrphans, setHideFloatingOrphans] = useState(true);
 
   useEffect(() => {
     isSynapticAudioEnabled().then(setAudioEnabled).catch(() => {});
@@ -334,6 +335,15 @@ export default function LivingBrain() {
       val: 2.5 + (e.activation ?? 0) * 10,
     })) as GraphNode[];
 
+    if (hideFloatingOrphans) {
+      const connectedNodeIds = new Set<string>();
+      for (const edge of graphData.edges) {
+        connectedNodeIds.add(edge.sourceId);
+        connectedNodeIds.add(edge.targetId);
+      }
+      nodes = nodes.filter((n) => n.type !== "DOC" || connectedNodeIds.has(n.id));
+    }
+
     if (selectedFilter !== "ALL") {
       nodes = nodes.filter((n) => n.type.toUpperCase() === selectedFilter);
     }
@@ -349,7 +359,7 @@ export default function LivingBrain() {
       })) as GraphLink[];
 
     return { nodes, links };
-  }, [graphData, selectedFilter]);
+  }, [graphData, selectedFilter, hideFloatingOrphans]);
 
   // Mount & configure ForceGraph3D
   useEffect(() => {
@@ -1246,6 +1256,25 @@ export default function LivingBrain() {
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={() => setHideFloatingOrphans((prev) => !prev)}
+          title="Toggle visibility of unlinked floating documents"
+          style={{
+            background: hideFloatingOrphans ? "rgba(56, 189, 248, 0.25)" : "rgba(13, 17, 30, 0.75)",
+            backdropFilter: "blur(12px)",
+            border: `1px solid ${hideFloatingOrphans ? "#38bdf8" : "rgba(255, 255, 255, 0.08)"}`,
+            color: hideFloatingOrphans ? "#38bdf8" : "#94a3b8",
+            fontSize: "11px",
+            fontWeight: 700,
+            padding: "5px 12px",
+            borderRadius: "20px",
+            cursor: "pointer",
+            transition: "all 180ms ease",
+          }}
+        >
+          {hideFloatingOrphans ? "⚡ Connected Only" : "🌐 All Nodes"}
+        </button>
       </div>
 
       {/* Loading & Error States */}
