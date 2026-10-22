@@ -400,3 +400,27 @@ test("WorldModelHost: validateSignals strictly enforces types and rejects coerce
   assert.ok(nullResult);
 });
 
+
+test("WorldModelHost: cold start hydrates learned params when the recorder attaches after construction", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const seeded = WorldModelHost.createIsolatedForTest();
+    const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+    recorder.ensureHostDevice();
+    seeded.setShadowRecorder(recorder);
+    seeded.ingestObservation({ invariantId: "inv_bridge_connected", observedState: false, confidence: 0.9, observedAt: 1, factor: "link_health", observation: "ws_dropped" } as never);
+    seeded.persistBeliefState(1, db);
+    const saved = db.listModelParams();
+    assert.ok(saved.length > 0, "fixture must persist model params");
+
+    // Constructed with no database open (normal cold start); recorder attaches later.
+    const cold = WorldModelHost.createIsolatedForTest();
+    const key = (h: WorldModelHost) => JSON.stringify(h.learnedEngine.exportModelParams(0));
+    const before = key(cold);
+    assert.notEqual(before, key(seeded), "fixture must differ from a fresh engine");
+    cold.setShadowRecorder(new ShadowRecorder(db, { cooldownMs: 0 }));
+    assert.equal(key(cold), key(seeded), "learned state restored on attach");
+  } finally {
+    db.close();
+  }
+});
