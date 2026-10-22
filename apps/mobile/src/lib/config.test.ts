@@ -9,6 +9,7 @@ import {
   getRemoteGatewayToken,
   tryAutoConnectLocalPc,
 } from "./config";
+import { createMemoryCredentialStore, setCredentialStoreForTests } from "./credentialStore";
 
 describe("config auto-discovery", () => {
   beforeEach(async () => {
@@ -75,6 +76,8 @@ describe("config auto-discovery", () => {
   });
 
   it("getConnectionTargets does not auto-connect when running on native platform", async () => {
+    // Pin the store so the single mocked `true` below is seen by isDesktopApp(), not by store selection.
+    setCredentialStoreForTests(createMemoryCredentialStore());
     vi.mocked(Capacitor.isNativePlatform).mockReturnValueOnce(true);
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 

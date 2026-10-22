@@ -1,5 +1,6 @@
 import { Preferences } from "@capacitor/preferences";
 import { Capacitor } from "@capacitor/core";
+import { getCredentialStore } from "./credentialStore";
 
 // Dual-profile connection (Plan A LAN / Plan B Remote Gateway):
 //  - Plan A (LAN / USB): fast local path, e.g. http://192.168.1.x:8787
@@ -8,8 +9,9 @@ import { Capacitor } from "@capacitor/core";
 // api.ts / flush.ts try Plan A first, fall over to Plan B on timeout, refused
 // connection, 401/403, or 5xx. Either profile alone is a valid config.
 //
-// Uses Capacitor's Preferences plugin (native storage) rather than
-// localStorage — these tokens are real credentials, not UI state.
+// URLs and UI flags live in Capacitor Preferences. The two bearer tokens are credentials and go
+// through credentialStore.ts (Android Keystore-backed on device) instead; tokens left in Preferences
+// by older builds are migrated on first read.
 
 const PROXY_BASE_URL_KEY = "pieces-android:proxyBaseUrl";
 const PROXY_TOKEN_KEY = "pieces-android:proxyToken";
@@ -28,13 +30,44 @@ export async function setProxyBaseUrl(url: string): Promise<void> {
   await Preferences.set({ key: PROXY_BASE_URL_KEY, value: url.replace(/\/$/, "") });
 }
 
+/**
+ * Moves a token an older build left in plaintext Preferences into the credential store:
+ * write, read back and compare, and only then delete the plaintext. If the encrypted copy
+ * already exists (interrupted earlier run) it wins and the leftover plaintext is removed.
+ * Any failure leaves the legacy value in place and throws, so the only working credential is
+ * never erased first.
+ */
+async function migrateLegacyToken(key: string): Promise<void> {
+  const { value: legacy } = await Preferences.get({ key });
+  if (legacy === null || legacy === undefined) return;
+  const store = getCredentialStore();
+  if ((await store.get(key)) !== null) {
+    await Preferences.remove({ key });
+    return;
+  }
+  await store.set(key, legacy);
+  if ((await store.get(key)) !== legacy) {
+    throw new Error(`Credential migration failed verification for ${key}; the existing token was kept`);
+  }
+  await Preferences.remove({ key });
+}
+
+async function readToken(key: string): Promise<string | null> {
+  await migrateLegacyToken(key);
+  return getCredentialStore().get(key);
+}
+
+async function writeToken(key: string, token: string): Promise<void> {
+  await getCredentialStore().set(key, token);
+  await Preferences.remove({ key });
+}
+
 export async function getProxyToken(): Promise<string | null> {
-  const { value } = await Preferences.get({ key: PROXY_TOKEN_KEY });
-  return value;
+  return readToken(PROXY_TOKEN_KEY);
 }
 
 export async function setProxyToken(token: string): Promise<void> {
-  await Preferences.set({ key: PROXY_TOKEN_KEY, value: token });
+  await writeToken(PROXY_TOKEN_KEY, token);
 }
 
 export async function getRemoteGatewayUrl(): Promise<string | null> {
@@ -47,12 +80,11 @@ export async function setRemoteGatewayUrl(url: string): Promise<void> {
 }
 
 export async function getRemoteGatewayToken(): Promise<string | null> {
-  const { value } = await Preferences.get({ key: REMOTE_GATEWAY_TOKEN_KEY });
-  return value;
+  return readToken(REMOTE_GATEWAY_TOKEN_KEY);
 }
 
 export async function setRemoteGatewayToken(token: string): Promise<void> {
-  await Preferences.set({ key: REMOTE_GATEWAY_TOKEN_KEY, value: token });
+  await writeToken(REMOTE_GATEWAY_TOKEN_KEY, token);
 }
 
 export interface ConnectionTarget {
@@ -195,11 +227,14 @@ export async function isConfigured(): Promise<boolean> {
 }
 
 export async function clearConfig(): Promise<void> {
+  const store = getCredentialStore();
   await Promise.all([
     Preferences.remove({ key: PROXY_BASE_URL_KEY }),
     Preferences.remove({ key: PROXY_TOKEN_KEY }),
     Preferences.remove({ key: REMOTE_GATEWAY_URL_KEY }),
     Preferences.remove({ key: REMOTE_GATEWAY_TOKEN_KEY }),
+    store.remove(PROXY_TOKEN_KEY),
+    store.remove(REMOTE_GATEWAY_TOKEN_KEY),
   ]);
 }
 
