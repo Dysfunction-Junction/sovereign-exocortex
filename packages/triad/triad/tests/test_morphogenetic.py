@@ -32,7 +32,7 @@ class TestMorphogeneticEngine(unittest.TestCase):
         candidate = MutationCandidate(
             candidate_id="bad_mut",
             description="Attempt to reintroduce banned dependency",
-            target_file="packages/core/package.json",
+            target_file="README.md",
             original_code="{}",
             mutated_code='{"dependency": "deprecated_root_api"}',
         )
@@ -87,17 +87,18 @@ class TestMorphogeneticEngine(unittest.TestCase):
     def test_noop_mutation_rejection(self):
         # Read hermetically from git HEAD to avoid uncommitted working tree differences
         res = subprocess.run(
-            ["git", "show", "HEAD:package.json"],
+            ["git", "show", "HEAD:README.md"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
         head_pkg_content = res.stdout
 
         candidate = MutationCandidate(
             candidate_id="noop_mut",
             description="No-op mutation with different newline endings",
-            target_file="package.json",
+            target_file="README.md",
             original_code="",
             # Test that newline normalization (CRLF vs LF) correctly detects no-op
             mutated_code=head_pkg_content.replace("\n", "\r\n"),
@@ -170,6 +171,17 @@ class TestProtectedTargetPolicy(unittest.TestCase):
             "test_example.py", "src/test_example.py", "src/foo_test.py", "src/footest.py",
             "a.spec.ts", "a.test.tsx", "src/b.spec.jsx", ".github/wf.yml", "invariants/x.py",
             "src/invariants_check.py", "TESTS/x.py", "Tests/Helper.PY",
+        ]:
+            with self.subTest(rel=rel):
+                self.assertTrue(self._protected(rel), rel)
+
+    def test_harness_and_build_config_decide_what_verification_runs_so_they_are_protected(self):
+        for rel in [
+            "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "conftest.py", "pkg/conftest.py",
+            "Makefile", "package.json", "packages/core/package.json", "package-lock.json",
+            "pnpm-lock.yaml", "yarn.lock", "vitest.config.ts", "apps/mobile/vitest.config.mts",
+            "jest.config.js", "vitest.workspace.ts", "noxfile.py", ".pre-commit-config.yaml",
+            "Cargo.toml", "tsconfig.json", "PYTEST.INI",
         ]:
             with self.subTest(rel=rel):
                 self.assertTrue(self._protected(rel), rel)

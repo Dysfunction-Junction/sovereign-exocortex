@@ -153,6 +153,43 @@ describe("BlobStore.rewriteLegacy", () => {
     assert.deepEqual(await flaky.verify(id), { ok: true });
   });
 
+  it("the original stays addressable and a backup exists at every point of the swap (no rename gap)", async () => {
+    const seen: { called: boolean; finalPresent: boolean; backupPresent: boolean } = {
+      called: false,
+      finalPresent: false,
+      backupPresent: false,
+    };
+    class Probe extends BlobStore {
+      protected override async afterBackup(id: string): Promise<void> {
+        seen.called = true;
+        seen.finalPresent = await this.has(id);
+        seen.backupPresent = readdirSync(dirname(this.pathFor(id))).some((f) => f.endsWith(".bak"));
+      }
+    }
+    const probe = new Probe(dir, keys);
+    const id = plant(Buffer.from("never missing"));
+    assert.deepEqual(await probe.rewriteLegacy(id), { id, migrated: true });
+    assert.equal(seen.called, true, "afterBackup hook must run between backup and replace");
+    assert.equal(seen.finalPresent, true, "blob must still resolve by id while the backup exists");
+    assert.equal(seen.backupPresent, true);
+    assert.deepEqual(readdirSync(dirname(probe.pathFor(id))).filter((f) => f.endsWith(".bak")), []);
+    assert.deepEqual(await probe.verify(id), { ok: true });
+  });
+
+  it("a crash right after the backup is taken leaves the blob readable under its id", async () => {
+    class Crashy extends BlobStore {
+      protected override async afterBackup(): Promise<void> {
+        throw new Error("simulated crash after backup");
+      }
+    }
+    const crashy = new Crashy(dir, keys);
+    const id = plant(Buffer.from("crash window"));
+    await assert.rejects(crashy.rewriteLegacy(id), /simulated crash after backup/);
+    assert.deepEqual(await crashy.verify(id), { ok: true });
+    assert.equal(magic(id), "XDB2");
+    assert.deepEqual(readdirSync(dirname(crashy.pathFor(id))).filter((f) => f.endsWith(".bak")), []);
+  });
+
   it("refuses an id that does not exist or is not a blob id", async () => {
     await assert.rejects(store.rewriteLegacy("not-an-id"), /invalid blob id/);
     await assert.rejects(store.rewriteLegacy("a".repeat(64)));

@@ -6,7 +6,7 @@
  */
 
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { copyFile, link, mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -116,13 +116,21 @@ export class BlobStore {
         for await (const chunk of decryptFileStream(this.keys, tmp)) hasher.update(chunk as Buffer);
         if (hasher.digest() !== id) throw new Error("rewritten blob failed verification");
         await this.beforeReplace();
+        // The original is never moved: take a hard-link (or copy) backup, then replace the final
+        // path with ONE rename (atomic over an existing file on POSIX and Windows). The blob is
+        // addressable by id at every instant, and the backup only goes away after the swap.
         const bak = `${finalPath}.bak`;
         await rm(bak, { force: true });
-        await rename(finalPath, bak);
         try {
+          await link(finalPath, bak);
+        } catch {
+          await copyFile(finalPath, bak);
+        }
+        try {
+          await this.afterBackup(id);
           await rename(tmp, finalPath);
         } catch (err) {
-          await rename(bak, finalPath);
+          await rm(bak, { force: true });
           throw err;
         }
         await rm(bak, { force: true });
@@ -138,6 +146,9 @@ export class BlobStore {
 
   /** Seam between "new blob verified" and "original replaced"; overridden by tests to simulate a crash. */
   protected async beforeReplace(): Promise<void> {}
+
+  /** Seam after the backup exists and before the replacing rename; overridden by tests. */
+  protected async afterBackup(_id: string): Promise<void> {}
 
   /** Plaintext stream; errors if the blob is missing or fails authentication. */
   get(id: string): Readable {

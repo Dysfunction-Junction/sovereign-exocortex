@@ -164,13 +164,25 @@ class MorphogeneticEngine:
                 return True
         return False
 
+    # Files that decide WHAT verification runs (test command, runner/build config, dependency
+    # resolution). A repair that edits one can make any run exit 0 without testing anything, so
+    # they are as immutable as the tests themselves. Compared case-insensitively on the file name.
+    _HARNESS_CONFIG_NAMES = frozenset({
+        "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "conftest.py", "noxfile.py",
+        "makefile", "package.json", "package-lock.json", "pnpm-lock.yaml", "pnpm-workspace.yaml",
+        "yarn.lock", ".pre-commit-config.yaml", "cargo.toml", "cargo.lock", "tsconfig.json",
+    })
+    _HARNESS_CONFIG_PREFIXES = ("vitest.config.", "vitest.workspace.", "jest.config.", "tsconfig.")
+
     def _is_protected_target(self, root: Path, target: Path) -> bool:
-        """Policy on the canonical (resolved) path: tests, CI config and invariants are immutable."""
+        """Policy on the canonical (resolved) path: tests, CI/harness config and invariants are immutable."""
         rel = target.relative_to(root.resolve())
         parts = tuple(part.casefold() for part in rel.parts)
         name = parts[-1]
         return (
-            any(part in {"test", "tests", "__tests__", ".github", ".git"} for part in parts)
+            name in self._HARNESS_CONFIG_NAMES
+            or name.startswith(self._HARNESS_CONFIG_PREFIXES)
+            or any(part in {"test", "tests", "__tests__", ".github", ".git"} for part in parts)
             or any("invariants" in part for part in parts)
             or name.startswith("test_")
             or name.endswith(("_test.py", "test.py"))
