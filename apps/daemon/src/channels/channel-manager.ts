@@ -20,6 +20,7 @@ const CHANNEL_ENTITY_PREFIXES: Record<ChannelId, readonly string[]> = {
 
 export class ChannelManager {
   private adapters: Map<ChannelId, ChannelAdapter> = new Map();
+  private auditSink: ((item: IngestedDocument | IngestedEntity) => void) | null = null;
   private onDocumentIngested?: (doc: IngestedDocument) => void;
   private onEntityIngested?: (entity: IngestedEntity) => void;
   private worldModelHost?: WorldModelHost;
@@ -63,11 +64,17 @@ export class ChannelManager {
     return this.adapters.get(id);
   }
 
+  /** Append metadata-only audit events to the event log for every ingested item. */
+  setAuditSink(sink: ((item: IngestedDocument | IngestedEntity) => void) | null): void {
+    this.auditSink = sink;
+  }
+
   attachToWorldModel(worldModelHost: WorldModelHost): void {
     this.worldModelHost = worldModelHost;
     const graph = worldModelHost.lifeGraph;
 
     this.onDocumentIngested = (doc) => {
+      this.auditSink?.(doc);
       const existing = graph.getEntity(doc.id);
       // Preserve existing decay activation rather than inflating to 1.0 on every re-sync
       const activation = existing ? existing.activation : 1.0;
@@ -126,6 +133,7 @@ export class ChannelManager {
     };
 
     this.onEntityIngested = (entity) => {
+      this.auditSink?.(entity);
       const existing = graph.getEntity(entity.id);
       const activation = existing ? existing.activation : 1.0;
 

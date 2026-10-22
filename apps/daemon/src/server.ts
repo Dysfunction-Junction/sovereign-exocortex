@@ -7,7 +7,7 @@ import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
-import { getDatabase } from "./db-host.js";
+import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
@@ -30,6 +30,7 @@ import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.
 import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
 import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
 import { defaultChannelManager } from "./channels/channel-manager.js";
+import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
 import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
 
@@ -105,6 +106,9 @@ if (process.env.NODE_ENV !== "test") {
 
   // Attach integration channels master manager
   defaultChannelManager.attachToWorldModel(defaultWorldModelHost);
+  defaultChannelManager.setAuditSink((item) => {
+    if (hasDatabase()) recordChannelIngest(getDatabase(), item);
+  });
 }
 
 
