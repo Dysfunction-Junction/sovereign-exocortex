@@ -1,3 +1,4 @@
+import { buildNodeLabel, type LabelRole } from "../lib/graphLabel";
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import ForceGraph3D, { type ForceGraph3DInstance } from "3d-force-graph";
 import * as THREE from "three";
@@ -369,27 +370,16 @@ export default function LivingBrain() {
       const fg = new (ForceGraph3D as any)()(containerRef.current)
         .backgroundColor("rgba(7, 8, 14, 0.98)")
         .nodeLabel((node: GraphNode) => {
-          const act = ((node.activation ?? 0) * 100).toFixed(0);
           const selNode = selectedNodeRef.current;
           const circuit = synapticCircuitRef.current;
-          let roleBadge = "";
+          let role: LabelRole | null = null;
           if (selNode) {
-            if (node.id === selNode.id) {
-              roleBadge = `<div style="font-size: 10px; color: #38bdf8; font-weight: 700; margin-top: 2px; text-transform: uppercase;">⚡ Active Initiator</div>`;
-            } else if (circuit.hop1NodeIds.has(node.id)) {
-              roleBadge = `<div style="font-size: 10px; color: #38bdf8; font-weight: 600; margin-top: 2px; text-transform: uppercase;">1-Hop Synaptic Partner</div>`;
-            } else if (circuit.hop2NodeIds.has(node.id)) {
-              roleBadge = `<div style="font-size: 10px; color: #a78bfa; font-weight: 600; margin-top: 2px; text-transform: uppercase;">2-Hop Cascade Leaf</div>`;
-            } else {
-              roleBadge = `<div style="font-size: 10px; color: #64748b; margin-top: 2px; font-style: italic;">Inhibited Peripheral</div>`;
-            }
+            if (node.id === selNode.id) role = "initiator";
+            else if (circuit.hop1NodeIds.has(node.id)) role = "hop1";
+            else if (circuit.hop2NodeIds.has(node.id)) role = "hop2";
+            else role = "inhibited";
           }
-          return `<div style="background: rgba(15, 20, 35, 0.94); border: 1px solid rgba(255,255,255,0.15); padding: 8px 12px; border-radius: 8px; font-family: sans-serif; box-shadow: 0 4px 20px rgba(0,0,0,0.6);">
-            <div style="font-weight: 700; color: #ffffff; font-size: 13px;">${node.name}</div>
-            <div style="font-size: 11px; color: ${node.color}; margin-top: 2px; text-transform: uppercase; font-weight: 600;">${node.type}</div>
-            ${roleBadge}
-            <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">Activation: <span style="color:#38bdf8; font-weight:700;">${act}%</span></div>
-          </div>`;
+          return buildNodeLabel(node, role);
         })
         .nodeThreeObject((node: GraphNode) => {
           const group = new THREE.Group();
