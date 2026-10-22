@@ -19,7 +19,7 @@ function seeded() {
       ...many('person_rare', 2, 3),
       ...many('anon_abc123', 50, 1),
     ],
-    { now },
+    { now, selfId: 'person_michael' },
   );
   return { g, r };
 }
@@ -44,6 +44,6 @@ test('keeps labels but no contact details, and is repeatable', () => {
   const { g } = seeded();
   expect(g.getEntity('person_mom')!.properties).toMatchObject({ contacts: 40, labels: ['family'] });
   const before = g.entityCount;
-  seedFromComms(g, many('person_mom', 40, 1, ['family']), { now });
+  seedFromComms(g, many('person_mom', 40, 1, ['family']), { now, selfId: 'person_michael' });
   expect(g.entityCount).toBe(before);
 });
