@@ -200,3 +200,26 @@ test("archiveLocalMemoriesToRemote archives memories older than threshold and pr
   await rm(dir, { recursive: true, force: true });
 });
 
+
+test("archiveLocalMemoriesToRemote archives entries written by server.ts with loggedAt", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "archive-loggedat-test-"));
+  const file = join(dir, "memories.jsonl");
+  const now = Date.parse("2026-10-15T00:00:00.000Z");
+  const oldDate = new Date(now - 100 * 86_400_000).toISOString();
+  await writeFile(file, JSON.stringify({ title: "Logged", body: "Body", loggedAt: oldDate, piecesSaved: false, eventCount: 1 }) + "\n");
+
+  const paths: string[] = [];
+  const c = new ArchiveClient({
+    baseUrl: "http://x",
+    token: "tok",
+    fetchImpl: (async (_url: string, init?: { body?: string }) => {
+      paths.push(JSON.parse(String(init?.body)).path);
+      return new Response(JSON.stringify({ itemId: "id-1", existed: false }), { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+
+  const res = await archiveLocalMemoriesToRemote(c, file, { olderThanDays: 90, now });
+  assert.equal(res.archived, 1);
+  assert.deepEqual(paths, [`ltm/${oldDate}`]);
+  await rm(dir, { recursive: true, force: true });
+});
