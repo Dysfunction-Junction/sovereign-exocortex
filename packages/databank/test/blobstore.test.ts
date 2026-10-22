@@ -81,3 +81,80 @@ describe("BlobStore", () => {
     }
   });
 });
+
+describe("BlobStore.rewriteLegacy", () => {
+  let dir: string;
+  let keys: DatabankKeys;
+  let store: BlobStore;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "dbk-mig-"));
+    keys = new DatabankKeys(Buffer.alloc(32, 5));
+    store = new BlobStore(dir, keys);
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const plant = (plain: Buffer): string => {
+    const h = keys.idHasher();
+    h.update(plain);
+    const id = h.digest();
+    mkdirSync(dirname(store.pathFor(id)), { recursive: true });
+    writeFileSync(store.pathFor(id), legacyEncrypt(keys, plain, Buffer.from([7, 7, 7, 7])));
+    return id;
+  };
+  const magic = (id: string): string => readFileSync(store.pathFor(id)).subarray(0, 4).toString();
+  const read = async (id: string): Promise<Buffer> => {
+    const parts: Buffer[] = [];
+    for await (const c of store.get(id)) parts.push(c as Buffer);
+    return Buffer.concat(parts);
+  };
+
+  it("replaces an XDB2 blob with XDB3 under the same id and plaintext", async () => {
+    const plain = Buffer.alloc(1024 * 1024 + 99, 3);
+    const id = plant(plain);
+    assert.deepEqual(await store.rewriteLegacy(id), { id, migrated: true });
+    assert.equal(magic(id), "XDB3");
+    assert.ok((await read(id)).equals(plain));
+    assert.deepEqual(await store.verify(id), { ok: true });
+    assert.deepEqual(readdirSync(join(dir, "tmp")), []);
+    assert.deepEqual(readdirSync(dirname(store.pathFor(id))).filter((f) => f.endsWith(".bak")), []);
+  });
+
+  it("is a no-op for an XDB3 blob", async () => {
+    const r = await store.put(Readable.from([Buffer.from("already new")]));
+    const before = readFileSync(store.pathFor(r.id));
+    assert.deepEqual(await store.rewriteLegacy(r.id), { id: r.id, migrated: false });
+    assert.ok(readFileSync(store.pathFor(r.id)).equals(before));
+  });
+
+  it("a corrupt legacy blob throws and the original is untouched", async () => {
+    const id = plant(Buffer.from("will be damaged"));
+    const bytes = readFileSync(store.pathFor(id));
+    bytes[bytes.length - 1] ^= 1;
+    writeFileSync(store.pathFor(id), bytes);
+    await assert.rejects(store.rewriteLegacy(id));
+    assert.ok(readFileSync(store.pathFor(id)).equals(bytes));
+    assert.deepEqual(readdirSync(join(dir, "tmp")), []);
+  });
+
+  it("a failure after the temp file is written keeps the original readable and removes the temp", async () => {
+    class Flaky extends BlobStore {
+      protected override async beforeReplace(): Promise<void> {
+        throw new Error("simulated crash before replace");
+      }
+    }
+    const flaky = new Flaky(dir, keys);
+    const id = plant(Buffer.from("survive me"));
+    const original = readFileSync(flaky.pathFor(id));
+    await assert.rejects(flaky.rewriteLegacy(id), /simulated crash/);
+    assert.ok(readFileSync(flaky.pathFor(id)).equals(original));
+    assert.deepEqual(readdirSync(join(dir, "tmp")), []);
+    assert.equal(magic(id), "XDB2");
+    assert.deepEqual(await flaky.verify(id), { ok: true });
+  });
+
+  it("refuses an id that does not exist or is not a blob id", async () => {
+    await assert.rejects(store.rewriteLegacy("not-an-id"), /invalid blob id/);
+    await assert.rejects(store.rewriteLegacy("a".repeat(64)));
+  });
+});
