@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../../mobile/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm --filter @exocortex/mobile dev",
     "beforeBuildCommand": "pnpm --filter @exocortex/mobile build"
   },
   "app": {
