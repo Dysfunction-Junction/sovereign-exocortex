@@ -1213,6 +1213,7 @@ public class NativeTelemetrySync {
     private static FlushOutcome flushInternal(Context context, FlushRun run) {
         List<Target> targets = getConnectionTargets(context);
         if (targets.isEmpty()) {
+            Log.w(TAG, "No usable connection targets (URL or token missing/unreadable)");
             return FlushOutcome.UNCONFIGURED;
         }
 
@@ -1322,7 +1323,9 @@ public class NativeTelemetrySync {
                         continue;
                     }
                 } catch (Exception e) {
-                    // Timeout, connection refused, or cancelled via disconnectActive()
+                    // Timeout, connection refused, or cancelled via disconnectActive().
+                    // Log only the failure class and target host (never URLs with paths, headers or tokens).
+                    Log.w(TAG, "Target " + target.mode + " request failed: " + e.getClass().getSimpleName());
                 } finally {
                     run.activeConnection = null;
                     if (conn != null) {
