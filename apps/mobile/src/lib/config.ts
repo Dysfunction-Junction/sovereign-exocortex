@@ -1,6 +1,7 @@
 import { Preferences } from "@capacitor/preferences";
 import { Capacitor } from "@capacitor/core";
 import { getCredentialStore } from "./credentialStore";
+import { validateBaseUrl } from "./urlPolicy";
 
 // Dual-profile connection (Plan A LAN / Plan B Remote Gateway):
 //  - Plan A (LAN / USB): fast local path, e.g. http://192.168.1.x:8787
@@ -21,13 +22,46 @@ const SCREEN_CONTEXT_ENABLED_KEY = "pieces-android:screenContextEnabled";
 const NOTIFICATION_CAPTURE_ENABLED_KEY = "pieces-android:notificationCaptureEnabled";
 const SMS_BACKFILL_HIGH_WATER_KEY = "pieces-android:smsBackfillHighWater";
 
+/** Cleartext loopback is a desktop/dev convenience; the release phone app talks https only. */
+function urlPolicyOptions(): { allowLoopbackHttp: boolean } {
+  return { allowLoopbackHttp: isDesktopApp() || import.meta.env.DEV === true };
+}
+
+/** Human-readable problem with a candidate connection URL, or null if it passes the policy. */
+export function checkConnectionUrl(url: string): string | null {
+  const check = validateBaseUrl(url, urlPolicyOptions());
+  return check.ok ? null : `Cannot use ${url.trim() || "an empty address"}: ${check.reason}.`;
+}
+
+/** An empty string clears the profile; anything else must pass the URL policy. */
+function checkedUrlForSave(url: string): string {
+  if (url.trim() === "") return "";
+  const check = validateBaseUrl(url, urlPolicyOptions());
+  if (!check.ok) throw new Error(`Cannot use ${url.trim()}: ${check.reason}.`);
+  return check.url;
+}
+
+export class InsecureConnectionError extends Error {
+  readonly rejected: Array<{ url: string; reason: string }>;
+
+  constructor(rejected: Array<{ url: string; reason: string }>) {
+    super(
+      "Refusing to send credentials over an insecure connection. " +
+        rejected.map((r) => `${r.url}: ${r.reason}`).join("; ") +
+        ". Update the address in Settings.",
+    );
+    this.rejected = rejected;
+    this.name = "InsecureConnectionError";
+  }
+}
+
 export async function getProxyBaseUrl(): Promise<string | null> {
   const { value } = await Preferences.get({ key: PROXY_BASE_URL_KEY });
   return value;
 }
 
 export async function setProxyBaseUrl(url: string): Promise<void> {
-  await Preferences.set({ key: PROXY_BASE_URL_KEY, value: url.replace(/\/$/, "") });
+  await Preferences.set({ key: PROXY_BASE_URL_KEY, value: checkedUrlForSave(url) });
 }
 
 /**
@@ -76,7 +110,7 @@ export async function getRemoteGatewayUrl(): Promise<string | null> {
 }
 
 export async function setRemoteGatewayUrl(url: string): Promise<void> {
-  await Preferences.set({ key: REMOTE_GATEWAY_URL_KEY, value: url.replace(/\/$/, "") });
+  await Preferences.set({ key: REMOTE_GATEWAY_URL_KEY, value: checkedUrlForSave(url) });
 }
 
 export async function getRemoteGatewayToken(): Promise<string | null> {
@@ -211,13 +245,25 @@ export async function getConnectionTargets(): Promise<ConnectionTarget[]> {
     remoteUrl = "http://127.0.0.1:8788";
   }
 
-  const targets: ConnectionTarget[] = [];
+  const candidates: ConnectionTarget[] = [];
   if (lanUrl && (lanToken || isDesktopApp())) {
-    targets.push({ baseUrl: lanUrl, token: lanToken ?? "", mode: "lan" });
+    candidates.push({ baseUrl: lanUrl, token: lanToken ?? "", mode: "lan" });
   }
   if (remoteUrl && (remoteToken || isDesktopApp())) {
-    targets.push({ baseUrl: remoteUrl, token: remoteToken ?? "", mode: "remote" });
+    candidates.push({ baseUrl: remoteUrl, token: remoteToken ?? "", mode: "remote" });
   }
+
+  // Re-check at the point of use: values saved by older builds were never validated, and no
+  // request (or Authorization header) may be built from a target that fails the policy.
+  const opts = urlPolicyOptions();
+  const targets: ConnectionTarget[] = [];
+  const rejected: Array<{ url: string; reason: string }> = [];
+  for (const c of candidates) {
+    const check = validateBaseUrl(c.baseUrl, opts);
+    if (check.ok) targets.push({ ...c, baseUrl: check.url });
+    else rejected.push({ url: c.baseUrl, reason: check.reason });
+  }
+  if (targets.length === 0 && rejected.length > 0) throw new InsecureConnectionError(rejected);
   return targets;
 }
 
