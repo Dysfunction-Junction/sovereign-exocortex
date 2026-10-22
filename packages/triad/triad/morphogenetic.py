@@ -19,7 +19,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable, Union
+from typing import Optional, List, Dict, Any, Callable, Protocol, Union
 
 try:
     from triad.worktree import isolated_worktree, create_worktree, remove_worktree
@@ -56,9 +56,52 @@ class MutationCandidate:
     verification_output: str = ""
 
 
+class VerificationRunner(Protocol):
+    """Runs a trusted, named verification profile inside an isolated workspace.
+
+    Implementations are responsible for the security boundary (separate identity, no host
+    secrets, no network, resource limits, descendant cleanup). The engine never runs candidate
+    code itself.
+    """
+
+    def run(
+        self, *, workspace: Path, profile: str, timeout: int
+    ) -> "subprocess.CompletedProcess[str]": ...
+
+
+class UnsafeHostRunner:
+    """Runs a trusted profile as the current user on the host. NOT a sandbox.
+
+    Unsafe for untrusted repairs: the verified code can read this user's files and use the
+    network. Intended only for hermetic, locally authored trials, and the engine refuses it
+    unless allow_unsafe_host_runner=True is passed explicitly.
+    """
+
+    _ENV_KEYS = ("PATH", "Path", "SYSTEMROOT", "SystemRoot", "WINDIR", "windir", "TEMP", "TMP")
+
+    def __init__(self, profiles: Dict[str, List[str]]):
+        self._profiles = {name: list(argv) for name, argv in profiles.items()}
+
+    def run(self, *, workspace: Path, profile: str, timeout: int) -> "subprocess.CompletedProcess[str]":
+        argv = self._profiles[profile]  # KeyError for anything not in trusted configuration
+        env = {k: os.environ[k] for k in self._ENV_KEYS if k in os.environ}
+        env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+        return subprocess.run(
+            argv, cwd=str(workspace), env=env, capture_output=True, text=True, timeout=timeout
+        )
+
+
 class MorphogeneticEngine:
-    def __init__(self, repo_root: Optional[Union[str, Path]] = None):
+    def __init__(
+        self,
+        repo_root: Optional[Union[str, Path]] = None,
+        verification_runner: Optional[VerificationRunner] = None,
+        allow_unsafe_host_runner: bool = False,
+    ):
+        if isinstance(verification_runner, UnsafeHostRunner) and not allow_unsafe_host_runner:
+            raise ValueError("UnsafeHostRunner requires allow_unsafe_host_runner=True (unsafe for untrusted repairs)")
         self.repo_root = Path(repo_root or os.getcwd()).resolve()
+        self.verification_runner = verification_runner
 
     def intercept_friction(
         self,
@@ -143,7 +186,7 @@ class MorphogeneticEngine:
     def evaluate_mutation_in_sandbox(
         self,
         candidate: MutationCandidate,
-        verification_command: List[str],
+        verification_profile: str,
         base_commit: str = "HEAD",
     ) -> bool:
         """
@@ -152,6 +195,13 @@ class MorphogeneticEngine:
         apoptosis (immediate discard). If 100% pass, the mutation survives.
         """
         candidate.survival_passed = False
+        candidate.unified_diff = ""
+        candidate.verification_output = ""
+
+        # Fail closed: without an isolated runner nothing derived from a candidate is ever executed.
+        if self.verification_runner is None:
+            candidate.verification_output = "Darwinian Rejection: isolated verification runner unavailable"
+            return False
 
         # Cheap input screening first: no worktree is created for a spelling we would never accept.
         bad_input = self._validate_rel_input(candidate.target_file)
@@ -210,32 +260,44 @@ class MorphogeneticEngine:
                         candidate.verification_output = f"Darwinian Rejection: Mutation violated architectural invariant (found forbidden token '{token}')"
                         return False
 
-                # 3. Darwinian Survival Gate: Execute test harness
-                res = subprocess.run(
-                    verification_command,
-                    cwd=str(sandbox),
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
+                # 3. Darwinian Survival Gate: run the trusted profile through the isolated runner
+                rel = target_file_path.relative_to(sandbox).as_posix()
+                try:
+                    res = self.verification_runner.run(workspace=sandbox, profile=verification_profile, timeout=120)
+                except subprocess.TimeoutExpired:
+                    candidate.verification_output = "Darwinian Rejection: verification timed out"
+                    return False
 
                 candidate.verification_output = (res.stdout + "\n" + res.stderr).strip()
+                if res.returncode != 0:
+                    return False  # Apoptosis
 
-                if res.returncode == 0:
-                    candidate.survival_passed = True
-                    # Generate verified git diff
-                    diff_res = subprocess.run(
-                        ["git", "diff", "--", candidate.target_file],
-                        cwd=str(sandbox),
-                        capture_output=True,
-                        text=True,
+                # A zero exit is not enough: only the declared target may differ, and it must be an
+                # unstaged modification (no extra, staged, deleted or untracked files).
+                status = subprocess.run(
+                    ["git", "status", "--porcelain", "--untracked-files=all"],
+                    cwd=str(sandbox), capture_output=True, text=True,
+                )
+                unexpected = [
+                    line for line in status.stdout.splitlines()
+                    if not (line[:2] == " M" and line[3:].strip('"') == rel)
+                ]
+                if status.returncode != 0 or unexpected:
+                    candidate.verification_output = (
+                        "Darwinian Rejection: unexpected changes after verification: " + "; ".join(unexpected)[:300]
                     )
-                    candidate.unified_diff = diff_res.stdout
-                    return True
-                else:
-                    # Apoptosis
-                    candidate.survival_passed = False
                     return False
+
+                diff_res = subprocess.run(
+                    ["git", "diff", "--", f":(literal){rel}"],
+                    cwd=str(sandbox), capture_output=True, text=True,
+                )
+                if diff_res.returncode != 0 or not diff_res.stdout:
+                    candidate.verification_output = "Darwinian Rejection: could not produce a verified diff"
+                    return False
+                candidate.unified_diff = diff_res.stdout
+                candidate.survival_passed = True
+                return True
 
         except Exception as e:
             candidate.verification_output = f"Sandbox Darwinian execution error: {str(e)}"
@@ -277,7 +339,7 @@ class MorphogeneticEngine:
         self,
         event: RuntimeFrictionEvent,
         candidates: List[MutationCandidate],
-        verification_command: List[str],
+        verification_profile: str,
         base_commit: str = "HEAD",
     ) -> Dict[str, Any]:
         """
@@ -291,7 +353,7 @@ class MorphogeneticEngine:
         for candidate in candidates:
             passed = self.evaluate_mutation_in_sandbox(
                 candidate,
-                verification_command,
+                verification_profile,
                 base_commit=base_commit,
             )
             results.append({
@@ -360,7 +422,14 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
         subprocess.run(base_cmd + ["add", "."], check=True)
         subprocess.run(base_cmd + ["commit", "-qm", "initial commit with zero-weight bug"], check=True)
 
-        engine = MorphogeneticEngine(temp_repo)
+        # Hermetic trial of code authored right here: the host runner is acceptable, and says so.
+        engine = MorphogeneticEngine(
+            temp_repo,
+            verification_runner=UnsafeHostRunner(
+                {"unittest-target-calc": [sys.executable, "-m", "unittest", "test_target_calc.py"]}
+            ),
+            allow_unsafe_host_runner=True,
+        )
 
         # 1. Intercept simulated runtime friction
         try:
@@ -371,8 +440,6 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
                 failing_file="target_calc.py",
                 context={"test_harness": "test_target_calc.py"},
             )
-
-        verification_cmd = [sys.executable, "-m", "unittest", "test_target_calc.py"]
 
         # 2. Candidate 1: Invariant Violation (forbidden token) -> Apoptosis
         cand_forbidden = MutationCandidate(
@@ -418,7 +485,7 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
         trial_result = engine.execute_darwinian_trial(
             friction,
             [cand_forbidden, cand_broken, cand_healed],
-            verification_cmd,
+            "unittest-target-calc",
         )
 
         trial_result["error_type"] = friction.error_type
