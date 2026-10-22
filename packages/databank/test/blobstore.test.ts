@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { BlobStore, isBlobId } from "../blobstore.js";
 import { DatabankKeys } from "../crypto.js";
+import { legacyEncrypt } from "./legacy-xdb2.js";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 describe("BlobStore", () => {
   let dir: string;
@@ -31,6 +34,29 @@ describe("BlobStore", () => {
     assert.equal(b.deduped, true);
     assert.equal((await read(a.id)).toString(), "photo bytes");
     assert.ok(isBlobId(a.id));
+  });
+
+  it("new blobs are XDB3 and keep the HMAC id of the plaintext", async () => {
+    const r = await store.put(Readable.from([Buffer.from("fresh")]));
+    assert.equal(readFileSync(store.pathFor(r.id)).subarray(0, 4).toString(), "XDB3");
+    const h = new DatabankKeys(Buffer.alloc(32, 4)).idHasher();
+    h.update(Buffer.from("fresh"));
+    assert.equal(h.digest(), r.id);
+  });
+
+  it("reads and verifies an existing XDB2 blob, and put() dedupes against it without rewriting", async () => {
+    const keys = new DatabankKeys(Buffer.alloc(32, 4));
+    const h = keys.idHasher();
+    h.update(Buffer.from("old data"));
+    const id = h.digest();
+    mkdirSync(dirname(store.pathFor(id)), { recursive: true });
+    writeFileSync(store.pathFor(id), legacyEncrypt(keys, Buffer.from("old data"), Buffer.from([9, 9, 9, 9])));
+    assert.equal((await read(id)).toString(), "old data");
+    assert.deepEqual(await store.verify(id), { ok: true });
+    const again = await store.put(Readable.from([Buffer.from("old data")]));
+    assert.equal(again.id, id);
+    assert.equal(again.deduped, true);
+    assert.equal(readFileSync(store.pathFor(id)).subarray(0, 4).toString(), "XDB2");
   });
 
   it("leaves no temp files and never writes plaintext to disk", async () => {

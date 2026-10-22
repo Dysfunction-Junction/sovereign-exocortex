@@ -5,11 +5,15 @@
  * One 32-byte master key (file: hex, base64 or raw) fans out through HKDF-SHA256 into
  * independent subkeys: `blob` (AES-256-GCM) and `id` (HMAC for content-addressed IDs).
  *
- * Blob format (XDB2): magic(4) | nonce_prefix(4) | frame* where each frame is
+ * Blob format (XDB3, written): magic(4) | salt(32) | frame* where each frame is
  *   u32be ciphertext_len | ciphertext | tag(16)
- * Frame nonce = nonce_prefix(4) || u64be frame_index. AAD = magic || prefix || index
- * || final_flag(1). The last frame carries final_flag=1, so a truncated file (missing
- * final frame), reordered frames or flipped bits all fail authentication.
+ * The frame key is HKDF(blobKey, salt) so every blob has its own AES key; the frame nonce
+ * is zero(4) || u64be frame_index. AAD = whole header || index || final_flag(1). The last
+ * frame carries final_flag=1, so a truncated file (missing final frame), reordered frames,
+ * a swapped salt or flipped bits all fail authentication.
+ *
+ * Legacy XDB2 (read only): magic(4) | nonce_prefix(4) | frame*, one key for all blobs and
+ * only 32 random bits of nonce separation between blobs, which is why it is no longer written.
  */
 
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
@@ -17,11 +21,14 @@ import { createReadStream, createWriteStream, readFileSync } from "node:fs";
 import { once } from "node:events";
 import { Transform, type Readable } from "node:stream";
 
-export const MAGIC = Buffer.from("XDB2");
+export const LEGACY_MAGIC = Buffer.from("XDB2");
+export const MAGIC_V3 = Buffer.from("XDB3");
 export const FRAME_SIZE = 1024 * 1024;
 const TAG_LEN = 16;
 const NONCE_LEN = 12;
 const PREFIX_LEN = 4;
+const SALT_LEN = 32;
+const V3_HEADER_LEN = MAGIC_V3.length + SALT_LEN;
 
 export class DatabankKeys {
   readonly blobKey: Buffer;
@@ -33,6 +40,14 @@ export class DatabankKeys {
       Buffer.from(hkdfSync("sha256", master, Buffer.alloc(0), `exocortex-databank/${info}`, 32));
     this.blobKey = derive("blob-aes-256-gcm/v1");
     this.idKey = derive("blob-id-hmac/v1");
+  }
+
+  /** Per-blob AES key for XDB3: HKDF over the blob key with the blob's random salt. */
+  deriveBlobKey(salt: Buffer): Buffer {
+    if (salt.length !== SALT_LEN) throw new Error("invalid XDB3 salt length");
+    return Buffer.from(
+      hkdfSync("sha256", this.blobKey, salt, "exocortex-databank/xdb3/frame-key/v1", 32),
+    );
   }
 
   static generate(): Buffer {
@@ -61,24 +76,37 @@ export function parseKey(raw: Buffer): Buffer {
 }
 
 function nonceFor(prefix: Buffer, index: number): Buffer {
+  if (!Number.isSafeInteger(index) || index < 0) throw new Error("frame index out of range");
   const n = Buffer.alloc(NONCE_LEN);
   prefix.copy(n, 0);
   n.writeBigUInt64BE(BigInt(index), PREFIX_LEN);
   return n;
 }
 
-function aadFor(prefix: Buffer, index: number, final: boolean): Buffer {
-  const a = Buffer.alloc(MAGIC.length + PREFIX_LEN + 8 + 1);
-  MAGIC.copy(a, 0);
-  prefix.copy(a, MAGIC.length);
-  a.writeBigUInt64BE(BigInt(index), MAGIC.length + PREFIX_LEN);
+/** XDB2 additional data; kept byte-for-byte so old archives stay readable. */
+function legacyAad(prefix: Buffer, index: number, final: boolean): Buffer {
+  const a = Buffer.alloc(LEGACY_MAGIC.length + PREFIX_LEN + 8 + 1);
+  LEGACY_MAGIC.copy(a, 0);
+  prefix.copy(a, LEGACY_MAGIC.length);
+  a.writeBigUInt64BE(BigInt(index), LEGACY_MAGIC.length + PREFIX_LEN);
   a[a.length - 1] = final ? 1 : 0;
   return a;
 }
 
-function sealFrame(key: Buffer, prefix: Buffer, index: number, final: boolean, plain: Buffer): Buffer {
-  const c = createCipheriv("aes-256-gcm", key, nonceFor(prefix, index));
-  c.setAAD(aadFor(prefix, index, final));
+/** XDB3 additional data: the entire header (magic + salt) is bound to every frame. */
+function aadV3(header: Buffer, index: number, final: boolean): Buffer {
+  const a = Buffer.alloc(header.length + 8 + 1);
+  header.copy(a, 0);
+  a.writeBigUInt64BE(BigInt(index), header.length);
+  a[a.length - 1] = final ? 1 : 0;
+  return a;
+}
+
+const ZERO_PREFIX = Buffer.alloc(PREFIX_LEN);
+
+function sealFrame(key: Buffer, header: Buffer, index: number, final: boolean, plain: Buffer): Buffer {
+  const c = createCipheriv("aes-256-gcm", key, nonceFor(ZERO_PREFIX, index));
+  c.setAAD(aadV3(header, index, final));
   const ct = Buffer.concat([c.update(plain), c.final()]);
   const head = Buffer.alloc(4);
   head.writeUInt32BE(ct.length);
@@ -95,7 +123,8 @@ export async function encryptStream(
   destPath: string,
 ): Promise<{ id: string; size: number }> {
   const out = createWriteStream(destPath, { flags: "wx", mode: 0o600 });
-  const prefix = randomBytes(PREFIX_LEN);
+  const header = Buffer.concat([MAGIC_V3, randomBytes(SALT_LEN)]);
+  const frameKey = keys.deriveBlobKey(header.subarray(MAGIC_V3.length));
   const hasher = keys.idHasher();
   let size = 0;
   let index = 0;
@@ -106,7 +135,7 @@ export async function encryptStream(
   };
 
   try {
-    await write(Buffer.concat([MAGIC, prefix]));
+    await write(header);
     for await (const chunk of source) {
       const c = chunk as Buffer;
       hasher.update(c);
@@ -114,11 +143,11 @@ export async function encryptStream(
       pending = pending.length === 0 ? c : Buffer.concat([pending, c]);
       // Hold back at least one byte so the last frame can always be flagged final.
       while (pending.length > FRAME_SIZE) {
-        await write(sealFrame(keys.blobKey, prefix, index++, false, pending.subarray(0, FRAME_SIZE)));
+        await write(sealFrame(frameKey, header, index++, false, pending.subarray(0, FRAME_SIZE)));
         pending = pending.subarray(FRAME_SIZE);
       }
     }
-    await write(sealFrame(keys.blobKey, prefix, index, true, pending));
+    await write(sealFrame(frameKey, header, index, true, pending));
     out.end();
     await once(out, "finish");
   } catch (err) {
@@ -128,34 +157,65 @@ export async function encryptStream(
   return { id: hasher.digest(), size };
 }
 
-/** Transform: XDB2 bytes in, plaintext out. Any tampering, truncation or reorder errors the stream. */
+interface FrameOpener {
+  open(index: number, final: boolean, ct: Buffer, tag: Buffer): Buffer | null;
+}
+
+function gcmOpener(key: Buffer, nonce: (i: number) => Buffer, aad: (i: number, f: boolean) => Buffer): FrameOpener {
+  return {
+    open(index, final, ct, tag) {
+      try {
+        const d = createDecipheriv("aes-256-gcm", key, nonce(index));
+        d.setAAD(aad(index, final));
+        d.setAuthTag(tag);
+        return Buffer.concat([d.update(ct), d.final()]);
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/** Transform: XDB3 (or legacy XDB2) bytes in, plaintext out. Any tampering, truncation or reorder errors the stream. */
 export function decryptTransform(keys: DatabankKeys): Transform {
   let buf: Buffer = Buffer.alloc(0);
-  let prefix: Buffer | null = null;
+  let opener: FrameOpener | null = null;
   let index = 0;
   let sawFinal = false;
 
-  const open = (pfx: Buffer, i: number, final: boolean, ct: Buffer, tag: Buffer): Buffer | null => {
-    try {
-      const d = createDecipheriv("aes-256-gcm", keys.blobKey, nonceFor(pfx, i));
-      d.setAAD(aadFor(pfx, i, final));
-      d.setAuthTag(tag);
-      return Buffer.concat([d.update(ct), d.final()]);
-    } catch {
-      return null;
+  const readHeader = (flush: boolean): boolean => {
+    if (buf.length < MAGIC_V3.length) {
+      if (flush) throw new Error("truncated blob header");
+      return false;
     }
+    const magic = buf.subarray(0, MAGIC_V3.length);
+    if (magic.equals(MAGIC_V3)) {
+      if (buf.length < V3_HEADER_LEN) {
+        if (flush) throw new Error("truncated blob header");
+        return false;
+      }
+      const header = Buffer.from(buf.subarray(0, V3_HEADER_LEN));
+      const frameKey = keys.deriveBlobKey(header.subarray(MAGIC_V3.length));
+      opener = gcmOpener(frameKey, (i) => nonceFor(ZERO_PREFIX, i), (i, f) => aadV3(header, i, f));
+      buf = buf.subarray(V3_HEADER_LEN);
+      return true;
+    }
+    if (magic.equals(LEGACY_MAGIC)) {
+      if (buf.length < LEGACY_MAGIC.length + PREFIX_LEN) {
+        if (flush) throw new Error("truncated blob header");
+        return false;
+      }
+      const prefix = Buffer.from(buf.subarray(LEGACY_MAGIC.length, LEGACY_MAGIC.length + PREFIX_LEN));
+      opener = gcmOpener(keys.blobKey, (i) => nonceFor(prefix, i), (i, f) => legacyAad(prefix, i, f));
+      buf = buf.subarray(LEGACY_MAGIC.length + PREFIX_LEN);
+      return true;
+    }
+    throw new Error("not an XDB blob");
   };
 
   const drain = (flush: boolean, push: (b: Buffer) => void): void => {
-    if (!prefix) {
-      if (buf.length < MAGIC.length + PREFIX_LEN) {
-        if (flush) throw new Error("truncated blob header");
-        return;
-      }
-      if (!buf.subarray(0, MAGIC.length).equals(MAGIC)) throw new Error("not an XDB2 blob");
-      prefix = Buffer.from(buf.subarray(MAGIC.length, MAGIC.length + PREFIX_LEN));
-      buf = buf.subarray(MAGIC.length + PREFIX_LEN);
-    }
+    if (!opener && !readHeader(flush)) return;
+    const frames = opener as unknown as FrameOpener;
     while (!sawFinal && buf.length >= 4) {
       const ctLen = buf.readUInt32BE(0);
       if (ctLen > FRAME_SIZE) throw new Error("frame too large");
@@ -164,10 +224,10 @@ export function decryptTransform(keys: DatabankKeys): Transform {
       const ct = buf.subarray(4, 4 + ctLen);
       const tag = buf.subarray(4 + ctLen, total);
       // Only a full-size frame can be non-final; anything shorter must be the final frame.
-      let plain = ctLen === FRAME_SIZE ? open(prefix, index, false, ct, tag) : null;
+      let plain = ctLen === FRAME_SIZE ? frames.open(index, false, ct, tag) : null;
       let final = false;
       if (!plain) {
-        plain = open(prefix, index, true, ct, tag);
+        plain = frames.open(index, true, ct, tag);
         final = true;
       }
       if (!plain) throw new Error(`authentication failed at frame ${index}`);
