@@ -138,6 +138,7 @@ async function relayEnvelope(
       body: { error: "node is on this PC but does not take a delegated call", to: envelope.to },
     };
   }
+  const memoryToken = (env.GATEWAY_TOKEN ?? env.PIECES_GATEWAY_TOKEN ?? "").trim();
   try {
     const delegated = await fetchImpl(new URL("/mishmash/delegate", upstream), {
       method: "POST",
@@ -146,6 +147,10 @@ async function relayEnvelope(
         // The triad refuses delegated approve/reject without its server token.
         ...(envelope.to === "autonomous-triad" && env.TRIAD_SERVER_TOKEN
           ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` }
+          : {}),
+        // The memory service no longer trusts loopback callers; it wants its own gateway token.
+        ...(memoryToken && envelope.to === "pieces-for-all"
+          ? { Authorization: `Bearer ${memoryToken}` }
           : {}),
       },
       body: JSON.stringify(envelope),

@@ -151,3 +151,26 @@ test("forwardDelegate sends TRIAD_SERVER_TOKEN only to the triad", async () => {
   assert.equal(seen[0].auth, "Bearer triad-secret");
   assert.equal(seen[1].auth, null);
 });
+
+test("forwardDelegate sends the memory gateway token only to pieces-for-all", async () => {
+  const seen: Array<{ to: string; auth: string | null }> = [];
+  const fakeFetch = (async (url: URL | string, init?: RequestInit) => {
+    seen.push({ to: String(url), auth: new Headers(init?.headers).get("authorization") });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const env = { TRIAD_SERVER_TOKEN: "triad-secret", GATEWAY_TOKEN: " mem-secret " } as NodeJS.ProcessEnv;
+  const base = { v: 1 as const, id: "env-12345678", from: "x-client", capability: "memory", action: "ping", payload: {} };
+  await forwardDelegate({ ...base, to: "pieces-for-all" }, env, fakeFetch);
+  await forwardDelegate({ ...base, to: "autonomous-triad" }, env, fakeFetch);
+  await forwardDelegate({ ...base, to: "hermes-api" }, env, fakeFetch);
+  assert.equal(seen[0].auth, "Bearer mem-secret");
+  assert.equal(seen[1].auth, "Bearer triad-secret");
+  assert.equal(seen[2].auth, null);
+
+  // falls back to PIECES_GATEWAY_TOKEN; blank sends nothing
+  seen.length = 0;
+  await forwardDelegate({ ...base, to: "pieces-for-all" }, { PIECES_GATEWAY_TOKEN: "alt" } as NodeJS.ProcessEnv, fakeFetch);
+  await forwardDelegate({ ...base, to: "pieces-for-all" }, { GATEWAY_TOKEN: "   " } as NodeJS.ProcessEnv, fakeFetch);
+  assert.equal(seen[0].auth, "Bearer alt");
+  assert.equal(seen[1].auth, null);
+});

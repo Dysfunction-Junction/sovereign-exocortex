@@ -64,3 +64,30 @@ test("buildChildEnv passes TRIAD_SERVER_TOKEN to the triad child only", () => {
     else process.env.TRIAD_SERVER_TOKEN = prev;
   }
 });
+
+test("waitForPing sends the memory gateway token only to pieces-for-all", async () => {
+  const env = { GATEWAY_TOKEN: " mem-tok " } as NodeJS.ProcessEnv;
+  const memSeen: Array<Record<string, string>> = [];
+  await waitForPing("pieces-for-all", "http://127.0.0.1:1", () => "", undefined, 2000, { env, fetchImpl: pingFetch(memSeen, "pieces-for-all") });
+  assert.equal(memSeen[0]?.Authorization, "Bearer mem-tok");
+  const otherSeen: Array<Record<string, string>> = [];
+  await waitForPing("registry-app", "http://127.0.0.1:1", () => "", undefined, 2000, { env, fetchImpl: pingFetch(otherSeen, "registry-app") });
+  assert.equal(otherSeen[0]?.Authorization, undefined);
+});
+
+test("buildChildEnv passes the gateway token to the memory gateway only", () => {
+  const prev = { g: process.env.GATEWAY_TOKEN, p: process.env.PIECES_GATEWAY_TOKEN };
+  process.env.GATEWAY_TOKEN = "gw-tok";
+  process.env.PIECES_GATEWAY_TOKEN = "pg-tok";
+  try {
+    const mem = buildChildEnv("PORT", 1, {}, "pieces-for-all");
+    assert.equal(mem.GATEWAY_TOKEN, "gw-tok");
+    assert.equal(mem.PIECES_GATEWAY_TOKEN, "pg-tok");
+    const other = buildChildEnv("PORT", 1, {}, "registry-app");
+    assert.equal(other.GATEWAY_TOKEN, undefined);
+    assert.equal(other.PIECES_GATEWAY_TOKEN, undefined);
+  } finally {
+    if (prev.g === undefined) delete process.env.GATEWAY_TOKEN; else process.env.GATEWAY_TOKEN = prev.g;
+    if (prev.p === undefined) delete process.env.PIECES_GATEWAY_TOKEN; else process.env.PIECES_GATEWAY_TOKEN = prev.p;
+  }
+});
