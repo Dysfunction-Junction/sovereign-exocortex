@@ -153,5 +153,90 @@ class TestMorphogeneticEngine(unittest.TestCase):
         self.assertTrue(results_by_id["mut_darwinian_survivor"]["survival_passed"])
 
 
+class TestProtectedTargetPolicy(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.root = Path(self._td.name).resolve()
+        self.engine = MorphogeneticEngine(self.root)
+
+    def _protected(self, rel):
+        return self.engine._is_protected_target(self.root, (self.root / rel).resolve())
+
+    def test_protected_paths(self):
+        for rel in [
+            "tests/helper.py", "pkg/tests/x.py", "pkg/test/x.py", "__tests__/a.ts",
+            "test_example.py", "src/test_example.py", "src/foo_test.py", "src/footest.py",
+            "a.spec.ts", "a.test.tsx", "src/b.spec.jsx", ".github/wf.yml", "invariants/x.py",
+            "src/invariants_check.py", "TESTS/x.py", "Tests/Helper.PY",
+        ]:
+            with self.subTest(rel=rel):
+                self.assertTrue(self._protected(rel), rel)
+
+    def test_ordinary_source_is_not_protected(self):
+        for rel in ["src/app.py", "packages/core/index.ts", "latest/notes.py", "contest.md"]:
+            with self.subTest(rel=rel):
+                self.assertFalse(self._protected(rel), rel)
+
+    def test_dotdot_normalisation_cannot_hide_a_protected_target(self):
+        self.assertTrue(self._protected("src/../tests/helper.py"))
+
+    def test_input_validation_rejects_ambiguous_paths(self):
+        v = MorphogeneticEngine._validate_rel_input
+        bad_inputs = ["/etc/x", "C:\\x", "C:x", "\\\\srv\\s\\x", "a.py:stream", "src\\app.py", "", "a\x00b"]
+        for bad in bad_inputs:
+            with self.subTest(bad=bad):
+                self.assertIsNotNone(v(bad), repr(bad))
+        for good in ["src/app.py", "package.json", "packages/core/index.ts"]:
+            with self.subTest(good=good):
+                self.assertIsNone(v(good), good)
+
+    def _repo_with_alias(self, link_rel, target_rel):
+        repo = self.root
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        base = ["git", "-C", str(repo), "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "core.autocrlf=false"]
+        (repo / "tests").mkdir()
+        (repo / "tests" / "helper.py").write_text("x = 1\n", encoding="utf-8")
+        (repo / "src").mkdir()
+        (repo / "src" / "app.py").write_text("y = 1\n", encoding="utf-8")
+        try:
+            os.symlink(os.path.relpath(repo / target_rel, (repo / link_rel).parent), repo / link_rel)
+        except (OSError, NotImplementedError) as e:
+            self.skipTest(f"cannot create symlinks on this platform: {e}")
+        subprocess.run(base + ["config", "core.symlinks", "true"], check=True)
+        subprocess.run(base + ["add", "-A"], check=True)
+        subprocess.run(base + ["commit", "-qm", "init"], check=True)
+        return MorphogeneticEngine(repo)
+
+    def test_in_root_alias_to_a_protected_file_is_rejected(self):
+        engine = self._repo_with_alias("src/alias.py", "tests/helper.py")
+        cand = MutationCandidate("alias", "d", "src/alias.py", "", "x = 2\n")
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, [sys.executable, "-c", "pass"]))
+        self.assertRegex(cand.verification_output, r"protected|link")
+
+    def test_in_root_alias_to_an_ordinary_file_is_rejected_as_a_link(self):
+        engine = self._repo_with_alias("src/alias.py", "src/app.py")
+        cand = MutationCandidate("alias2", "d", "src/alias.py", "", "y = 2\n")
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, [sys.executable, "-c", "pass"]))
+        self.assertIn("link", cand.verification_output)
+
+    def test_ordinary_source_mutation_still_reaches_verification(self):
+        engine = self._repo_with_alias("src/alias.py", "src/app.py")
+        cand = MutationCandidate("ok", "d", "src/app.py", "", "y = 2\n")
+        self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, [sys.executable, "-c", "pass"]))
+
+    def test_root_level_tests_dir_is_rejected_end_to_end(self):
+        engine = self._repo_with_alias("src/alias.py", "src/app.py")
+        cand = MutationCandidate("t", "d", "tests/helper.py", "", "x = 2\n")
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, [sys.executable, "-c", "pass"]))
+        self.assertIn("protected", cand.verification_output)
+
+    def test_invalid_input_is_rejected_before_any_resolution(self):
+        cand = MutationCandidate("bad", "d", "a.py:stream", "", "x")
+        self.assertFalse(self.engine.evaluate_mutation_in_sandbox(cand, [sys.executable, "-c", "pass"]))
+        self.assertIn("invalid target", cand.verification_output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,55 @@ class MorphogeneticEngine:
             return None, f"is not a regular file or does not exist: {rel}"
         return target, None
 
+    @staticmethod
+    def _validate_rel_input(rel: str) -> Optional[str]:
+        """
+        Rejects target spellings that different platforms would interpret differently:
+        empty/NUL, absolute, drive-qualified, UNC, backslash separators, and Windows
+        alternate data streams (a colon in any component). Returns an error string or None.
+        """
+        if not rel or "\x00" in rel:
+            return "empty or NUL-containing path"
+        if "\\" in rel:
+            return "backslash separators are not allowed"
+        if rel.startswith("/") or rel.startswith("//"):
+            return "absolute path"
+        if ":" in rel:
+            return "drive-qualified path or alternate data stream"
+        return None
+
+    @staticmethod
+    def _has_link_component(root: Path, rel: str) -> bool:
+        """True if any existing component of root/rel is a symlink or Windows junction."""
+        cur = root
+        for part in Path(rel).parts:
+            cur = cur / part
+            if cur.is_symlink():
+                return True
+            is_junction = getattr(cur, "is_junction", None)
+            if is_junction is not None and is_junction():
+                return True
+        return False
+
+    def _is_protected_target(self, root: Path, target: Path) -> bool:
+        """Policy on the canonical (resolved) path: tests, CI config and invariants are immutable."""
+        rel = target.relative_to(root.resolve())
+        parts = tuple(part.casefold() for part in rel.parts)
+        name = parts[-1]
+        return (
+            any(part in {"test", "tests", "__tests__", ".github", ".git"} for part in parts)
+            or any("invariants" in part for part in parts)
+            or name.startswith("test_")
+            or name.endswith(("_test.py", "test.py"))
+            or any(
+                name.endswith(suffix)
+                for suffix in (
+                    ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+                    ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx",
+                )
+            )
+        )
+
     def evaluate_mutation_in_sandbox(
         self,
         candidate: MutationCandidate,
@@ -104,6 +153,12 @@ class MorphogeneticEngine:
         """
         candidate.survival_passed = False
 
+        # Cheap input screening first: no worktree is created for a spelling we would never accept.
+        bad_input = self._validate_rel_input(candidate.target_file)
+        if bad_input:
+            candidate.verification_output = f"Darwinian Rejection: invalid target ({bad_input}): {candidate.target_file!r}"
+            return False
+
         try:
             with isolated_worktree(
                 str(self.repo_root),
@@ -111,6 +166,7 @@ class MorphogeneticEngine:
                 prefix=f"morpho_{candidate.candidate_id}",
             ) as sandbox_path:
                 sandbox = Path(sandbox_path).resolve()
+
                 target_file_path, err = self._resolve_within(sandbox, candidate.target_file)
 
                 # Path containment & file existence guard
@@ -118,20 +174,17 @@ class MorphogeneticEngine:
                     candidate.verification_output = f"Darwinian Rejection: target {err}"
                     return False
 
-                # Protected files check: Never allow mutations to test suites, harnesses, or invariants
-                norm_target = candidate.target_file.replace("\\", "/").lower()
-                if (
-                    norm_target.endswith(".test.ts")
-                    or norm_target.endswith(".test.tsx")
-                    or norm_target.endswith(".test.js")
-                    or norm_target.endswith("_test.py")
-                    or norm_target.endswith("test.py")
-                    or "/test/" in norm_target
-                    or "/tests/" in norm_target
-                    or "invariants" in norm_target
-                    or ".github/" in norm_target
+                # Protected files check on the canonical path: Never allow mutations to test suites,
+                # harnesses, or invariants, however the input spelled them (aliases, "..", case).
+                if self._is_protected_target(sandbox, target_file_path) or self._is_protected_target(
+                    sandbox, sandbox / candidate.target_file
                 ):
                     candidate.verification_output = f"Darwinian Rejection: target file is protected from mutation: {candidate.target_file}"
+                    return False
+
+                # Links can alias a protected file or redirect the write: refuse them outright.
+                if self._has_link_component(sandbox, candidate.target_file):
+                    candidate.verification_output = f"Darwinian Rejection: target path contains a symlink or junction: {candidate.target_file}"
                     return False
 
                 # 1. Apply mutation in the ephemeral sandbox
