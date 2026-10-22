@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { ChannelManager } from "./channel-manager.js";
 import { getDefaultVaultPath } from "./obsidian-adapter.js";
+import { WorldModelHost } from "../world-model-host.js";
 import { AirGapPolicy, AirGapViolationError } from "./air-gap.js";
 
 describe("channel-manager and air-gap", () => {
@@ -56,6 +57,23 @@ describe("channel-manager and air-gap", () => {
     const channels = await manager.getChannels();
     for (const c of channels) {
       assert.equal(c.airGapped, true);
+    }
+  });
+
+  it("purgeChannel removes entities with each adapter's real id prefix", () => {
+    const host = WorldModelHost.createIsolatedForTest();
+    manager.attachToWorldModel(host);
+    const ids: Record<string, string> = {
+      gmail: "gmail:thread:t1",
+      notion: "notion:page1",
+      obsidian: "doc:obsidian:a.md",
+    };
+    for (const [channel, id] of Object.entries(ids)) {
+      host.lifeGraph.addEntity({ id, type: "DOC", name: id, properties: { channelId: channel } });
+    }
+    for (const channel of ["gmail", "notion", "obsidian"] as const) {
+      assert.equal(manager.purgeChannel(channel), 1, channel);
+      assert.equal(host.lifeGraph.getEntity(ids[channel]), undefined, channel);
     }
   });
 });
