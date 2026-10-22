@@ -347,8 +347,15 @@ class TestGitWorktreeIsolation(unittest.TestCase):
             head=False
         )
 
+        # The test runs against the live checkout; other agents/editors touching it mid-run would
+        # trip the (correct) concurrent-modification guard. Pin the parent state so the test only
+        # asserts worktree setup/teardown.
+        from triad.triad_engine import capture_parent_state
+        pinned = capture_parent_state(REPO_ROOT)
+
         with patch("sys.stdout", new=io.StringIO()):
-            cmd_auto(args)
+            with patch("triad.triad_engine.capture_parent_state", return_value=pinned):
+                cmd_auto(args)
 
         current_worktrees = list_worktrees(REPO_ROOT)
         self.assertEqual(len(current_worktrees), self.initial_count)
