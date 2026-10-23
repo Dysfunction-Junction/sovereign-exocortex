@@ -109,6 +109,13 @@ if (process.env.NODE_ENV !== "test") {
   defaultChannelManager.setAuditSink((item) => {
     if (hasDatabase()) recordChannelIngest(getDatabase(), item);
   });
+  // Re-link a vault the user connected earlier and ingest it, so notes are live without
+  // opening the app. Only an explicit saved link triggers this, never the default path.
+  void defaultChannelManager.restoreSavedConfig().then(async (linked) => {
+    if (!linked) return;
+    const result = await defaultChannelManager.syncChannel("obsidian");
+    console.log(`[channels] obsidian vault linked: ${result.itemsSynced} notes${result.error ? ` (${result.error})` : ""}`);
+  }).catch((err) => console.error("[channels] obsidian restore failed:", err instanceof Error ? err.message : err));
 }
 
 
