@@ -4,7 +4,10 @@
  * Manages Obsidian, Notion, and Gmail adapters, background schedulers, and entity routing.
  */
 
-import { ObsidianAdapter, getDefaultVaultPath } from "./obsidian-adapter.js";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { ObsidianAdapter, getDefaultVaultPath, resolveVaultPath } from "./obsidian-adapter.js";
 import { NotionAdapter } from "./notion-adapter.js";
 import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
@@ -24,14 +27,18 @@ export class ChannelManager {
   private onDocumentIngested?: (doc: IngestedDocument) => void;
   private onEntityIngested?: (entity: IngestedEntity) => void;
   private worldModelHost?: WorldModelHost;
+  private readonly configPath?: string;
 
   constructor(options?: {
     obsidianVaultPath?: string;
+    /** JSON file remembering the linked vault across restarts (non-secret settings only). */
+    configPath?: string;
     onDocument?: (doc: IngestedDocument) => void;
     onEntity?: (entity: IngestedEntity) => void;
   }) {
     this.onDocumentIngested = options?.onDocument;
     this.onEntityIngested = options?.onEntity;
+    this.configPath = options?.configPath;
 
     // 1. Initialize Obsidian Adapter
     const obsidian = new ObsidianAdapter(options?.obsidianVaultPath, (doc) => {
@@ -180,6 +187,36 @@ export class ChannelManager {
       throw new Error(`Unknown channel: ${id}`);
     }
     await adapter.configure(config);
+    if (adapter instanceof ObsidianAdapter) this.saveObsidianConfig(adapter.getConfig());
+  }
+
+  /** Re-applies the vault link saved by a previous run. A missing, corrupt or stale file is ignored. */
+  async restoreSavedConfig(): Promise<boolean> {
+    if (!this.configPath) return false;
+    try {
+      const saved = JSON.parse(readFileSync(this.configPath, "utf-8"))?.obsidian;
+      if (!saved || typeof saved.vaultPath !== "string") return false;
+      const { path } = resolveVaultPath(saved.vaultPath);
+      await this.adapters.get("obsidian")?.configure({
+        vaultPath: path,
+        watchEnabled: typeof saved.watchEnabled === "boolean" ? saved.watchEnabled : true,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private saveObsidianConfig(config: { vaultPath: string; watchEnabled: boolean }): void {
+    if (!this.configPath) return;
+    try {
+      mkdirSync(dirname(this.configPath), { recursive: true });
+      const tmp = `${this.configPath}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ obsidian: config }, null, 2));
+      renameSync(tmp, this.configPath);
+    } catch {
+      // Linking still works for this run; it just will not survive a restart.
+    }
   }
 
   purgeChannel(id: ChannelId): number {
@@ -234,6 +271,12 @@ export class ChannelManager {
   }
 }
 
+export function getChannelConfigPath(): string {
+  if (process.env.EXOCORTEX_CHANNELS_CONFIG) return process.env.EXOCORTEX_CHANNELS_CONFIG;
+  return join(process.env.LOCALAPPDATA || join(homedir(), ".exocortex"), "channels.json");
+}
+
 export const defaultChannelManager = new ChannelManager({
   obsidianVaultPath: getDefaultVaultPath(),
+  configPath: process.env.NODE_ENV === "test" ? undefined : getChannelConfigPath(),
 });

@@ -10,7 +10,7 @@ export interface NodeHealthStatus {
   statusText: string;
 }
 
-export function checkNodeHealth(port: number, timeoutMs = 5000): Promise<{ healthy: boolean; statusText: string }> {
+export function checkNodeHealth(port: number, timeoutMs = 5000, headers?: Record<string, string>): Promise<{ healthy: boolean; statusText: string }> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: { healthy: boolean; statusText: string }) => {
@@ -25,6 +25,7 @@ export function checkNodeHealth(port: number, timeoutMs = 5000): Promise<{ healt
         port,
         path: "/health",
         method: "GET",
+        headers,
         timeout: timeoutMs,
       },
       (res) => {
@@ -56,7 +57,10 @@ export async function checkAllNodesHealth(upstreams: Record<string, string>): Pr
         const url = new URL(urlStr);
         const port = Number(url.port);
         if (port > 0 && port < 65536) {
-          const { healthy, statusText } = await checkNodeHealth(port);
+          // pieces-for-all gives loopback callers no token exemption, so probe it authenticated.
+          const token = (process.env.GATEWAY_TOKEN ?? process.env.PIECES_GATEWAY_TOKEN ?? "").trim();
+          const headers = id === "pieces-for-all" && token ? { Authorization: `Bearer ${token}` } : undefined;
+          const { healthy, statusText } = await checkNodeHealth(port, 5000, headers);
           return { id, port, healthy, statusText };
         }
         return { id, port: 0, healthy: false, statusText: "No explicit port" };

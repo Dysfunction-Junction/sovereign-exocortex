@@ -5,8 +5,8 @@
  */
 
 import { readdir, readFile, stat } from "node:fs/promises";
-import { existsSync, watch, type FSWatcher } from "node:fs";
-import { join, extname, basename, relative } from "node:path";
+import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
+import { join, extname, basename, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { ChannelAdapter, ChannelStatus, SyncResult, IngestedDocument } from "./types.js";
 
@@ -28,6 +28,32 @@ export function getDefaultVaultPath(): string {
 }
 
 const DEFAULT_VAULT_PATH = getDefaultVaultPath();
+
+export interface ResolvedVault {
+  path: string;
+  /** True when the folder has an `.obsidian` directory, i.e. Obsidian has opened it as a vault. */
+  hasObsidianConfig: boolean;
+}
+
+/**
+ * Validates a user-supplied vault location: expands a leading `~`, makes it absolute, and
+ * requires an existing folder. Throws an Error whose message is safe to show to the user.
+ */
+export function resolveVaultPath(input: string): ResolvedVault {
+  const text = (input ?? "").trim();
+  if (!text) throw new Error("The vault path is empty.");
+  if (text.includes(String.fromCharCode(0))) throw new Error("The vault path is invalid.");
+  const expanded = text === "~" || /^~[\/]/.test(text) ? join(homedir(), text.slice(1)) : text;
+  const full = resolve(expanded);
+  let isDir = false;
+  try {
+    isDir = statSync(full).isDirectory();
+  } catch {
+    throw new Error(`Vault folder not found: ${full}`);
+  }
+  if (!isDir) throw new Error(`The vault path is not a folder: ${full}`);
+  return { path: full, hasObsidianConfig: existsSync(join(full, ".obsidian")) };
+}
 // Exclude embeds ![[...]] from wikilinks
 const WIKILINK_REGEX = /(?<!\!)\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
 const TAG_REGEX = /(?:^|\s)#([a-zA-Z0-9_\-/]+)/g;
@@ -169,6 +195,10 @@ export class ObsidianAdapter implements ChannelAdapter {
     if (onDoc) this.onDocumentIngested = onDoc;
   }
 
+  getConfig(): { vaultPath: string; watchEnabled: boolean } {
+    return { vaultPath: this.vaultPath, watchEnabled: this.watchEnabled };
+  }
+
   setDocumentListener(listener: (doc: IngestedDocument) => void): void {
     this.onDocumentIngested = listener;
   }
@@ -185,7 +215,8 @@ export class ObsidianAdapter implements ChannelAdapter {
 
   async configure(config: Record<string, unknown>): Promise<void> {
     if (typeof config.vaultPath === "string" && config.vaultPath.trim().length > 0) {
-      this.vaultPath = config.vaultPath.trim();
+      // Validate before touching state so a typo never replaces a working link.
+      this.vaultPath = resolveVaultPath(config.vaultPath).path;
     }
     if (typeof config.watchEnabled === "boolean") {
       this.watchEnabled = config.watchEnabled;
