@@ -58,20 +58,20 @@ class ProposalManager {
 
   private checkReplayOrExpiry(item: TrackedProposal): ProposalApprovalResult | null {
     if (item.state === "consumed" || item.state === "approved" || item.state === "in_flight") {
-      return { ok: false, status: "already_consumed", error: "Replay prevented: proposal already in flight or consumed" };
+      return { ok: false, status: "already_consumed", error: "This request was already handled." };
     }
     if (item.state === "rejected") {
-      return { ok: false, status: "already_rejected", error: "Proposal was previously rejected" };
+      return { ok: false, status: "already_rejected", error: "You already said no to this one." };
     }
     if (item.state === "expired" || Date.now() >= item.expiresAt) {
       if (item.state !== "expired") {
         item.state = "expired";
         this.notify();
       }
-      return { ok: false, status: "expired", error: "Proposal TTL expired" };
+      return { ok: false, status: "expired", error: "This request timed out and is no longer needed." };
     }
     if (item.state !== "pending") {
-      return { ok: false, status: "invalid_state", error: `Proposal already ${item.state}` };
+      return { ok: false, status: "invalid_state", error: "This request was already handled." };
     }
     return null;
   }
@@ -80,7 +80,7 @@ class ProposalManager {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
     if (!item) {
-      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+      return { ok: false, status: "not_found", error: "This request is no longer available." };
     }
     const guard = this.checkReplayOrExpiry(item);
     if (guard) return guard;
@@ -95,14 +95,14 @@ class ProposalManager {
       if (err instanceof ApprovalUnavailableError && err.code === "CANCELLED") {
         item.state = "pending";
         this.notify();
-        return { ok: false, status: "cancelled", error: "Biometric approval cancelled by user" };
+        return { ok: false, status: "cancelled", error: "You cancelled the fingerprint or face check, so nothing was done." };
       }
       if (err instanceof ApprovalUnavailableError && (err.code === "NO_KEY" || err.code === "UNAVAILABLE")) {
         labelAttestation = undefined;
       } else {
         item.state = "pending";
         this.notify();
-        return { ok: false, status: "error", error: err instanceof Error ? err.message : "Biometric authentication failed" };
+        return { ok: false, status: "error", error: err instanceof Error ? err.message : "The fingerprint or face check did not work, so nothing was done." };
       }
     }
 
@@ -128,7 +128,7 @@ class ProposalManager {
     } else {
       item.state = "pending";
       this.notify();
-      return { ok: false, status: "error", error: result.error || "Failed to submit shadow label" };
+      return { ok: false, status: "error", error: result.error || "Could not save your answer. Please try again." };
     }
   }
 
@@ -136,7 +136,7 @@ class ProposalManager {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
     if (!item) {
-      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+      return { ok: false, status: "not_found", error: "This request is no longer available." };
     }
     const guard = this.checkReplayOrExpiry(item);
     if (guard) return guard;
@@ -151,7 +151,7 @@ class ProposalManager {
       if (err instanceof ApprovalUnavailableError && err.code === "CANCELLED") {
         item.state = "pending";
         this.notify();
-        return { ok: false, status: "cancelled", error: "Biometric approval cancelled by user" };
+        return { ok: false, status: "cancelled", error: "You cancelled the fingerprint or face check, so nothing was done." };
       }
       labelAttestation = undefined;
     }
@@ -179,7 +179,7 @@ class ProposalManager {
     } else {
       item.state = "pending";
       this.notify();
-      return { ok: false, status: "error", error: result.error || "Failed to submit shadow label" };
+      return { ok: false, status: "error", error: result.error || "Could not save your answer. Please try again." };
     }
   }
 
@@ -190,7 +190,7 @@ class ProposalManager {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
     if (!item) {
-      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+      return { ok: false, status: "not_found", error: "This request is no longer available." };
     }
     if (item.shadow) {
       return this.labelWanted(proposalId);
@@ -264,7 +264,7 @@ class ProposalManager {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
     if (!item) {
-      return { ok: false, status: "not_found", error: "Proposal not found or expired" };
+      return { ok: false, status: "not_found", error: "This request is no longer available." };
     }
     if (item.shadow) {
       return this.labelNotWanted(proposalId, reason);

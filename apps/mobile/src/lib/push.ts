@@ -89,8 +89,8 @@ export async function registerPush(onProposal: () => void): Promise<void> {
             {
               id: "PROPOSAL_ACTIONS",
               actions: [
-                { id: "wanted", title: "Wanted", foreground: true },
-                { id: "not_wanted", title: "Not Wanted", destructive: true, foreground: true },
+                { id: "wanted", title: "Yes", foreground: true },
+                { id: "not_wanted", title: "No", destructive: true, foreground: true },
               ],
             },
           ],

@@ -36,7 +36,7 @@ export default function BiometricApprovalModal() {
     try {
       const res = await proposalManager.approve(active.proposalId);
       if (!res.ok && res.status !== "cancelled") {
-        setError(res.error || res.status || "Approval failed");
+        setError(res.error || res.status || "That did not go through. Nothing was done.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -51,7 +51,7 @@ export default function BiometricApprovalModal() {
     try {
       const res = await proposalManager.reject(active.proposalId, "User dismissed from mobile modal");
       if (!res.ok && res.status !== "not_found") {
-        setError(res.error || res.status || "Dismiss failed");
+        setError(res.error || res.status || "That did not go through. Please try again.");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -104,21 +104,19 @@ export default function BiometricApprovalModal() {
               letterSpacing: "0.05em",
             }}
           >
-            {isShadow ? "🧪 Shadow Calibration" : isHighRisk ? "🔒 Biometric Required" : "⚡ Speculative Action"}
+            {isShadow ? "🧪 Practice question" : isHighRisk ? "🔒 Needs your fingerprint or face" : "⚡ Quick suggestion"}
           </span>
           <span style={{ fontSize: "12px", color: remainingSec < 15 ? "#ef4444" : "#9ca3af", fontVariantNumeric: "tabular-nums" }}>
-            ⏱ {remainingSec}s TTL
+            ⏱ {remainingSec}s left
           </span>
         </div>
 
         <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", fontWeight: 600, color: "#fff" }}>
-          {active.summary || "Pending Speculative Proposal"}
+          {active.summary || "Something needs your OK"}
         </h3>
 
         <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "16px", wordBreak: "break-all" }}>
-          <div><strong>Candidate:</strong> {active.candidateId}</div>
-          <div><strong>Proposal:</strong> {active.proposalId}</div>
-          <div><strong>Risk Tier:</strong> {active.riskLevel.toUpperCase()}</div>
+          <div>{active.riskLevel === "low" ? "Low risk: easy to undo." : active.riskLevel === "high" ? "Higher risk: please check before saying yes." : "Moderate risk."}</div>
         </div>
 
         {error && (
@@ -152,7 +150,7 @@ export default function BiometricApprovalModal() {
               fontSize: "13px",
             }}
           >
-            Dismiss
+            No thanks
           </button>
           <button
             onClick={handleApprove}
@@ -172,7 +170,7 @@ export default function BiometricApprovalModal() {
               boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
             }}
           >
-            {submitting ? "Verifying…" : isShadow ? "Wanted (1-Tap)" : isHighRisk ? "Authorize (1-Tap)" : "Execute Now"}
+            {submitting ? "Checking it's you…" : isShadow ? "Yes, that's useful" : isHighRisk ? "Yes, go ahead" : "Yes, do it"}
           </button>
         </div>
       </div>
