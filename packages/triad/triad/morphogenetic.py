@@ -274,6 +274,11 @@ class MorphogeneticEngine:
 
                 # 3. Darwinian Survival Gate: run the trusted profile through the isolated runner
                 rel = target_file_path.relative_to(sandbox).as_posix()
+                # The host runs git in this directory afterwards. A worktree's .git is a pointer file the
+                # verified code can rewrite to make the host git read attacker-controlled config (fsmonitor,
+                # hooks, filters), so pin it before and compare after.
+                git_pointer = sandbox / ".git"
+                pointer_before = git_pointer.read_bytes() if git_pointer.is_file() else None
                 try:
                     res = self.verification_runner.run(workspace=sandbox, profile=verification_profile, timeout=120)
                 except subprocess.TimeoutExpired:
@@ -283,6 +288,11 @@ class MorphogeneticEngine:
                 candidate.verification_output = (res.stdout + "\n" + res.stderr).strip()
                 if res.returncode != 0:
                     return False  # Apoptosis
+
+                pointer_after = git_pointer.read_bytes() if git_pointer.is_file() else None
+                if pointer_before is None or pointer_after != pointer_before:
+                    candidate.verification_output = "Darwinian Rejection: verified code modified the worktree git pointer"
+                    return False
 
                 # A zero exit is not enough: only the declared target may differ, and it must be an
                 # unstaged modification (no extra, staged, deleted or untracked files).
@@ -434,14 +444,22 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
         subprocess.run(base_cmd + ["add", "."], check=True)
         subprocess.run(base_cmd + ["commit", "-qm", "initial commit with zero-weight bug"], check=True)
 
-        # Hermetic trial of code authored right here: the host runner is acceptable, and says so.
-        engine = MorphogeneticEngine(
-            temp_repo,
-            verification_runner=UnsafeHostRunner(
-                {"unittest-target-calc": [sys.executable, "-m", "unittest", "test_target_calc.py"]}
-            ),
-            allow_unsafe_host_runner=True,
-        )
+        # Prefer the container sandbox; fall back to the host runner only for this hermetic,
+        # locally authored trial, and say so.
+        from triad.docker_runner import DockerRunner
+        docker_runner = DockerRunner({"unittest-target-calc": ["python", "-m", "unittest", "test_target_calc.py"]})
+        if docker_runner.available()[0]:
+            docker_runner.ensure_image()
+            engine = MorphogeneticEngine(temp_repo, verification_runner=docker_runner)
+        else:
+            print("[morphogenetic] container runtime unavailable; using UnsafeHostRunner for this local trial")
+            engine = MorphogeneticEngine(
+                temp_repo,
+                verification_runner=UnsafeHostRunner(
+                    {"unittest-target-calc": [sys.executable, "-m", "unittest", "test_target_calc.py"]}
+                ),
+                allow_unsafe_host_runner=True,
+            )
 
         # 1. Intercept simulated runtime friction
         try:
