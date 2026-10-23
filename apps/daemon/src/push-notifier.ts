@@ -133,7 +133,7 @@ export class PushNotifier {
               token: t.token,
               // Generic text only: a data-only push shows nothing while the app is backgrounded. The proposal
               // itself (summary, nonce) is still fetched over the authenticated channel after the user taps.
-              notification: { title: "Something needs your OK", body: "Tap to see it and choose Yes or No." },
+              notification: { title: "Your assistant has a suggestion", body: "It noticed something you do often and can help with it. Tap to see what, then choose Yes or No. Nothing happens unless you say Yes." },
               data: { type: "proposal", proposal_id: proposalId },
               android: { priority: "HIGH" },
             },
