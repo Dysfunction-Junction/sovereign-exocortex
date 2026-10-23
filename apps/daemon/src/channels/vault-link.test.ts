@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, sep } from "node:path";
 import { ObsidianAdapter, resolveVaultPath } from "./obsidian-adapter.js";
@@ -70,6 +70,34 @@ describe("vault linking", () => {
       assert.equal(result.error, undefined);
       assert.equal(result.itemsSynced, 2);
       assert.deepEqual(docs.map((d) => d.id).sort(), ["doc:obsidian:Index.md", "doc:obsidian:Projects/Plan.md"]);
+      adapter.dispose();
+    });
+  });
+
+  describe("linked folders inside a vault", () => {
+    it("follows a folder link (junction/symlink) and ingests its notes", async () => {
+      const external = join(root, "export");
+      mkdirSync(join(external, "days"), { recursive: true });
+      writeFileSync(join(external, "days", "Monday.md"), "# Monday\n");
+      symlinkSync(external, join(vault, "Linked"), "junction");
+
+      const docs: IngestedDocument[] = [];
+      const adapter = new ObsidianAdapter(undefined, (d) => docs.push(d));
+      await adapter.configure({ vaultPath: vault, watchEnabled: false });
+      const result = await adapter.sync();
+      assert.ok(docs.some((d) => d.id === "doc:obsidian:Linked/days/Monday.md"), `got ${docs.map((d) => d.id)}`);
+      assert.equal(result.itemsSynced, 3);
+      adapter.dispose();
+    });
+
+    it("does not loop forever when a link points back into the vault", async () => {
+      symlinkSync(vault, join(vault, "Projects", "Loop"), "junction");
+      const docs: IngestedDocument[] = [];
+      const adapter = new ObsidianAdapter(undefined, (d) => docs.push(d));
+      await adapter.configure({ vaultPath: vault, watchEnabled: false });
+      const result = await adapter.sync();
+      assert.equal(result.error, undefined);
+      assert.equal(result.itemsSynced, 2);
       adapter.dispose();
     });
   });

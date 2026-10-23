@@ -4,7 +4,7 @@
  * Per-file debounced watcher, robust error isolation, and frontmatter/tag/wikilink parsing.
  */
 
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { existsSync, statSync, watch, type FSWatcher } from "node:fs";
 import { join, extname, basename, relative, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -405,9 +405,21 @@ export class ObsidianAdapter implements ChannelAdapter {
     }
   }
 
-  private async scanMarkdownFiles(dir: string, results: string[], maxDepth = 6, depth = 0): Promise<void> {
+  private async scanMarkdownFiles(
+    dir: string,
+    results: string[],
+    maxDepth = 6,
+    depth = 0,
+    seen: Set<string> = new Set(),
+  ): Promise<void> {
     if (depth > maxDepth) return;
     try {
+      // Links (junctions, symlinks) are followed like Obsidian does, but each real folder is
+      // walked once so a link that points back into the vault cannot loop.
+      const real = await realpath(dir);
+      if (seen.has(real)) return;
+      seen.add(real);
+
       const entries = await readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith(".")) continue; // Skip all dot-dirs
@@ -415,9 +427,21 @@ export class ObsidianAdapter implements ChannelAdapter {
         const rel = relative(this.vaultPath, full);
         if (isMachineArtifact(rel, entry.name)) continue;
 
-        if (entry.isDirectory()) {
-          await this.scanMarkdownFiles(full, results, maxDepth, depth + 1);
-        } else if (entry.isFile() && extname(entry.name).toLowerCase() === ".md") {
+        let isDir = entry.isDirectory();
+        let isFile = entry.isFile();
+        if (entry.isSymbolicLink()) {
+          try {
+            const target = await stat(full);
+            isDir = target.isDirectory();
+            isFile = target.isFile();
+          } catch {
+            continue; // dangling link
+          }
+        }
+
+        if (isDir) {
+          await this.scanMarkdownFiles(full, results, maxDepth, depth + 1, seen);
+        } else if (isFile && extname(entry.name).toLowerCase() === ".md") {
           results.push(full);
         }
       }
