@@ -6,7 +6,7 @@ import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
 const AccessibilityScanner = registerPlugin<any>('AccessibilityScanner');
 
 import {
-  getProxyBaseUrl, getProxyToken, setProxyBaseUrl, setProxyToken,
+  checkConnectionUrl, getProxyBaseUrl, getProxyToken, setProxyBaseUrl, setProxyToken,
   getRemoteGatewayUrl, getRemoteGatewayToken, setRemoteGatewayUrl, setRemoteGatewayToken,
   isScreenContextEnabled, setScreenContextEnabled,
   tryAutoConnectLocalPc,
@@ -269,6 +269,11 @@ export default function Setup() {
       if (!raw) return;
 
       const { baseUrl: scannedUrl, token: scannedToken } = parseConnectionQrPayload(raw);
+      const scannedProblem = checkConnectionUrl(scannedUrl);
+      if (scannedProblem) {
+        setScanError(scannedProblem);
+        return;
+      }
       setBaseUrl(scannedUrl);
       setToken(scannedToken);
       setChecking(true);
@@ -310,6 +315,14 @@ export default function Setup() {
       return;
     }
 
+    const urlProblem = (planA ? checkConnectionUrl(baseUrl) : null) ?? (planB ? checkConnectionUrl(remoteUrl) : null);
+    if (urlProblem) {
+      setScanError(urlProblem);
+      setChecking(false);
+      return;
+    }
+    setScanError(null);
+
     const verifyUrl = planA ? baseUrl : remoteUrl;
     const reachable = await checkProxyHealth(verifyUrl);
     if (!reachable) {
@@ -318,13 +331,18 @@ export default function Setup() {
       return;
     }
 
-    await setProxyBaseUrl(planA ? baseUrl.trim() : "");
-    await setProxyToken(planA ? token.trim() : "");
-    await setRemoteGatewayUrl(planB ? remoteUrl.trim() : "");
-    await setRemoteGatewayToken(planB ? remoteToken.trim() : "");
-
-    setResult(await deepCheckAfterSave());
-    setChecking(false);
+    try {
+      await setProxyBaseUrl(planA ? baseUrl.trim() : "");
+      await setProxyToken(planA ? token.trim() : "");
+      await setRemoteGatewayUrl(planB ? remoteUrl.trim() : "");
+      await setRemoteGatewayToken(planB ? remoteToken.trim() : "");
+      setResult(await deepCheckAfterSave());
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : String(e));
+      return;
+    } finally {
+      setChecking(false);
+    }
 
     await recordEvent({
       type: "setup_saved",

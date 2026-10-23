@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Plan A is LAN-only by design: the proxy has no TLS story because it's a
-  home-network peer, not a public origin. Android's network-security-config
-  <domain> element only matches literal hostnames, not CIDR ranges — it
-  cannot express "any private IP" — so this allows cleartext app-wide rather
-  than pretending to scope it to a range it can't actually enforce.
-  This is an accepted tradeoff for a LAN-only companion app talking to a
-  proxy the user explicitly enters the address of at Setup; do not reuse
-  this manifest as a template for anything that also talks to the public
-  internet over HTTP.
+  Release builds permit TLS only. Credentials (bearer tokens) and captured data must never travel in
+  cleartext, so reach the home node through an https:// address (for example the Tailscale gateway).
+  Android's <domain> element matches literal hostnames, not CIDR ranges, so there is no safe way to
+  allow "any private IP" over HTTP; do not re-enable app-wide cleartext. USB / adb-reverse loopback
+  development uses the debug overlay in app/src/debug/res/xml/network_security_config.xml.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

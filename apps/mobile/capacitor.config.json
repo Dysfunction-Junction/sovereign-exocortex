@@ -2,6 +2,7 @@
   "appId": "com.pieces.android.companion",
   "appName": "Pieces-Android Companion - Seamless",
   "webDir": "dist",
+  "loggingBehavior": "none",
   "server": {
     "androidScheme": "http"
   }

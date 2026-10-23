@@ -760,6 +760,7 @@ test("loopback /mishmash/delegate answers a ping without calling a model", async
     const res = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer ask-token" },
       body: {
         v: 1,
         id: "0123456789abcdef",
@@ -798,6 +799,7 @@ test("loopback /mishmash/delegate status reports Pieces reachability without a m
     const res = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer ask-token" },
       body: {
         v: 1,
         id: "0123456789abcdef",
@@ -822,6 +824,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
   const app = createGatewayApp({
     piecesClient: pieces,
     openRouterClient: new OpenRouterClient({ apiKey: "" }),
+    gatewayToken: "mem-token",
   });
   const srv = createServer(app.handleRequest);
   await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
@@ -830,6 +833,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const addRes = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-add-1",
@@ -854,6 +858,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const searchRes = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-search-1",
@@ -880,6 +885,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const badAdd = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-bad-1",
@@ -896,6 +902,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const unauthAdd = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-unauth-1",
@@ -912,6 +919,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const emptySearch = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-bad-search-1",
@@ -928,6 +936,7 @@ test("loopback /mishmash/delegate memory stores and searches local LTM without c
     const badAction = await makeLocalRequest(srv, {
       method: "POST",
       path: "/mishmash/delegate",
+      headers: { Authorization: "Bearer mem-token" },
       body: {
         v: 1,
         id: "mem-bad-act-1",
@@ -993,8 +1002,15 @@ test("/mishmash/delegate refuses browser-origin and rebound-host requests even f
     payload: {},
   };
   try {
-    // a plain local call still works without the token
-    const ok = await makeLocalRequest(srv, { method: "POST", path: "/mishmash/delegate", body: envelope });
+    // a plain local call without the token is refused: loopback is not authentication
+    const noToken = await makeLocalRequest(srv, { method: "POST", path: "/mishmash/delegate", body: envelope });
+    assert.equal(noToken.status, 401);
+    const ok = await makeLocalRequest(srv, {
+      method: "POST",
+      path: "/mishmash/delegate",
+      body: envelope,
+      headers: { Authorization: "Bearer ask-token" },
+    });
     assert.equal(ok.status, 200);
 
     // a page served from ANY localhost port passes the generic Origin allowlist, so only the delegate guard stops it
@@ -1016,6 +1032,57 @@ test("/mishmash/delegate refuses browser-origin and rebound-host requests even f
     });
     assert.notEqual(wrongPort.status, 200);
     assert.ok(wrongPort.status === 401 || wrongPort.status === 403);
+  } finally {
+    srv.close();
+  }
+});
+
+test("delegate memory.add is rejected when the token is wrong, and nothing is written", async () => {
+  const app = createGatewayApp({
+    piecesClient: new PiecesClient({ baseUrl: "http://127.0.0.1:1", fetchFn: async () => { throw new Error("no"); } }),
+    openRouterClient: new OpenRouterClient({ apiKey: "" }),
+    gatewayToken: "right-token",
+  });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+  const body = {
+    v: 1, id: "spoof-1", from: "autonomous-triad", to: "pieces-for-all", capability: "memory", action: "memory",
+    payload: { action: "add", title: "spoofed", body: "spoofed body" },
+  };
+  try {
+    const missing = await makeLocalRequest(srv, { method: "POST", path: "/mishmash/delegate", body });
+    assert.equal(missing.status, 401);
+    const wrong = await makeLocalRequest(srv, {
+      method: "POST", path: "/mishmash/delegate", body, headers: { Authorization: "Bearer wrong" },
+    });
+    assert.equal(wrong.status, 401);
+    const valid = await makeLocalRequest(srv, {
+      method: "POST", path: "/mishmash/delegate", body: { ...body, from: "evil-script" },
+      headers: { Authorization: "Bearer right-token" },
+    });
+    assert.equal(valid.status, 403);
+  } finally {
+    srv.close();
+  }
+});
+
+test("delegate memory.add is rejected when no gateway token is configured", async () => {
+  const app = createGatewayApp({
+    piecesClient: new PiecesClient({ baseUrl: "http://127.0.0.1:1", fetchFn: async () => { throw new Error("no"); } }),
+    openRouterClient: new OpenRouterClient({ apiKey: "" }),
+    gatewayToken: "",
+  });
+  const srv = createServer(app.handleRequest);
+  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", () => resolve()));
+  try {
+    const res = await makeLocalRequest(srv, {
+      method: "POST", path: "/mishmash/delegate",
+      body: {
+        v: 1, id: "nt-1", from: "autonomous-triad", to: "pieces-for-all", capability: "memory", action: "memory",
+        payload: { action: "add", title: "t", body: "b" },
+      },
+    });
+    assert.equal(res.status, 401);
   } finally {
     srv.close();
   }

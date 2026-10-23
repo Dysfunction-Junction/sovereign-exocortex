@@ -105,8 +105,14 @@ export async function waitForPing(
   const env = deps.env ?? process.env;
   const fetchImpl = deps.fetchImpl ?? fetch;
   // The triad refuses every delegate action without its server token (same rule as forwardDelegate).
+  // The memory gateway likewise refuses delegated calls without its gateway token.
+  const memoryToken = (env.GATEWAY_TOKEN ?? env.PIECES_GATEWAY_TOKEN ?? "").trim();
   const authHeader: Record<string, string> =
-    id === "autonomous-triad" && env.TRIAD_SERVER_TOKEN ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` } : {};
+    id === "autonomous-triad" && env.TRIAD_SERVER_TOKEN
+      ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` }
+      : id === "pieces-for-all" && memoryToken
+      ? { Authorization: `Bearer ${memoryToken}` }
+      : {};
   const deadline = Date.now() + timeoutMs;
   let last = "not started";
   let spawnError: Error | null = null;
@@ -166,9 +172,9 @@ export function buildChildEnv(portVariable: string, port: number, extraEnv: Reco
   if (nodeId === "autonomous-triad" && process.env.TRIAD_SERVER_TOKEN) {
     env.TRIAD_SERVER_TOKEN = process.env.TRIAD_SERVER_TOKEN;
   }
-  // Likewise only the memory gateway may search the archive; no other node sees the databank token.
+  // Likewise only the memory gateway may search the archive; no other node sees the databank or gateway token.
   if (nodeId === "pieces-for-all") {
-    for (const key of ["DATABANK_URL", "DATABANK_TOKEN"]) {
+    for (const key of ["DATABANK_URL", "DATABANK_TOKEN", "GATEWAY_TOKEN", "PIECES_GATEWAY_TOKEN"]) {
       if (process.env[key]) env[key] = process.env[key];
     }
   }

@@ -824,16 +824,23 @@ public class NativeTelemetrySync {
     }
 
     /**
-     * Reads configured connection targets from CapacitorStorage SharedPreferences.
+     * Reads configured connection targets: URLs from CapacitorStorage SharedPreferences, bearer tokens
+     * from the Keystore-backed SecureCredentialStore. A token an older build left in CapacitorStorage
+     * is used only until the app migrates it, so background sync keeps working across the upgrade.
      */
+    private static String readToken(Context context, SharedPreferences legacyPrefs, String key) {
+        String secure = SecureCredentialStore.get(context, key);
+        return secure != null ? secure : legacyPrefs.getString(key, null);
+    }
+
     public static List<Target> getConnectionTargets(Context context) {
         List<Target> targets = new ArrayList<>();
         try {
             SharedPreferences prefs = context.getSharedPreferences("CapacitorStorage", Context.MODE_PRIVATE);
             String lanUrl = prefs.getString("pieces-android:proxyBaseUrl", null);
-            String lanToken = prefs.getString("pieces-android:proxyToken", null);
+            String lanToken = readToken(context, prefs, "pieces-android:proxyToken");
             String remoteUrl = prefs.getString("pieces-android:remoteGatewayUrl", null);
-            String remoteToken = prefs.getString("pieces-android:remoteGatewayToken", null);
+            String remoteToken = readToken(context, prefs, "pieces-android:remoteGatewayToken");
 
             if (lanUrl != null && !lanUrl.trim().isEmpty() && lanToken != null && !lanToken.trim().isEmpty()) {
                 targets.add(new Target(lanUrl.trim(), lanToken.trim(), "lan"));
@@ -1206,6 +1213,7 @@ public class NativeTelemetrySync {
     private static FlushOutcome flushInternal(Context context, FlushRun run) {
         List<Target> targets = getConnectionTargets(context);
         if (targets.isEmpty()) {
+            Log.w(TAG, "No usable connection targets (URL or token missing/unreadable)");
             return FlushOutcome.UNCONFIGURED;
         }
 
@@ -1315,7 +1323,9 @@ public class NativeTelemetrySync {
                         continue;
                     }
                 } catch (Exception e) {
-                    // Timeout, connection refused, or cancelled via disconnectActive()
+                    // Timeout, connection refused, or cancelled via disconnectActive().
+                    // Log only the failure class and target host (never URLs with paths, headers or tokens).
+                    Log.w(TAG, "Target " + target.mode + " request failed: " + e.getClass().getSimpleName());
                 } finally {
                     run.activeConnection = null;
                     if (conn != null) {

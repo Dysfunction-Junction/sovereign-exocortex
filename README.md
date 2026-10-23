@@ -1,10 +1,10 @@
 # Sovereign Exocortex
 
-A private, local-first personal operating system. It watches signals from your phone and PC, predicts the next useful action, and stages it without interrupting you. Nothing changes state until you approve it with a verified biometric tap.
+A local-first personal assistant and automation research project. It watches signals from your phone and PC, predicts useful next actions, and stages proposals. Verified human approval is the intended boundary for execution; the implementation gaps below mean this is not yet a system-wide guarantee.
 
-> **Status: shadow mode.** `SHADOW=1` is the default. The system logs what it *would* propose and measures how often it is right. It does not act on its own. Real Precision@surface numbers do not exist yet; see [Roadmap](#roadmap).
+> **Status: experimental; shadow mode by default.** `SHADOW=1` blocks the primary approval path, but generic delegation can bypass gateway approval checks. Keep deployment restricted to trusted devices and networks and address these gaps before enabling live actuation. Live Precision@surface results were not verified during the source audit.
 
-## Design rules
+## Design intent
 
 1. **Shadow first.** Actuation is a capability granted per risk tier, never a build flag.
 2. **One append-only event log is the source of truth.** The life graph, beliefs and caches are projections rebuilt from it (hash-chained SQLite, WAL mode).
@@ -12,20 +12,23 @@ A private, local-first personal operating system. It watches signals from your p
 4. **Capabilities, not trust.** Every device and agent holds scoped, revocable grants.
 5. **Honest naming.** A component named for a method must implement it, or be renamed.
 
-Non-goals: self-patching production code, cloud-hosted state, multi-user support.
+Non-goals: self-patching production code and multi-user support. Local-first is not offline-only: configured reasoning providers, Mem0, Gmail, Notion, push delivery, and remote archives can use network services. The channel air-gap policy is not a system-wide network sandbox.
 
 ## Layout
 
-pnpm workspace, TypeScript (Node >= 22) plus a Python package for the triad.
+pnpm workspace with 13 projects including the root: primarily TypeScript, plus Python 3.10+ for the triad and Rust/Tauri for desktop. Use Node 24+: some workspace packages require it even though the root manifest still says Node 22.
 
 | Path | Package | What it does |
 |---|---|---|
 | `apps/daemon` | `@exocortex/daemon` | `exocortexd` host: gateway on `:8788`, device enrollment and scoped grants, JWT auth, attestation checks, shadow recorder, FCM push, mesh launcher and sentinel |
 | `apps/mobile` | `@exocortex/mobile` | Capacitor Android app: accessibility capture, on-device triage, biometric approval modal |
+| `apps/desktop` | `@exocortex/desktop` | Windows-targeted Tauri shell sharing the mobile/web frontend, with tray integration and local daemon discovery |
 | `apps/cli` | `@exocortex/cli` | `exo` command: `status`, `world`, `memory`, `gate`, `test` |
+| `apps/neo4j-import` | — | Standalone Neo4j import and graph evaluation utilities |
 | `packages/core` | `@exocortex/core` | Event bus, pattern analyzer, speculative dry-run cache, pre-cognitive readiness |
 | `packages/world-model` | `@exocortex/world-model` | Living Life Graph, Cognitive Mode Gate, Active Inference engine |
 | `packages/memory` | `@exocortex/memory` | Local long-term memory (token/vector overlap store) |
+| `packages/databank` | `@exocortex/databank` | Encrypted cold archive with text search and vector indexing |
 | `packages/mesh` | `@exocortex/mesh` | MCP router, durable playbooks, swarms, two-phase patch promotion |
 | `packages/triad` | `@exocortex/triad` | Advisory council and ephemeral-worktree risk gating (Python) |
 | `packages/allowlist` | `@pieces-android/allowlist` | Gateway routing allowlist |
@@ -59,54 +62,90 @@ Verified `wanted`/`not_wanted` tap labels teach proposal preferences, not action
 
 Full detail: [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md).
 
+The daemon also includes Obsidian, Notion, and Gmail channel adapters and Neo4j synchronization. Channel ingestion currently writes directly to the in-memory graph rather than the event log, so it is not yet a fully replayable projection.
+
 ## Quick start
+Install Node 24+ and pnpm. Python tests require an activated virtual environment with `packages/triad` and its development dependencies installed. Desktop builds additionally require Rust and the Tauri prerequisites; Android builds require the Android toolchain.
 
 ```powershell
 pnpm install
-
-pnpm -r typecheck   # tsc across all 11 workspaces (0 errors)
-pnpm test           # all test suites (daemon, mobile, triad)
-pnpm exo status     # system status
+pnpm typecheck     # available workspace checks; Python is explicitly skipped
+pnpm test          # configured suites; currently has known failures
 pnpm exo help       # list CLI commands
 ```
 
 `exo status` and `exo world` read live daemon state. Set `EXOCORTEX_ADMIN_TOKEN` to a valid device JWT whose device has the `admin:read` scope; the daemon URL defaults to `http://127.0.0.1:8788` and can be overridden with `EXOCORTEX_DAEMON_URL`.
 
-Run the host (needs secrets; copy values into `apps/daemon/.env`, which is gitignored and loaded automatically):
+### Host configuration
+
+The daemon package start script loads `apps/daemon/.env`. Supply credentials locally; never commit them:
+
+- `GATEWAY_JWT_SECRET`: required signing secret; use at least 32 random characters.
+- `HOME_PROXY_BASE_URL`: required URL of a separately running home proxy, commonly on port 8787.
+- `HOME_PROXY_TOKEN`: required bearer credential for that proxy.
+- `GATEWAY_ENROLL_TOKEN`: required to enable device enrollment.
+- `TRIAD_SERVER_TOKEN`: required on both gateway and triad for delegated triad calls.
+- `SHADOW=1`: retain the default while calibrating and addressing safety gaps.
+
+The home proxy is **not included in this repository**. Normal daemon startup currently requires its URL and token even for local world-model use.
+
+From the repository root:
 
 ```powershell
-$env:GATEWAY_JWT_SECRET   = "<32+ random characters>"
-$env:GATEWAY_ENROLL_TOKEN = "<random>"
-$env:TRIAD_SERVER_TOKEN   = "<random>"
-cd apps\daemon
-npx tsx src/mishmash-up.ts   # window 1: triad :8789, registry :39403, other nodes
-pnpm start                   # window 2: gateway :8788
-pnpm enroll -- "My Phone"    # enroll a device, prints its token
+pnpm --filter @exocortex/daemon start
+```
+
+In another terminal:
+
+```powershell
+pnpm --filter @exocortex/daemon enroll -- "My Phone"
+pnpm --filter @exocortex/mobile dev
+```
+
+The root `pnpm start` currently points to the missing `apps/daemon/src/index.ts`; use the daemon package script above. Desktop development also needs a configuration fix: `apps/desktop/src-tauri/tauri.conf.json` invokes `pnpm dev` from the desktop package, recursively launching Tauri instead of starting the mobile Vite frontend.
+
+### Optional services
+
+The mesh launcher expects sibling checkouts named `hermes-api`, `autonomous-triad`, `pieces-for-all`, `agent-mesh-mcp`, `pattern-analyzer`, `registry-app`, `gut-instinct`, and `tool-registry-heartbeat`. Embedded packages do not automatically replace these repositories; see [`mishmash-nodes.ts`](apps/daemon/src/mishmash-nodes.ts).
+
+```powershell
+pnpm --filter @exocortex/daemon exec tsx --env-file-if-exists=.env src/mishmash-up.ts
+pnpm desktop:build
 ```
 
 The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To exercise the whole approval path on real hardware, follow [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md).
 
 ## Honest limits
 
-- The approve and dismiss paths (BiometricPrompt, Keystore key, attestation, Tailscale HTTPS) were verified end to end on a Galaxy S26 Ultra. Only the read-only `diagnostic_probe` has been approved; nothing has actuated unattended.
-- The mobile companion runs live on Galaxy S26 Ultra with active Obsidian Glass Anticipation Ring and Ambient Graph HUD.
+- Earlier documentation reports Galaxy S26 Ultra approval/dismiss testing limited to the read-only `diagnostic_probe`. Hardware operation and current collection progress were not revalidated in this source audit.
 - Firebase/FCM credentials are gitignored and must be supplied locally.
-- Continuous shadow evaluation is gathering empirical data toward the 50-label statistical threshold.
+- Generic `/network/delegate` can forward triad approvals without the shadow, circuit-breaker, biometric, and scope checks used by `/network/approve`. A mocked test reproduced gateway forwarding, not downstream execution.
+- Cold-start model hydration is conditional on an already-open database; normal imports construct the world-model host before database initialization.
+- Memory capture writes `loggedAt`, but archival filters on `createdAt`, silently retaining captured entries instead of archiving them.
+- Gmail/Notion entity IDs do not match the channel purge prefix, so disconnect/resync leaves stale graph entities.
+- Morphogenetic trials isolate files in worktrees, not execution privileges or networking. The architecture's full sandbox, reproduction-test, diff-size, and static/security gates are not all implemented.
+
+### Validation snapshot (2026-10-22)
+
+- Workspace TypeScript checks passed. Python is skipped by its typecheck script; desktop Rust and standalone Neo4j utilities are not covered.
+- Separately running the configured non-Python suites produced 1,139 passing and 13 failing tests: one world-model contact fixture uses the old operator ID; 12 mobile API tests omit `isDesktopApp` from their config mock.
+- Mobile lint failed with one conditional-Hook error and 20 warnings. Its production build passed, with a roughly 1.83 MB main JavaScript bundle before compression.
+- Python tests, native desktop/Android builds, real integrations, and live rollout metrics were not verified. Passing package tests do not establish cross-service safety.
 
 ## Roadmap
 
-Shadow calibration and the autonomic substrate are organized into five streams:
+Implemented components and remaining evaluation work:
 
-1. **Shadow metrics evaluator** (`packages/core/shadow-report-cli.ts`). Shipped.
-2. **Daemon shadow recording & repository health** (`apps/daemon/src/shadow-recorder.ts`, `apps/daemon/src/repo-health.ts`). Explicit test-suite, clean-checkout, and bridge-health observations feed the gated inference loop. The automated `RepoHealthWatcher` tracks git checkout cleanliness (`clean_checkout` vs `uncommitted_edits`, 2-minute dirty dwell debounce, 15-minute homeostatic heartbeat, index lock isolation). Shipped.
-3. **Label capture & inferred outcomes** (`POST /v3/shadow/labels`, `apps/daemon/src/inferred-outcomes.ts`). Hardware-attested tap labels (`wanted`/`not_wanted`) advance shadow state. Background inferred outcome scheduler captures `already_did` and `ignored` for coverage analysis. Shipped.
-4. **Symbiosis Trinity: Precognitive Wake, Ambient Graph HUD & Databank Archival** (`apps/mobile`, `apps/daemon/src/databank-archival-host.ts`). Guided 5-step touch-dwell calibration (80ms–800ms window), live Ambient Living Graph HUD with cognitive mode indicators, and scheduled memory vault archival with 7-day retention safety floor and atomic backup. Shipped.
-5. **Frontier 3 Morphogenetic Code** (`packages/triad/triad/morphogenetic.py`). Darwinian mutation engine executing isolated trial evaluations in ephemeral worktrees, runtime friction interception, automated apoptosis of broken patches, and pristine git state preservation. Shipped.
+1. **Shadow metrics evaluator** (`packages/core/shadow-report-cli.ts`).
+2. **Daemon shadow recording & repository health** (`apps/daemon/src/shadow-recorder.ts`, `apps/daemon/src/repo-health.ts`). Test-suite, checkout, and bridge-health observations feed the inference loop.
+3. **Label capture & inferred outcomes** (`POST /v3/shadow/labels`, `apps/daemon/src/inferred-outcomes.ts`). Direct tap labels and inferred outcomes are tracked separately.
+4. **Wake calibration, graph HUD & archival** (`apps/mobile`, `apps/daemon/src/databank-archival-host.ts`). Interfaces and scheduling exist; the archival record contract needs correction.
+5. **Experimental code-repair trials** (`packages/triad/triad/morphogenetic.py`). Worktree-based candidate evaluation; documented production safety gates remain incomplete.
 6. **Precision@surface calibration** (target >= 0.90 over 14 days, at least 50 direct tap labels, plus positive baseline gap) before any tier leaves shadow mode. Waiting for live collection; see [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md).
 
 Alongside these, a **next-action prediction log** records guesses about what you will do next, scores them against the event log (misses keep the real action), and reports log loss, Brier score and calibration against a frequency baseline. See [`docs/superpowers/specs/2026-10-10-next-action-prediction-design.md`](docs/superpowers/specs/2026-10-10-next-action-prediction-design.md).
 
-Local model integration is supported via Ollama (`http://127.0.0.1:11434`) using `qwen2.5-coder:7b` (for line-by-line code audits and security review), `qwen3:4b` (reasoning), and `qwen3:1.7b` (fast triage), connected directly into the VS Code Language Model provider API with $0 cloud cost.
+Local inference integrations include Ollama. Other reasoning paths use subscription CLIs or OpenRouter; the embedded memory gateway defaults to OpenRouter unless configured otherwise. Offline behavior, model availability, and cost depend on configuration. This repository does not establish a universal zero-cloud-cost or VS Code provider guarantee.
 
 Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md).
 
@@ -118,5 +157,5 @@ Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AU
 - [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md): audit follow-ups
 - [`docs/DATABANK_ARCHITECTURE.md`](docs/DATABANK_ARCHITECTURE.md): encrypted long-term cold archive specification
 
-Private repository. Not licensed for redistribution.
+License: [MIT](LICENSE), matching the checked-in license and root package metadata.
 

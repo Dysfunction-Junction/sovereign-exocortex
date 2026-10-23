@@ -193,7 +193,9 @@ export async function archiveLocalMemoriesToRemote(
       continue;
     }
     res.scanned++;
-    const created = typeof entry.createdAt === "string" ? Date.parse(entry.createdAt) : NaN;
+    // server.ts writes `loggedAt`; local-ltm writes `createdAt`. Accept both.
+    const stamp = typeof entry.createdAt === "string" ? entry.createdAt : typeof entry.loggedAt === "string" ? entry.loggedAt : "";
+    const created = stamp ? Date.parse(stamp) : NaN;
     if (typeof entry.body !== "string" || !Number.isFinite(created) || created > cutoff) {
       keep.push(line);
       continue;
@@ -204,7 +206,7 @@ export async function archiveLocalMemoriesToRemote(
       kind: "memory",
       title,
       text: `${title}\n\n${entry.body}`,
-      path: `ltm/${entry.createdAt as string}`,
+      path: `ltm/${stamp}`,
       ts: created,
       meta: { tags: Array.isArray(entry.tags) ? entry.tags : [] },
     });

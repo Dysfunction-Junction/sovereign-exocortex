@@ -93,11 +93,35 @@ export function delegateUpstream(nodeId: string, env: NodeJS.ProcessEnv = proces
   return loopbackBase(configured || spec.fallback);
 }
 
+// Approve/reject carry authority only /network/approve verifies (shadow mode,
+// biometric attestation, scope, breaker). The generic delegate path must never relay them.
+export function isApprovalAction(action: string): boolean {
+  const a = action.trim().toLowerCase();
+  return a === "approve" || a === "reject";
+}
+
 export async function forwardDelegate(
   envelope: DelegateEnvelope,
   env: NodeJS.ProcessEnv = process.env,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 8000,
+): Promise<{ status: number; body: unknown; contentType: string; isRawText?: boolean }> {
+  if (isApprovalAction(envelope.action)) {
+    return {
+      status: 403,
+      contentType: "application/json",
+      body: { error: "approve/reject must go through /network/approve", action: envelope.action },
+    };
+  }
+  return relayEnvelope(envelope, env, fetchImpl, timeoutMs);
+}
+
+// No approval gate here: only forwardApprove (behind /network/approve's checks) may call this with approve/reject.
+async function relayEnvelope(
+  envelope: DelegateEnvelope,
+  env: NodeJS.ProcessEnv,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
 ): Promise<{ status: number; body: unknown; contentType: string; isRawText?: boolean }> {
   if (!DELEGATE_UPSTREAMS.has(envelope.to)) {
     return {
@@ -114,6 +138,7 @@ export async function forwardDelegate(
       body: { error: "node is on this PC but does not take a delegated call", to: envelope.to },
     };
   }
+  const memoryToken = (env.GATEWAY_TOKEN ?? env.PIECES_GATEWAY_TOKEN ?? "").trim();
   try {
     const delegated = await fetchImpl(new URL("/mishmash/delegate", upstream), {
       method: "POST",
@@ -122,6 +147,10 @@ export async function forwardDelegate(
         // The triad refuses delegated approve/reject without its server token.
         ...(envelope.to === "autonomous-triad" && env.TRIAD_SERVER_TOKEN
           ? { Authorization: `Bearer ${env.TRIAD_SERVER_TOKEN}` }
+          : {}),
+        // The memory service no longer trusts loopback callers; it wants its own gateway token.
+        ...(memoryToken && envelope.to === "pieces-for-all"
+          ? { Authorization: `Bearer ${memoryToken}` }
           : {}),
       },
       body: JSON.stringify(envelope),
@@ -218,6 +247,6 @@ export async function forwardApprove(
       ...(attestationStr ? { biometric_attestation: attestationStr } : {}),
     },
   };
-  return forwardDelegate(envelope, env, fetchImpl, timeoutMs);
+  return relayEnvelope(envelope, env, fetchImpl, timeoutMs);
 }
 

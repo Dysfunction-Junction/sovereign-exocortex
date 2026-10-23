@@ -141,6 +141,15 @@ test("shadow mode blocks /network/approve and delegation to hermes-api", async (
       body: JSON.stringify({ v: 1, id: "env-12345678", from: "dev_shadow", to: "no-such-node", capability: "intent", action: "review", payload: {} }),
     });
     assert.equal(other.status, 404);
+
+    // approve/reject must not be relayable through the generic delegate path
+    for (const action of ["approve", "reject", " Approve "]) {
+      const bypass = await fetch(`http://127.0.0.1:${port}/network/delegate`, {
+        method: "POST", headers,
+        body: JSON.stringify({ v: 1, id: "env-12345678", from: "dev_shadow", to: "autonomous-triad", capability: "intent", action, payload: { proposal_id: "p1", nonce: "n1" } }),
+      });
+      assert.equal(bypass.status, 403, `action ${JSON.stringify(action)}`);
+    }
   } finally {
     if (prev === undefined) delete process.env.SHADOW; else process.env.SHADOW = prev;
     server.close();

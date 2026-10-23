@@ -4,13 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Multi-provider MCP router with durable agentic playbook orchestration and patch promotion.",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./index.ts",
     "./delegate": "./mishmash-delegate.ts",
-    "./patch": "./patch-promotion.ts",
-    "./orchestration": "./orchestration.ts"
+    "./patch": "./patch-promotion.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

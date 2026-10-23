@@ -116,6 +116,7 @@ export class WorldModelHost {
   private shadowRecorder: ShadowRecorder | null = null;
   private recorderFailures = 0;
   private recorderDisabled = false;
+  private hydrated = false;
   private autoExecutor: ((policy: InferencePolicy, proposal: ProposalEnvelope) => void) | null = null;
   private preferenceDb: ExocortexDatabase | null = null;
   private lastGraphContextByDevice = new Map<string, EventGraphContext>();
@@ -139,42 +140,48 @@ export class WorldModelHost {
 
     if (hasDatabase()) {
       try {
-        const db = getDatabase();
-        this.preferenceDb = db;
-        const params = db.listModelParams();
-        if (params.length > 0) {
-          this.learnedEngine.importModelParams(params);
-        }
-        const latestSnapshot = db.getLatestBeliefSnapshot();
-        if (latestSnapshot) {
-          this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
-        }
-
-        // Replay events into living life graph to restore projection across restarts
-        const recentEvents = db.listEvents({ limit: 1000 });
-        for (const ev of recentEvents) {
-          try {
-            const autoCreate = this.lifeGraph.entityCount < 20000;
-            const linkCtx = linkEventToGraph(
-              {
-                event_id: ev.event_id,
-                kind: ev.kind,
-                ts_device: ev.ts_device,
-                ts_server: ev.ts_server,
-                payload: ev.payload,
-              },
-              this.lifeGraph,
-              { autoCreate, createMissingTopics: autoCreate },
-            );
-            this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
-          } catch {
-            // Ignore unparsable legacy payloads during replay
-          }
-        }
+        this.hydrateFromDatabase(getDatabase());
       } catch {
         // Database not ready or in-memory
       }
     }
+  }
+
+  /** Restore learned params, belief snapshot and graph projection. Runs once; retried when a recorder attaches after a cold start. */
+  private hydrateFromDatabase(db: ExocortexDatabase): void {
+    if (this.hydrated) return;
+    this.preferenceDb = db;
+    const params = db.listModelParams();
+    if (params.length > 0) {
+      this.learnedEngine.importModelParams(params);
+    }
+    const latestSnapshot = db.getLatestBeliefSnapshot();
+    if (latestSnapshot) {
+      this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
+    }
+
+    // Replay events into living life graph to restore projection across restarts
+    const recentEvents = db.listEvents({ limit: 1000 });
+    for (const ev of recentEvents) {
+      try {
+        const autoCreate = this.lifeGraph.entityCount < 20000;
+        const linkCtx = linkEventToGraph(
+          {
+            event_id: ev.event_id,
+            kind: ev.kind,
+            ts_device: ev.ts_device,
+            ts_server: ev.ts_server,
+            payload: ev.payload,
+          },
+          this.lifeGraph,
+          { autoCreate, createMissingTopics: autoCreate },
+        );
+        this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
+      } catch {
+        // Ignore unparsable legacy payloads during replay
+      }
+    }
+    this.hydrated = true;
   }
 
   public static getInstance(): WorldModelHost {
@@ -196,7 +203,14 @@ export class WorldModelHost {
   /** Attach (or detach with null) the recorder that persists proposals + gate decisions. */
   public setShadowRecorder(recorder: ShadowRecorder | null): void {
     this.shadowRecorder = recorder;
-    if (recorder) this.preferenceDb = recorder.database;
+    if (recorder) {
+      this.preferenceDb = recorder.database;
+      try {
+        this.hydrateFromDatabase(recorder.database);
+      } catch {
+        // Stay un-hydrated; the learned engine starts cold rather than failing recorder attach
+      }
+    }
     this.recorderFailures = 0;
     this.recorderDisabled = false;
   }

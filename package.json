@@ -9,7 +9,7 @@
     "typecheck": "pnpm -r --stream typecheck",
     "build": "pnpm -r --stream build",
     "exo": "tsx apps/cli/src/index.ts",
-    "start": "tsx apps/daemon/src/index.ts",
+    "start": "pnpm --filter @exocortex/daemon start",
     "desktop:build": "pnpm --filter @exocortex/desktop build",
     "desktop:dev": "pnpm --filter @exocortex/desktop dev"
   },

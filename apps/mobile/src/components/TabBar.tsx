@@ -17,13 +17,7 @@ const TABS: TabItem[] = [
 ];
 
 export default function TabBar() {
-  let pathname = "";
-  try {
-    const location = useLocation();
-    pathname = location?.pathname || "";
-  } catch {
-    pathname = "";
-  }
+  const pathname = useLocation()?.pathname || "";
   const navigate = useNavigate();
 
   return (

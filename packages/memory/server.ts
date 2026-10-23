@@ -297,14 +297,9 @@ export function createGatewayApp(config: ServerConfig = {}) {
       return;
     }
 
-    // 4. Token Authentication Check (if configured). Loopback delegation from
-    // the Lubuntu gateway is already authenticated at that front door.
-    const remoteAddr = req.socket.remoteAddress ?? "";
-    const loopbackDelegate = req.method === "POST"
-      && (req.url ?? "").split("?")[0] === "/mishmash/delegate"
-      && (remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1")
-      && isTrustedDelegateRequest(req.headers, req.socket.localPort);
-    if (gatewayToken && gatewayToken.trim().length > 0 && !loopbackDelegate) {
+    // 4. Token Authentication Check (if configured). Loopback is not authentication:
+    // any local process can reach this port, so delegated calls carry the token too.
+    if (gatewayToken && gatewayToken.trim().length > 0) {
       const authHeader = req.headers.authorization;
       const customToken = req.headers["x-gateway-token"];
       const providedToken = authHeader?.startsWith("Bearer ")
@@ -378,6 +373,10 @@ export function createGatewayApp(config: ServerConfig = {}) {
         const subAction = typeof payload.action === "string" ? payload.action.toLowerCase() : "search";
 
         if (subAction === "add") {
+          if (!gatewayToken || gatewayToken.trim().length === 0) {
+            sendJson(res, 401, { error: "Unauthorized: memory writes require a configured gateway token" }, origin);
+            return;
+          }
           const allowedCallers = new Set([
             "pieces-android-companion-seamless",
             "autonomous-triad",

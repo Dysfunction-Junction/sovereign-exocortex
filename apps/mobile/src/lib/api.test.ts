@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("./config", () => ({
   getConnectionTargets: vi.fn().mockResolvedValue([{ baseUrl: "http://pc:1", token: "t", mode: "lan" }]),
+  isDesktopApp: vi.fn().mockReturnValue(false),
 }));
 
 import {
