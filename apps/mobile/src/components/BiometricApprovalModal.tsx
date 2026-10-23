@@ -1,3 +1,4 @@
+import { explainProposal } from "../lib/proposalExplainer";
 import { useState, useEffect } from "react";
 import { proposalManager, type TrackedProposal } from "../lib/proposals";
 
@@ -60,6 +61,7 @@ export default function BiometricApprovalModal() {
     }
   };
 
+  const explanation = explainProposal(active);
   const isShadow = Boolean(active.shadow);
   const isHighRisk = !isShadow && (active.riskLevel === "high" || active.requiresBiometric);
 
@@ -115,8 +117,13 @@ export default function BiometricApprovalModal() {
           {active.summary || "Something needs your OK"}
         </h3>
 
-        <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "16px", wordBreak: "break-all" }}>
-          <div>{active.riskLevel === "low" ? "Low risk: easy to undo." : active.riskLevel === "high" ? "Higher risk: please check before saying yes." : "Moderate risk."}</div>
+        <div style={{ fontSize: "13px", color: "#d1d5db", marginBottom: "16px", lineHeight: 1.45 }}>
+          <div style={{ marginBottom: "8px" }}><strong>What it will do:</strong> {explanation.doesWhat}</div>
+          <div style={{ marginBottom: "8px" }}><strong>What gets saved:</strong> {explanation.saved}</div>
+          <div style={{ marginBottom: "8px" }}><strong>What changes:</strong> {explanation.changes}</div>
+          <div style={{ color: "#9ca3af", fontSize: "12px" }}>
+            {active.riskLevel === "low" ? "Low risk: easy to undo." : active.riskLevel === "high" ? "Higher risk: please check before saying yes." : "Moderate risk."} Choosing No does nothing.
+          </div>
         </div>
 
         {error && (
