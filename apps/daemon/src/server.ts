@@ -741,19 +741,19 @@ export const server = createServer(async (req, res) => {
           ? db.ingestBatch(deduped.req)
           : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"] };
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
-      if (result.events.length > 0) {
+      if (result.insertedEvents.length > 0) {
         try {
           // Attach the shadow recorder to the normal append-only event pipeline. The host
           // maps only explicitly supported observation signals into shadow proposals.
           ensureShadowRecorder();
-          defaultWorldModelHost.onEventsAppended(result.events, db);
+          defaultWorldModelHost.onEventsAppended(result.insertedEvents, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
         }
 
         // Frontier 1: PreCognitive neuromotor readiness & dynamic wake threshold tracking
         try {
-          defaultPreCognitiveHost.onEventsAppended(result.events, db);
+          defaultPreCognitiveHost.onEventsAppended(result.insertedEvents, db);
         } catch (precogErr) {
           console.error("[precognitive-host] event batch hook error:", precogErr instanceof Error ? precogErr.message : precogErr);
         }
@@ -761,7 +761,7 @@ export const server = createServer(async (req, res) => {
         // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
         if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
           try {
-            defaultPredictionHost.onEventsAppended(result.events, db);
+            defaultPredictionHost.onEventsAppended(result.insertedEvents, db);
           } catch (predErr) {
             console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
           }
@@ -769,13 +769,13 @@ export const server = createServer(async (req, res) => {
 
         // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
         try {
-          defaultTriageHost.onEventsAppended(result.events, db);
+          defaultTriageHost.onEventsAppended(result.insertedEvents, db);
         } catch (triageErr) {
           console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
         }
 
         // Synchronize any shadow label events into shadow_labels table
-        for (const ev of result.events) {
+        for (const ev of result.insertedEvents) {
           if (ev.kind === "label") {
             try {
               const payload = JSON.parse(ev.payload);

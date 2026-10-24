@@ -283,3 +283,38 @@ test("v3 event store endpoints integration test", async () => {
     setDatabase(null);
   }
 });
+
+test("retrying an ingested event does not re-run projection hooks", async () => {
+  const { defaultPredictionHost } = await import("./prediction-host.js");
+  const memoryDb = new ExocortexDatabase({ path: ":memory:" });
+  memoryDb.registerDevice({
+    device_id: "dev_retry", name: "dev_retry", platform: "android", pubkey_spki: new Uint8Array([0]),
+    key_attested: 0, scopes: ["telemetry:write"], enrolled_at: Date.now(), revoked_at: null,
+  });
+  setDatabase(memoryDb);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+  const seen: string[] = [];
+  const original = defaultPredictionHost.onEventsAppended.bind(defaultPredictionHost);
+  defaultPredictionHost.onEventsAppended = (events, db) => {
+    seen.push(...events.map((e) => e.event_id));
+    return original(events, db);
+  };
+  try {
+    const body = JSON.stringify({
+      device_id: "dev_retry",
+      events: [{ event_id: "e_retry_once", kind: "telemetry", ts_device: 1728000000000, payload: { ok: true } }],
+    });
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_retry", TEST_SECRET)}` };
+    for (let i = 0; i < 2; i++) {
+      const res = await fetch(`${baseUrl}/v3/events`, { method: "POST", headers, body });
+      assert.equal(res.status, 200);
+    }
+    assert.deepEqual(seen, ["e_retry_once"], "hooks must see the event once, not on the retry");
+  } finally {
+    defaultPredictionHost.onEventsAppended = original;
+    server.close();
+    setDatabase(null);
+  }
+});

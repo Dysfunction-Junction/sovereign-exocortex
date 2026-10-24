@@ -156,6 +156,21 @@ describe("ExocortexDatabase (v3 SQLite Event Store Driver)", () => {
     expect(verify.totalEvents).toBe(2);
   });
 
+  it("ingestBatch exposes only newly inserted rows in insertedEvents on retry", () => {
+    const batch = {
+      device_id: "dev_phone_galaxy",
+      events: [{ event_id: "retry_1", kind: "wake", ts_device: 4000, schema_ver: 1 as const, payload: { reason: "screen_on" } }],
+    };
+    const first = db.ingestBatch(batch);
+    expect(first.insertedEvents.map((e) => e.event_id)).toEqual(["retry_1"]);
+
+    const retry = db.ingestBatch(batch);
+    expect(retry.insertedCount).toBe(0);
+    expect(retry.duplicateCount).toBe(1);
+    expect(retry.insertedEvents).toEqual([]);
+    expect(retry.events.length).toBe(1); // API compatibility: duplicates stay in events
+  });
+
   it("enforces strict append-only invariants: blocks UPDATE and DELETE via triggers", () => {
     const eventIn: EventIn = {
       event_id: "evt_immutable",
