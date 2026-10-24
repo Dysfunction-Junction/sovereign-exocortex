@@ -1992,7 +1992,9 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         return;
       }
       // Shadow mode: propose-only. Device/phone actuation is never delegated while SHADOW is on.
-      if (parsed.to === "hermes-api" && process.env.SHADOW !== "0") {
+      const MUTATING_MESH_ACTIONS = ["demote", "synthesize", "dispatch", "playbook"];
+      const mutatesMesh = parsed.to === "agent-mesh-mcp" && MUTATING_MESH_ACTIONS.includes(parsed.action.trim().toLowerCase());
+      if ((parsed.to === "hermes-api" || mutatesMesh) && process.env.SHADOW !== "0") {
         sendJson(res, 423, {
           ok: false,
           error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",

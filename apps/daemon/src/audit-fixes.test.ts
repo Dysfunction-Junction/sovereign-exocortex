@@ -272,3 +272,27 @@ test("telemetry-only device cannot approve, reject or delegate", async () => {
     setDatabase(null);
   }
 });
+
+test("shadow mode blocks mutating mesh delegations even for an admin:write device", async () => {
+  const prev = process.env.SHADOW;
+  delete process.env.SHADOW; // default: shadow on
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_shadow", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_admin_shadow", TEST_SECRET)}` };
+  try {
+    for (const action of ["demote", "synthesize", "dispatch", "playbook"]) {
+      const res = await fetch(`http://127.0.0.1:${port}/network/delegate`, {
+        method: "POST", headers,
+        body: JSON.stringify({ v: 1, id: "env-12345678", from: "dev_admin_shadow", to: "agent-mesh-mcp", capability: "mesh", action, payload: {} }),
+      });
+      assert.equal(res.status, 423, action);
+      assert.equal((await res.json()).shadow_mode, true, action);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.SHADOW; else process.env.SHADOW = prev;
+    server.close();
+    setDatabase(null);
+  }
+});
