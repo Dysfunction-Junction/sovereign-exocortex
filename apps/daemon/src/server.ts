@@ -677,6 +677,10 @@ export const server = createServer(async (req, res) => {
 
   if (method === "POST" && url.pathname === "/v3/events") {
     try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "telemetry:write", "admin")) {
+        sendJson(res, 403, { error: "forbidden: event ingestion requires telemetry:write or admin scope" });
+        return;
+      }
       const raw = await readBody(req, 1024 * 1024);
       let decoded: unknown;
       try {
@@ -1969,6 +1973,11 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
+      // Generic delegation can mutate downstream state; admin-only until an action-level capability map exists.
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: delegation requires admin or admin:write scope" });
+        return;
+      }
       const raw = await readBody(req, 64 * 1024);
       let decoded: unknown;
       try {
@@ -2017,6 +2026,10 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
   if (method === "POST" && url.pathname === "/network/approve") {
     try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "approval:write", "admin")) {
+        sendJson(res, 403, { error: "forbidden: approval or rejection requires approval:write or admin scope" });
+        return;
+      }
       const raw = await readBody(req, 16 * 1024);
       let decoded: unknown;
       try {
