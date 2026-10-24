@@ -759,7 +759,8 @@ export class LearnedActiveInferenceEngine {
    * Import Dirichlet count tables from SQLite records.
    */
   public importModelParams(records: ModelParamRecord[]): void {
-    for (const rec of records) {
+    // Oldest first, so the newest valid record wins and a malformed newest one falls back to the previous version.
+    for (const rec of [...records].sort((a, b) => a.version - b.version)) {
       const factor = this.factors.get(rec.factor);
       if (!factor) continue;
 
