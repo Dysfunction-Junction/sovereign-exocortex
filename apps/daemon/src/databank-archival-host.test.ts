@@ -131,7 +131,7 @@ test("DatabankArchivalHost: runArchival archives older memories without pruning 
       assert.equal(result.scanned, 2);
       assert.equal(result.archived, 1);
       assert.equal(result.alreadyArchived, 0);
-      assert.equal(result.kept, 2, "nothing is removed from the live log");
+      assert.equal(result.kept, 1, "kept counts entries not archived; the live file itself is checked below");
       assert.equal(result.pruned, false);
       assert.equal(result.backup, undefined);
     }
