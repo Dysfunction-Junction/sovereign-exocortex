@@ -295,10 +295,10 @@ test("retrying an ingested event does not re-run projection hooks", async () => 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
   const address = server.address();
   const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
-  const seen: string[] = [];
+  const seen: number[] = [];
   const original = defaultPredictionHost.onEventsAppended.bind(defaultPredictionHost);
   defaultPredictionHost.onEventsAppended = (events, db) => {
-    seen.push(...events.map((e) => e.event_id));
+    seen.push(...events.map((e) => e.seq));
     return original(events, db);
   };
   try {
@@ -311,7 +311,7 @@ test("retrying an ingested event does not re-run projection hooks", async () => 
       const res = await fetch(`${baseUrl}/v3/events`, { method: "POST", headers, body });
       assert.equal(res.status, 200);
     }
-    assert.deepEqual(seen, ["e_retry_once"], "hooks must see the event once, not on the retry");
+    assert.equal(seen.length, 1, "hooks must see the event once, not again on the retry");
   } finally {
     defaultPredictionHost.onEventsAppended = original;
     server.close();

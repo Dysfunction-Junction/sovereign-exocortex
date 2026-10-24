@@ -739,7 +739,7 @@ export const server = createServer(async (req, res) => {
       const stored =
         deduped.req.events.length > 0
           ? db.ingestBatch(deduped.req)
-          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"] };
+          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"], insertedEvents: [] as ReturnType<typeof db.ingestBatch>["events"] };
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.insertedEvents.length > 0) {
         try {
