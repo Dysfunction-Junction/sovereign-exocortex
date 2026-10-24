@@ -82,7 +82,8 @@ export class DatabankArchivalHost {
     this.enabled = options.enabled ?? (process.env.EXOCORTEX_ARCHIVAL_ENABLED !== "0");
     this.intervalMs = Math.max(10_000, options.intervalMs ?? DEFAULT_ARCHIVE_INTERVAL_MS);
     this.olderThanDays = Math.max(7, options.olderThanDays ?? DEFAULT_OLDER_THAN_DAYS);
-    this.prune = options.prune ?? true;
+    // Pruning is refused by the archive functions until writers are coordinated, so archive-only is the default.
+    this.prune = options.prune ?? false;
     this.customMemoryFilePath = options.memoryFilePath;
     this.customClient = options.client;
     this.getDb = options.getDb ?? (() => (hasDatabase() ? getDatabase() : null));

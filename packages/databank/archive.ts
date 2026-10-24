@@ -30,6 +30,10 @@ export async function archiveMemories(
   file: string,
   opts: { olderThanDays: number; prune?: boolean; now?: number },
 ): Promise<ArchiveResult> {
+  // A read-snapshot-then-rename prune can erase lines appended while the archive awaits the databank.
+  if (opts.prune) {
+    throw new Error("Memory pruning is disabled until concurrent writers are coordinated");
+  }
   const now = opts.now ?? Date.now();
   const cutoff = now - opts.olderThanDays * 86_400_000;
   const raw = await readFile(file, "utf8");

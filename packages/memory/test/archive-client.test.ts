@@ -154,7 +154,7 @@ test("ArchiveClient.ingestText posts correctly and handles responses", async () 
   assert.deepEqual(JSON.parse(seen[0].body), { source: "ltm", kind: "memory", title: "Note", text: "Note content" });
 });
 
-test("archiveLocalMemoriesToRemote archives memories older than threshold and prunes with backup", async () => {
+test("archiveLocalMemoriesToRemote archives memories older than threshold and refuses to prune", async () => {
   const dir = await mkdtemp(join(tmpdir(), "archive-remote-test-"));
   const file = join(dir, "memories.jsonl");
   const now = Date.parse("2026-10-15T00:00:00.000Z");
@@ -180,22 +180,16 @@ test("archiveLocalMemoriesToRemote archives memories older than threshold and pr
     }) as unknown as typeof fetch,
   });
 
-  const res = await archiveLocalMemoriesToRemote(c, file, { olderThanDays: 90, prune: true, now });
+  await assert.rejects(archiveLocalMemoriesToRemote(c, file, { olderThanDays: 90, prune: true, now }), /pruning is disabled/);
+  assert.equal(await readFile(file, "utf8"), lines.join("\n") + "\n", "a refused prune must not touch the memory file");
+  assert.deepEqual(ingested, [], "nothing is archived when the prune request is refused");
+
+  const res = await archiveLocalMemoriesToRemote(c, file, { olderThanDays: 90, now });
   assert.equal(res.scanned, 3);
   assert.equal(res.archived, 2);
   assert.equal(res.kept, 2);
-  assert.equal(res.pruned, true);
-  assert.ok(res.backup);
-
-  // Check remaining lines
-  const remaining = (await readFile(file, "utf8")).trim().split("\n");
-  assert.equal(remaining.length, 2);
-  assert.ok(remaining[0].includes("Recent text"));
-  assert.equal(remaining[1], "not-json-line");
-
-  // Check backup exists and has all original content
-  const backupContent = await readFile(res.backup!, "utf8");
-  assert.equal(backupContent, lines.join("\n") + "\n");
+  assert.equal(res.pruned, false);
+  assert.equal(await readFile(file, "utf8"), lines.join("\n") + "\n");
 
   await rm(dir, { recursive: true, force: true });
 });

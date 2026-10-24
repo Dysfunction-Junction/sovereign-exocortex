@@ -74,7 +74,7 @@ test("DatabankArchivalHost: runArchival skips gracefully when vault health check
   assert.equal((result as { reason: string }).reason, "unauthorized");
 });
 
-test("DatabankArchivalHost: runArchival archives older memories and prunes with atomic backup", async () => {
+test("DatabankArchivalHost: runArchival archives older memories without pruning and refuses explicit prune", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "databank-test-"));
   try {
     const memoriesFile = join(tempDir, "memories.jsonl");
@@ -122,7 +122,6 @@ test("DatabankArchivalHost: runArchival archives older memories and prunes with 
       client,
       memoryFilePath: memoriesFile,
       olderThanDays: 90,
-      prune: true,
       now: () => now,
     });
 
@@ -132,25 +131,21 @@ test("DatabankArchivalHost: runArchival archives older memories and prunes with 
       assert.equal(result.scanned, 2);
       assert.equal(result.archived, 1);
       assert.equal(result.alreadyArchived, 0);
-      assert.equal(result.kept, 1);
-      assert.equal(result.pruned, true);
-      assert.ok(result.backup);
+      assert.equal(result.kept, 2, "nothing is removed from the live log");
+      assert.equal(result.pruned, false);
+      assert.equal(result.backup, undefined);
     }
-
     assert.equal(ingested.length, 1);
     assert.equal(ingested[0].title, "Old Memory 1");
 
-    // Verify memory file only has fresh line kept
-    const remaining = await readFile(memoriesFile, "utf8");
-    assert.ok(remaining.includes("Fresh Memory 2"));
-    assert.ok(!remaining.includes("Old Memory 1"));
+    const before = await readFile(memoriesFile, "utf8");
+    assert.ok(before.includes("Old Memory 1") && before.includes("Fresh Memory 2"));
 
-    // Verify backup contains both lines
-    if (result.ok && result.backup) {
-      const backupContent = await readFile(result.backup, "utf8");
-      assert.ok(backupContent.includes("Old Memory 1"));
-      assert.ok(backupContent.includes("Fresh Memory 2"));
-    }
+    // An explicit prune request is refused until writers and pruners are coordinated.
+    const refused = await host.runArchival({ prune: true });
+    assert.equal(refused.ok, false);
+    if (!refused.ok) assert.match(refused.reason, /pruning is disabled/);
+    assert.equal(await readFile(memoriesFile, "utf8"), before);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
