@@ -8,6 +8,7 @@
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { ExocortexDatabase } from "@exocortex/core/db";
+import { getDatabase } from "./db-host.js";
 
 const FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 const DEFAULT_TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -193,7 +194,6 @@ export class PushNotifier {
 
 export const defaultPushNotifier = new PushNotifier({ getDb: () => getDefaultDb() });
 
-import { getDatabase } from "./db-host.js";
 function getDefaultDb(): ExocortexDatabase {
   return getDatabase();
 }

@@ -152,6 +152,10 @@ async function relayEnvelope(
         ...(memoryToken && envelope.to === "pieces-for-all"
           ? { Authorization: `Bearer ${memoryToken}` }
           : {}),
+        // The mesh service requires token authentication when configured.
+        ...(memoryToken && envelope.to === "agent-mesh-mcp"
+          ? { Authorization: `Bearer ${memoryToken}` }
+          : {}),
       },
       body: JSON.stringify(envelope),
       redirect: "manual",

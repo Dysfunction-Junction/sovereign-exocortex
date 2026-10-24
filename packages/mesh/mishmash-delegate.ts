@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { MESH_SKILLS_VERSION, meshSkillCatalog } from "./mesh-skills.js";
 
 
@@ -487,6 +487,21 @@ export function startMeshDelegate(port: number) {
     if (!isLoopback(req.socket.remoteAddress)) {
       send(res, 403, { error: "delegate is only accepted from this PC" });
       return;
+    }
+
+    const token = (process.env.GATEWAY_TOKEN ?? process.env.MESH_DELEGATE_TOKEN ?? "").trim();
+    if (token) {
+      const auth = req.headers.authorization ?? "";
+      const presented = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+      const expectedBuf = Buffer.from(token, "utf8");
+      const presentedBuf = Buffer.from(presented, "utf8");
+      if (
+        expectedBuf.length !== presentedBuf.length ||
+        !timingSafeEqual(expectedBuf, presentedBuf)
+      ) {
+        send(res, 401, { error: "Unauthorized: invalid or missing delegate bearer token" });
+        return;
+      }
     }
     try {
       const raw = await readBody(req, 64 * 1024);

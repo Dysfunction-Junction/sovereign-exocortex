@@ -207,5 +207,25 @@ test("GET /mobile/local-config rejects non-local origin", async () => {
     setDatabase(null);
   }
 });
-
+test("GET /mobile/local-config rejects untrusted Host header (DNS rebinding protection)", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const raw = await new Promise<string>((resolve, reject) => {
+      const sock = connect(port, "127.0.0.1", () => {
+        sock.write("GET /mobile/local-config HTTP/1.1\r\nHost: evil-rebound.com\r\nConnection: close\r\n\r\n");
+      });
+      let buf = "";
+      sock.on("data", (d) => (buf += d.toString()));
+      sock.on("end", () => resolve(buf));
+      sock.on("error", reject);
+    });
+    assert.match(raw, /^HTTP\/1\.1 403/);
+    assert.match(raw, /untrusted host header/i);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
 

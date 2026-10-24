@@ -44,3 +44,6 @@ apps/daemon/devices.json
 
 # Local semantic-embedding caches (rebuildable)
 *.vec.jsonl
+
+# RepoMix dump files
+repomix-output.*

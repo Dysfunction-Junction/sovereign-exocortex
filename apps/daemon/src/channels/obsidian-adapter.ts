@@ -417,6 +417,10 @@ export class ObsidianAdapter implements ChannelAdapter {
       // Links (junctions, symlinks) are followed like Obsidian does, but each real folder is
       // walked once so a link that points back into the vault cannot loop.
       const real = await realpath(dir);
+      const home = homedir();
+      // Boundary guards: never crawl the entire user home directory or system root
+      if (real === home || real === resolve("/")) return;
+      if (basename(real).startsWith(".") && real !== this.vaultPath) return;
       if (seen.has(real)) return;
       seen.add(real);
 
@@ -442,7 +446,10 @@ export class ObsidianAdapter implements ChannelAdapter {
         if (isDir) {
           await this.scanMarkdownFiles(full, results, maxDepth, depth + 1, seen);
         } else if (isFile && extname(entry.name).toLowerCase() === ".md") {
-          results.push(full);
+          const realFile = await realpath(full).catch(() => null);
+          if (realFile && !basename(realFile).startsWith(".") && extname(realFile).toLowerCase() === ".md") {
+            results.push(full);
+          }
         }
       }
     } catch {

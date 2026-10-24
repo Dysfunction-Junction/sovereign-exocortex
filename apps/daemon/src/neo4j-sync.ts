@@ -127,7 +127,7 @@ export class Neo4jSyncService {
   constructor(options: Neo4jSyncOptions = {}) {
     this.url = options.url || process.env.NEO4J_URL || "http://127.0.0.1:7474";
     this.user = options.user || process.env.NEO4J_USER || "neo4j";
-    this.pass = options.password || process.env.NEO4J_PASSWORD || "codecode";
+    this.pass = options.password || process.env.NEO4J_PASSWORD || "";
     this.database = options.database || process.env.NEO4J_DATABASE || "neo4j";
     this.batchSize = options.batchSize || 100;
   }

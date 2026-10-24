@@ -100,6 +100,21 @@ describe("vault linking", () => {
       assert.equal(result.itemsSynced, 2);
       adapter.dispose();
     });
+
+    it("refuses to follow links into hidden dot-directories or home root", async () => {
+      const dotDir = join(root, ".secret_config");
+      mkdirSync(dotDir, { recursive: true });
+      writeFileSync(join(dotDir, "Credentials.md"), "# Secret\n");
+      symlinkSync(dotDir, join(vault, "DotLink"), "junction");
+
+      const docs: IngestedDocument[] = [];
+      const adapter = new ObsidianAdapter(undefined, (d) => docs.push(d));
+      await adapter.configure({ vaultPath: vault, watchEnabled: false });
+      const result = await adapter.sync();
+      assert.ok(!docs.some((d) => d.id.includes("DotLink")));
+      assert.equal(result.itemsSynced, 2);
+      adapter.dispose();
+    });
   });
 
   describe("ChannelManager persistence", () => {
