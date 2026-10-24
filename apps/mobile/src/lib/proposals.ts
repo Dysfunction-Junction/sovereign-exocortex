@@ -46,10 +46,11 @@ class ProposalManager {
     if (existing && existing.state !== "pending") {
       return existing;
     }
+    // A re-poll of the same still-pending proposal must not restart the clock the answer latency is measured from.
     const tracked: TrackedProposal = {
       ...proposal,
       state: "pending",
-      receivedAt: Date.now(),
+      receivedAt: existing?.receivedAt ?? Date.now(),
     };
     this.proposals.set(tracked.proposalId, tracked);
     this.notify();

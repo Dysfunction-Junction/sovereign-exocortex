@@ -41,6 +41,20 @@ describe("proposalManager", () => {
     expect(proposalManager.getPending().length).toBe(1);
   });
 
+  it("re-polling a still-pending proposal keeps its original received time", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000_000);
+      const first = proposalManager.ingestProposal({ ...baseProposal, expiresAt: 9_000_000 });
+      vi.setSystemTime(1_050_000);
+      const again = proposalManager.ingestProposal({ ...baseProposal, expiresAt: 9_000_000 });
+      expect(again.receivedAt).toBe(first.receivedAt);
+      expect(again.receivedAt).toBe(1_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("approves low-risk proposal and marks it consumed", async () => {
     vi.mocked(api.submitProposalApproval).mockResolvedValueOnce({
       ok: true,
