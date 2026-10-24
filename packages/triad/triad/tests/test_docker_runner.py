@@ -8,11 +8,13 @@ real Docker daemon and is skipped when none is reachable; it proves the actual i
 
 import os
 import subprocess
+import sys
+import time
 import tempfile
 import unittest
 from pathlib import Path
 
-from triad.docker_runner import DockerRunner, IsolationUnavailable
+from triad.docker_runner import DockerRunner, IsolationUnavailable, OutputLimitExceeded, bounded_run
 from triad.morphogenetic import MorphogeneticEngine, MutationCandidate
 from triad.tests.test_morphogenetic import FakeRunner, _make_repo
 
@@ -313,6 +315,45 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         )
         self.assertTrue(engine.evaluate_mutation_in_sandbox(evil, "calc"), evil.verification_output)
         self.assertNotIn("EXFIL-REACHED-NETWORK", evil.verification_output)
+
+
+class TestBoundedOutput(unittest.TestCase):
+    """The host must never buffer more than the budget, however noisy the candidate is."""
+
+    def test_streaming_overflow_kills_the_process_and_raises_quickly(self):
+        flood = "import sys, itertools; [sys.stdout.write(chr(120) * 65536) for _ in itertools.count()]"
+        started = time.monotonic()
+        with self.assertRaises(OutputLimitExceeded):
+            bounded_run([sys.executable, "-c", flood], timeout=30, max_total_bytes=256 * 1024)
+        self.assertLess(time.monotonic() - started, 15, "overflow must stop the run, not wait for the timeout")
+
+    def test_output_within_budget_is_returned_intact(self):
+        res = bounded_run([sys.executable, "-c", "print('out'); import sys; print('err', file=sys.stderr)"], timeout=30, max_total_bytes=4096)
+        self.assertEqual((res.returncode, res.stdout.strip(), res.stderr.strip()), (0, "out", "err"))
+
+    def test_timeout_still_raises_timeout_expired(self):
+        with self.assertRaises(subprocess.TimeoutExpired):
+            bounded_run([sys.executable, "-c", "import time; time.sleep(60)"], timeout=1, max_total_bytes=4096)
+
+    def test_runner_removes_the_container_and_reraises_on_overflow(self):
+        docker = FakeDocker()
+
+        def streamer(cmd, **kw):
+            raise OutputLimitExceeded("too much output")
+
+        with tempfile.TemporaryDirectory() as td:
+            runner = DockerRunner(PROFILES, runner=docker, docker_bin="docker", streamer=streamer)
+            with self.assertRaises(OutputLimitExceeded):
+                runner.run(workspace=Path(td).resolve(), profile="unit", timeout=5)
+        self.assertIn("rm", docker.verbs())
+
+    def test_engine_rejects_a_candidate_whose_verification_overflows(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = _make_repo(td)
+            engine = MorphogeneticEngine(repo, verification_runner=FakeRunner(raises=OutputLimitExceeded("flood")))
+            cand = MutationCandidate("flood", "d", "src/app.py", "", "a = 1" + chr(10) + "b = 99" + chr(10))
+            self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
+            self.assertIn("output exceeded", cand.verification_output)
 
 
 if __name__ == "__main__":
