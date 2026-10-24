@@ -31,6 +31,7 @@ import {
   type Speculator,
 } from "./pending-proposals.js";
 import { defaultPushNotifier } from "./push-notifier.js";
+import { defaultPhoneLinkWatchdog } from "./phone-link-watchdog.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { defaultDatabankArchivalHost, PRUNE_DISABLED_REASON } from "./databank-archival-host.js";
@@ -2243,6 +2244,7 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
 server.on("close", () => {
   defaultPushNotifier.stop();
+  defaultPhoneLinkWatchdog.stop();
   defaultRepoHealthWatcher.stop();
   defaultInferredOutcomeScheduler.stop();
 });
@@ -2267,6 +2269,9 @@ if (process.env.NODE_ENV !== "test") {
   }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
+  if (process.env.EXOCORTEX_PHONE_WATCH !== "0") {
+    defaultPhoneLinkWatchdog.start();
+  }
   if (process.env.EXOCORTEX_REPO_WATCH !== "0") {
     defaultRepoHealthWatcher.start();
   }
