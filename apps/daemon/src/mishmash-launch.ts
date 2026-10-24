@@ -226,6 +226,9 @@ export async function startMishmash(options: {
       upstreams[spec.id] = upstream;
       env[spec.envKey] = upstream;
     }
+    if (process.env.TRIAD_SERVER_TOKEN) env.TRIAD_SERVER_TOKEN = process.env.TRIAD_SERVER_TOKEN;
+    if (process.env.GATEWAY_TOKEN) env.GATEWAY_TOKEN = process.env.GATEWAY_TOKEN;
+    if (process.env.PIECES_GATEWAY_TOKEN) env.PIECES_GATEWAY_TOKEN = process.env.PIECES_GATEWAY_TOKEN;
     const spawnNode = (spec: MishmashNodeSpec): ChildProcess => {
       const port = options.ports?.[spec.id] ?? spec.port;
       const cwd = join(reposRoot, spec.repo);

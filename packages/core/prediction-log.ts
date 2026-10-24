@@ -1,3 +1,4 @@
+import { CHECKPOINT_SCHEMA_SQL } from "./prob-engine-checkpoint.js";
 /**
  * @file prediction-log.ts
  * Next-action prediction log and scorer.
@@ -171,6 +172,8 @@ export interface PredictionContext {
     action_id: string;
     title: string;
   }>;
+  /** Local LLM or on-device triage category (urgent / routine / noise) */
+  triage?: "urgent" | "routine" | "noise" | string;
   /** Expected signals that were not available when this snapshot was taken, e.g. "ambient.temp_c". */
   missing?: string[];
   [extra: string]: unknown;
@@ -230,6 +233,7 @@ export function finalizeContext(ctx: PredictionContext | undefined): PredictionC
 
 export function ensurePredictionTables(raw: DatabaseSync): void {
   raw.exec(PREDICTION_SCHEMA_SQL);
+  raw.exec(CHECKPOINT_SCHEMA_SQL);
 }
 
 export function predictionId(deviceId: string, madeSeq: number): string {

@@ -72,6 +72,7 @@ interface DeviceState {
   notification_actions?: { data: NonNullable<PredictionContext["notification_actions"]>; observed_ts: number };
   physical_surface?: { data: NonNullable<PredictionContext["physical_surface"]>; observed_ts: number };
   network_telemetry?: { data: NonNullable<PredictionContext["network_telemetry"]>; observed_ts: number };
+  triage?: { category: string; observed_ts: number };
 }
 
 /** Running per-device context. Feed it every event in order, then ask for a snapshot at a moment. */
@@ -84,6 +85,11 @@ export class ContextTracker {
   /** Ambient reading from a source other than the phone (for example a home sensor); phone readings win. */
   setAmbient(ambient: NonNullable<PredictionContext["ambient"]>): void {
     this.externalAmbient = { ...ambient };
+  }
+
+  updateTriage(deviceId: string, category: string, ts?: number): void {
+    const s = this.get(deviceId);
+    s.triage = { category, observed_ts: ts ?? 0 };
   }
 
   private get(deviceId: string): DeviceState {
@@ -184,6 +190,11 @@ export class ContextTracker {
     } else if (typeof p.package === "string" || typeof p.screen === "string") {
       // Clear suggestions when transitioning to a new screen context that lacks them
       delete s.system_suggestions;
+    }
+
+    const triageCat = str(p.triage) ?? str(p.triage_category) ?? (p.category === "urgent" || p.category === "routine" || p.category === "noise" ? str(p.category) : undefined);
+    if (triageCat && (triageCat === "urgent" || triageCat === "routine" || triageCat === "noise")) {
+      s.triage = { category: triageCat, observed_ts: ts };
     }
 
     // Hardware telemetry container support
@@ -387,6 +398,16 @@ export class ContextTracker {
         }
         if (typeof ctx.physical_surface.lux === "number") {
           ctx.ambient = { ...ctx.ambient, lux: ctx.physical_surface.lux };
+        }
+      }
+    }
+    if (s.triage) {
+      if (s.triage.observed_ts === 0) {
+        ctx.triage = s.triage.category;
+      } else {
+        const d = ts - s.triage.observed_ts;
+        if (d >= 0 && d <= 7_200_000) {
+          ctx.triage = s.triage.category;
         }
       }
     }

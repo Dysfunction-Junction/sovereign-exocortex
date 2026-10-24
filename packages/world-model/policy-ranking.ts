@@ -1,14 +1,74 @@
 import type { InferencePolicy } from "./active-inference.js";
 import type { LearnedActiveInferenceEngine, EFEPolicyEvaluation } from "./generative-model.js";
 import type { LivingLifeGraph } from "./life-graph.js";
+import type { CognitiveMode } from "./cognitive-gate.js";
 
 export interface PolicyPreference {
   wanted: number;
   notWanted: number;
 }
 
+export interface ContextualPreferenceContext {
+  mode?: CognitiveMode | string;
+  daypart?: "morning" | "afternoon" | "evening" | "night" | string;
+}
+
 export function preferenceKey(invariantId: string, policyType: string): string {
   return `${invariantId}:${policyType}`;
+}
+
+export function contextualPreferenceKey(
+  invariantId: string,
+  policyType: string,
+  ctx?: ContextualPreferenceContext,
+): string {
+  const base = preferenceKey(invariantId, policyType);
+  if (!ctx?.mode && !ctx?.daypart) return base;
+  const mode = ctx.mode ?? "ANY_MODE";
+  const daypart = ctx.daypart ?? "any_daypart";
+  return `${base}|mode=${mode}|daypart=${daypart}`;
+}
+
+export function computeWantedProbability(
+  preferences: ReadonlyMap<string, PolicyPreference>,
+  invariantId: string,
+  policyType: string,
+  ctx?: ContextualPreferenceContext,
+): { wantedProbability: number; samples: number } {
+  const baseKey = preferenceKey(invariantId, policyType);
+  const globalPref = preferences.get(baseKey);
+  const globalWanted = globalPref?.wanted ?? 0;
+  const globalNotWanted = globalPref?.notWanted ?? 0;
+  const samples = globalWanted + globalNotWanted;
+
+  const c0 = 2.0;
+  const bGlobal = (globalWanted + c0 * 0.5) / (samples + c0);
+
+  if (!ctx?.mode && !ctx?.daypart) {
+    return { wantedProbability: clampProb(bGlobal), samples };
+  }
+
+  const fullKey = contextualPreferenceKey(invariantId, policyType, ctx);
+  const modeOnlyKey = contextualPreferenceKey(invariantId, policyType, { mode: ctx.mode });
+
+  const localPref = preferences.get(fullKey) ?? preferences.get(modeOnlyKey);
+  if (!localPref || (localPref.wanted + localPref.notWanted) === 0) {
+    return { wantedProbability: clampProb(bGlobal), samples };
+  }
+
+  const localWanted = localPref.wanted;
+  const localNotWanted = localPref.notWanted;
+  const localSamples = localWanted + localNotWanted;
+
+  const c1 = 3.0;
+  const posteriorMean = (localWanted + c1 * bGlobal) / (localSamples + c1);
+
+  return { wantedProbability: clampProb(posteriorMean), samples };
+}
+
+export function clampProb(p: number): number {
+  if (!Number.isFinite(p)) return 0.5;
+  return Math.min(0.995, Math.max(0.005, p));
 }
 
 /** Model action names are planning analogues, never executable commands. */
@@ -35,6 +95,7 @@ export function rankInferencePolicies(
   preferences: ReadonlyMap<string, PolicyPreference>,
   observedAt: number,
   predictedAt: number,
+  context?: ContextualPreferenceContext,
 ): InferencePolicy[] {
   graph.decay(observedAt);
   const ranked = policies.map((policy, index) => {
@@ -54,9 +115,12 @@ export function rankInferencePolicies(
     } catch {
       // A damaged/unavailable model must leave deterministic baseline ordering intact.
     }
-    const preference = preferences.get(preferenceKey(policy.invariantId, policy.type));
-    const samples = preference ? preference.wanted + preference.notWanted : 0;
-    const wantedProbability = preference ? (1 + preference.wanted) / (2 + samples) : 0.5;
+    const { wantedProbability, samples } = computeWantedProbability(
+      preferences,
+      policy.invariantId,
+      policy.type,
+      context,
+    );
     const associations = [...graph.spreadActivation(
       [policy.targetEntityId], graph.getEntity(policy.targetEntityId)?.activation ?? 0, 0.6, 2, 128,
     )].filter(([id]) => id !== policy.targetEntityId)

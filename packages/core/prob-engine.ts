@@ -65,6 +65,20 @@ export interface EngineOptions {
   calibrationMin?: number;
 }
 
+export interface SerializedProbEngineState {
+  unigram: Array<[string, number]>;
+  unigramTotal: number;
+  logW: number[];
+  temperature: number;
+  seen: number;
+  history?: Array<{ probs: Array<[string, number]>; actual: string }>;
+  experts: Array<{
+    name: string;
+    cells: Array<[string, Array<[string, number]>]>;
+    totals: Array<[string, number]>;
+  }>;
+}
+
 export interface Distribution {
   /** Every seen action plus OTHER, highest first. Sums to 1. */
   probs: Array<{ value: string; prob: number }>;
@@ -95,6 +109,7 @@ export const FEATURE_NAMES = [
   "motion",
   "physical_state",
   "metered",
+  "triage",
 ] as const;
 
 /** Unigram, bigram, and the current action paired with each context feature, plus three joint contexts. */
@@ -179,6 +194,10 @@ export function contextFeatures(ctx: PredictionContext | undefined, prev?: strin
     (typeof legacy?.metered === "boolean" ? legacy.metered : undefined);
   if (metered !== undefined) {
     f.metered = metered ? "1" : "0";
+  }
+  const triage = ctx?.triage ?? (typeof (ctx as any)?.triage_category === "string" ? (ctx as any).triage_category : undefined);
+  if (typeof triage === "string" && triage) {
+    f.triage = triage;
   }
   return f;
 }
@@ -419,6 +438,51 @@ export class ProbEngine {
     }
     this.temperature = (lo + hi) / 2;
   }
+
+  toJSON(): SerializedProbEngineState {
+    return {
+      unigram: [...this.unigram.entries()],
+      unigramTotal: this.unigramTotal,
+      logW: [...this.logW],
+      temperature: this.temperature,
+      seen: this.seen,
+      history: this.history.map((h) => ({ probs: [...h.probs], actual: h.actual })),
+      experts: this.experts.map((e) => ({
+        name: e.spec.name,
+        cells: [...e.cells.entries()].map(([k, counts]) => [k, [...counts.entries()]]),
+        totals: [...e.totals.entries()],
+      })),
+    };
+  }
+
+  static fromJSON(data: SerializedProbEngineState, opts: EngineOptions = {}): ProbEngine {
+    const engine = new ProbEngine(opts);
+    engine.unigram.clear();
+    for (const [k, v] of data.unigram) {
+      engine.unigram.set(k, v);
+    }
+    engine.unigramTotal = data.unigramTotal;
+    engine.logW = [...data.logW];
+    engine.temperature = data.temperature;
+    engine.seen = data.seen;
+    if (data.history) {
+      engine.history = data.history.map((h) => ({ probs: [...h.probs], actual: h.actual }));
+    }
+    for (const expData of data.experts) {
+      const exp = engine.experts.find((e) => e.spec.name === expData.name);
+      if (!exp) continue;
+      exp.cells.clear();
+      exp.totals.clear();
+      for (const [k, counts] of expData.cells) {
+        exp.cells.set(k, new Map(counts));
+      }
+      for (const [k, total] of expData.totals) {
+        exp.totals.set(k, total);
+      }
+    }
+    return engine;
+  }
+
 }
 
 // ---------------------------------------------------------------------------------------------

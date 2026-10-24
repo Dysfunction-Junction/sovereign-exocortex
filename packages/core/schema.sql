@@ -138,3 +138,12 @@ CREATE TABLE IF NOT EXISTS mutations (
   state          TEXT NOT NULL CHECK (state IN ('REJECTED','PASSED','MERGED','DISCARDED')),
   created_at     INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE IF NOT EXISTS prob_engine_checkpoints (
+  device_id     TEXT PRIMARY KEY,
+  last_seq      INTEGER NOT NULL,
+  last_screen   TEXT,
+  last_features TEXT NOT NULL,
+  engine_json   TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+) STRICT;

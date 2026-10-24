@@ -12,6 +12,11 @@ import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
+
+// Wire local LLM triage category stream into next-action prediction context
+defaultTriageHost.onVerdictStored = (deviceId, verdict) => {
+  defaultPredictionHost.updateTriage(deviceId, verdict.category);
+};
 import { defaultPreCognitiveHost, isValidDwell } from "./precognitive-host.js";
 import { dropKnownTelemetry } from "./telemetry-dedupe.js";
 import { APPROVAL_TS_WINDOW_MS, ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";

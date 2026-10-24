@@ -69,6 +69,7 @@ export interface TriageHostOptions {
   maxQueue?: number;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  onVerdictStored?: (deviceId: string, verdict: TriageVerdict, eventSeq: number) => void;
 }
 
 export interface TriageJob {
@@ -107,6 +108,7 @@ export class TriageHost {
   private readonly maxQueue: number;
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  public onVerdictStored?: (deviceId: string, verdict: TriageVerdict, eventSeq: number) => void;
   private readonly queue: TriageJob[] = [];
   private readonly ready = new WeakSet<object>();
   private running: Promise<void> | null = null;
@@ -119,6 +121,7 @@ export class TriageHost {
     this.maxQueue = opts.maxQueue ?? DEFAULT_MAX_QUEUE;
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.now = opts.now ?? Date.now;
+    this.onVerdictStored = opts.onVerdictStored;
   }
 
   /** Queue newly appended events. Synchronous, cheap, never throws into the ingest path. */
@@ -211,6 +214,11 @@ export class TriageHost {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(job.seq, job.deviceId, this.model, v.category, v.reason, Math.max(0, Math.round(latencyMs)), this.now());
+    try {
+      this.onVerdictStored?.(job.deviceId, v, job.seq);
+    } catch (err) {
+      console.error("[triage-host] onVerdictStored hook error:", err instanceof Error ? err.message : err);
+    }
   }
 }
 

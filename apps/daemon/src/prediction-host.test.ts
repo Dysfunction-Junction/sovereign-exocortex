@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExocortexDatabase } from "@exocortex/core/db";
-import { loadPredictionRows, computePredictionReport, type EventIn } from "@exocortex/core";
+import { loadPredictionRows, computePredictionReport, loadProbEngineCheckpoint, type EventIn } from "@exocortex/core";
 import { PredictionHost } from "./prediction-host.js";
 
 const T0 = Date.UTC(2026, 9, 10, 15, 0, 0);
@@ -137,5 +137,87 @@ describe("PredictionHost", () => {
     assert.ok(report.scored >= 25);
     assert.ok(report.top1! > 0.7, `alternating screens should be learned, got ${report.top1}`);
     assert.ok(report.guide.length > 0);
+  });
+  it("serializes engine state to checkpoint every N observations and hydrates O(1)", () => {
+    // Test with checkpointInterval: 3
+    const h1 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    const evs = ingest([
+      view("status", 0),
+      view("ask", 1000),   // obs 1
+      view("status", 2000),// obs 2
+      view("ask", 3000),   // obs 3 -> triggers checkpoint!
+    ]);
+    h1.onEventsAppended(evs.events, db);
+
+    const chk = loadProbEngineCheckpoint(db, DEVICE);
+    assert.ok(chk, "checkpoint should exist in prob_engine_checkpoints");
+    assert.equal(chk.device_id, DEVICE);
+    assert.ok(chk.last_seq >= evs.events[3].seq);
+    assert.equal(chk.last_screen, "ask");
+    assert.ok(chk.engine_json.includes('"seen":3'));
+
+    // Fresh instance hydrates from checkpoint in O(1)
+    const h2 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    const nextEvs = ingest([
+      view("status", 4000), // obs 4
+    ]);
+    h2.onEventsAppended(nextEvs.events, db);
+
+    const rows = loadPredictionRows(db.raw);
+    const lastRow = rows.at(-1)!;
+    const model = lastRow.context.model as { examples_seen: number };
+    assert.ok(model.examples_seen >= 4, "hydrated model retains checkpointed seen count");
+  });
+
+  it("integrates triage category into ContextTracker and activates cur+triage expert", () => {
+    const h = host();
+    h.updateTriage(DEVICE, "urgent");
+
+    const r = ingest([view("status", 0), view("ask", 1000)]);
+    h.onEventsAppended(r.events, db);
+
+    const rows = loadPredictionRows(db.raw);
+    const last = rows.at(-1)!;
+    assert.equal(last.context.triage, "urgent");
+    const model = last.context.model as { active_experts: string[] };
+    assert.ok(model.active_experts.includes("cur+triage"), "cur+triage expert must be active");
+  });
+
+  it("ingests passiveCapture telemetry events, maps packages via playCategories, and applies dwell debounce", () => {
+    const h = new PredictionHost({
+      horizonMs: 60_000,
+      tzOffsetMin: () => 0,
+      dwellDebounceMs: 1000,
+    });
+
+    const passive = (pkg: string, dt: number, dwellMs?: number): Omit<EventIn, "event_id" | "schema_ver"> => ({
+      kind: "telemetry",
+      ts_device: T0 + dt,
+      payload: {
+        type: "system_telemetry",
+        telemetry: `Package: ${pkg}\n\nText content`,
+        package: pkg,
+        ...(dwellMs !== undefined ? { dwell_ms: dwellMs } : {}),
+      },
+    });
+
+    // co.mangotechnologies.clickup -> "Productivity"
+    // com.instagram.barcelona -> "Social"
+    // Rapid bounce: com.sand.airsos at dt=1200 (only 200ms after dt=1000) should be debounced
+    const batch = ingest([
+      view("status", 0),
+      passive("co.mangotechnologies.clickup", 1000),   // Action: Productivity
+      passive("com.instagram.barcelona", 3000),        // Action: Social (dt=2000ms >= 1000ms)
+      passive("com.sand.airsos", 3200),                // Debounced! (dt=200ms < 1000ms)
+      passive("co.mangotechnologies.clickup", 5000),   // Action: Productivity (dt=2000ms >= 1000ms)
+    ]);
+
+    const res = h.onEventsAppended(batch.events, db);
+    assert.ok(res.guesses >= 2);
+
+    const rows = loadPredictionRows(db.raw);
+    // Categories should be recorded as context_key and actuals
+    assert.ok(rows.some((r) => r.context_key.startsWith("Productivity|")));
+    assert.ok(rows.some((r) => r.actual === "Social"));
   });
 });
