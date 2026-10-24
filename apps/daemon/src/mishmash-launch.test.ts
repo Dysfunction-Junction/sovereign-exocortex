@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { waitForPing, buildChildEnv } from "./mishmash-launch.js";
+import { waitForPing, buildChildEnv, MISHMASH_LAUNCH } from "./mishmash-launch.js";
 
 test("D2: waitForPing stops polling promptly once the child has exited and reports the failure", async () => {
   const child = spawn(process.execPath, ["-e", "process.exit(3)"], { stdio: "ignore" });
@@ -90,4 +90,44 @@ test("buildChildEnv passes the gateway token to the memory gateway only", () => 
     if (prev.g === undefined) delete process.env.GATEWAY_TOKEN; else process.env.GATEWAY_TOKEN = prev.g;
     if (prev.p === undefined) delete process.env.PIECES_GATEWAY_TOKEN; else process.env.PIECES_GATEWAY_TOKEN = prev.p;
   }
+});
+
+const PROTECTED = ["TRIAD_SERVER_TOKEN", "GATEWAY_TOKEN", "PIECES_GATEWAY_TOKEN"] as const;
+
+function withSentinelTokens<T>(fn: (sentinels: Record<string, string>) => T): T {
+  const sentinels = Object.fromEntries(PROTECTED.map((k) => [k, `sentinel-${k.toLowerCase()}`]));
+  const prev = Object.fromEntries(PROTECTED.map((k) => [k, process.env[k]]));
+  Object.assign(process.env, sentinels);
+  try {
+    return fn(sentinels);
+  } finally {
+    for (const k of PROTECTED) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
+  }
+}
+
+test("buildChildEnv gives unrelated nodes none of the protected service tokens", () => {
+  withSentinelTokens((sentinels) => {
+    for (const spec of MISHMASH_LAUNCH) {
+      if (spec.id === "autonomous-triad" || spec.id === "pieces-for-all") continue;
+      const env = buildChildEnv(spec.portVariable, spec.port, sentinels, spec.id);
+      for (const k of PROTECTED) assert.equal(env[k], undefined, `${spec.id} leaked ${k}`);
+    }
+  });
+});
+
+test("buildChildEnv gives the triad only its server token and the memory gateway only the gateway tokens", () => {
+  withSentinelTokens((sentinels) => {
+    const triad = buildChildEnv("PORT", 1, sentinels, "autonomous-triad");
+    assert.equal(triad.TRIAD_SERVER_TOKEN, sentinels.TRIAD_SERVER_TOKEN);
+    assert.equal(triad.GATEWAY_TOKEN, undefined);
+    assert.equal(triad.PIECES_GATEWAY_TOKEN, undefined);
+
+    const memory = buildChildEnv("PORT", 1, sentinels, "pieces-for-all");
+    assert.equal(memory.GATEWAY_TOKEN, sentinels.GATEWAY_TOKEN);
+    assert.equal(memory.PIECES_GATEWAY_TOKEN, sentinels.PIECES_GATEWAY_TOKEN);
+    assert.equal(memory.TRIAD_SERVER_TOKEN, undefined);
+  });
 });
