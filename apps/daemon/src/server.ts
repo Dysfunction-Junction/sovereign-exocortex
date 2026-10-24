@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { existsSync, createReadStream, statSync } from "node:fs";
+import { existsSync, createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { join, resolve, extname, relative, isAbsolute, sep } from "node:path";
 import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { Agent, setGlobalDispatcher } from "undici";
@@ -269,7 +270,7 @@ const STATIC_MIME_TYPES: Record<string, string> = {
   ".woff2": "font/woff2",
 };
 
-function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, pathname: string): boolean {
+async function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse, pathname: string): Promise<boolean> {
   if (!existsSync(DASHBOARD_DIR)) return false;
 
   let rel: string;
@@ -294,16 +295,22 @@ function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: 
   const abs = resolve(DASHBOARD_DIR, decoded);
   const r = relative(DASHBOARD_DIR, abs);
   if (r.startsWith(".." + sep) || r === ".." || isAbsolute(r)) return false;
-  if (!existsSync(abs) || !statSync(abs).isFile()) return false;
+
+  let fileStat: import("node:fs").Stats;
+  try {
+    fileStat = await stat(abs);
+    if (!fileStat.isFile()) return false;
+  } catch {
+    return false;
+  }
 
   const ext = extname(abs).toLowerCase();
   const contentType = STATIC_MIME_TYPES[ext] ?? "application/octet-stream";
-  const stat = statSync(abs);
   const isHashedAsset = pathname.startsWith("/assets/");
 
   res.writeHead(200, {
     "Content-Type": contentType,
-    "Content-Length": stat.size,
+    "Content-Length": fileStat.size,
     "Cache-Control": isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
     "X-Content-Type-Options": "nosniff",
     ...CORS_HEADERS,
@@ -314,7 +321,16 @@ function tryServeDashboardStatic(req: import("node:http").IncomingMessage, res: 
     return true;
   }
 
-  createReadStream(abs).pipe(res);
+  const stream = createReadStream(abs);
+  stream.on("error", (err) => {
+    if (!res.headersSent) {
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end("Internal Server Error");
+    } else {
+      res.destroy(err);
+    }
+  });
+  stream.pipe(res);
   return true;
 }
 
@@ -337,7 +353,7 @@ export const server = createServer(async (req, res) => {
   }
 
   // Serve PC Web Dashboard if request matches frontend static assets or SPA views
-  if ((method === "GET" || method === "HEAD") && tryServeDashboardStatic(req, res, url.pathname)) {
+  if ((method === "GET" || method === "HEAD") && (await tryServeDashboardStatic(req, res, url.pathname))) {
     return;
   }
 
@@ -362,6 +378,21 @@ export const server = createServer(async (req, res) => {
       remoteIp === "localhost";
     if (!isLoopback) {
       sendJson(res, 403, { error: "forbidden: local config is only accessible from loopback interface" });
+      return;
+    }
+
+    const rawHost = req.headers.host ?? "";
+    const hostWithoutPort = rawHost.startsWith("[")
+      ? rawHost.slice(0, rawHost.indexOf("]") + 1).toLowerCase()
+      : rawHost.split(":")[0]?.toLowerCase();
+    const isLoopbackHost =
+      hostWithoutPort === "127.0.0.1" ||
+      hostWithoutPort === "localhost" ||
+      hostWithoutPort === "::1" ||
+      hostWithoutPort === "[::1]" ||
+      hostWithoutPort === "tauri.localhost";
+    if (!isLoopbackHost) {
+      sendJson(res, 403, { error: "forbidden: untrusted host header for local config" });
       return;
     }
 
@@ -1210,7 +1241,12 @@ export const server = createServer(async (req, res) => {
       });
 
       const sendSse = (event: string, data: unknown) => {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        if (res.writableEnded || res.destroyed) return;
+        try {
+          res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        } catch {
+          cleanup();
+        }
       };
 
       sendSse("init", {

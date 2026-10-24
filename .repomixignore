@@ -1,0 +1,35 @@
+﻿# Dependencies and Lockfiles
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+vendor/
+
+# Build outputs and Caches
+dist/
+build/
+out/
+.next/
+.nuxt/
+target/
+bin/
+obj/
+.cache/
+
+# Media and Assets
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.ico
+*.mp4
+*.woff
+*.woff2
+
+# Version Control & IDEs
+.git/
+.vscode/
+.idea/
+*.log

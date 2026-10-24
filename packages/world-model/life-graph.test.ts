@@ -150,5 +150,33 @@ describe('LivingLifeGraph (Pillar 1)', () => {
     expect(predictions.length).toBe(1);
     expect(Number.isFinite(predictions[0].probability)).toBe(true);
   });
-});
+  it('prunes decayed non-core entities and stale edges while preserving core nodes', () => {
+    const t0 = 1000;
+    // Core identity node
+    graph.addEntity({ id: 'pc:primary', name: 'Primary PC', type: 'DEVICE', activation: 0.01, lastActive: t0 });
+    // Decayed stale node
+    graph.addEntity({ id: 'doc:old_memo', name: 'Old Memo', type: 'DOC', activation: 0.01, lastActive: t0 });
+    // Active node
+    graph.addEntity({ id: 'proj:active', name: 'Active Project', type: 'PROJECT', activation: 0.9, lastActive: t0 + 100_000 });
+    graph.addEdge('pc:primary', 'doc:old_memo', 'REFERENCES', 0.01);
+    graph.addEdge('pc:primary', 'proj:active', 'WORKS_ON', 0.9);
 
+    const now = t0 + 100 * 24 * 60 * 60 * 1000; // 100 days later
+    const result = graph.prune({ minActivation: 0.02, maxAgeDays: 90, currentTime: now });
+
+    expect(result.prunedEntities).toBe(1);
+    expect(graph.getEntity('doc:old_memo')).toBeUndefined();
+    expect(graph.getEntity('pc:primary')).toBeDefined(); // Protected core
+    expect(graph.getEntity('proj:active')).toBeDefined(); // Active
+    expect(graph.edgeCount).toBe(1);
+  });
+
+  it('enforces maxEntities cap during pruning by evicting lowest-activation non-core nodes', () => {
+    for (let i = 0; i < 15; i++) {
+      graph.addEntity({ id: `item:${i}`, name: `Item ${i}`, type: 'TOPIC', activation: (i + 1) / 20 });
+    }
+    const result = graph.prune({ maxEntities: 10 });
+    expect(result.prunedEntities).toBe(5);
+    expect(graph.entityCount).toBe(10);
+  });
+});

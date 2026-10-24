@@ -174,3 +174,15 @@ test("forwardDelegate sends the memory gateway token only to pieces-for-all", as
   assert.equal(seen[0].auth, "Bearer alt");
   assert.equal(seen[1].auth, null);
 });
+test("forwardDelegate sends the gateway token to agent-mesh-mcp", async () => {
+  const seen: Array<{ to: string; auth: string | null }> = [];
+  const fakeFetch = (async (url: URL | string, init?: RequestInit) => {
+    seen.push({ to: String(url), auth: new Headers(init?.headers).get("authorization") });
+    return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const env = { GATEWAY_TOKEN: "mesh-secret" } as NodeJS.ProcessEnv;
+  const base = { v: 1 as const, id: "env-12345678", from: "x-client", capability: "mesh", action: "ping", payload: {} };
+  await forwardDelegate({ ...base, to: "agent-mesh-mcp" }, env, fakeFetch);
+  assert.equal(seen[0].auth, "Bearer mesh-secret");
+});
+

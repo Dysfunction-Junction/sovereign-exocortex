@@ -435,6 +435,62 @@ export class LivingLifeGraph {
     return this.edges.size;
   }
 
+  /**
+   * Prune decayed entities and stale edges to prevent unbounded memory growth.
+   * Entities below minActivation (default 0.02) that haven't been active in maxAgeDays (default 90)
+   * are removed along with their attached edges.
+   * If the graph still exceeds maxEntities (default 10,000), the lowest-activation entities are pruned.
+   * Core identities (DEVICE, PERSON) are protected from age-decay pruning.
+   */
+  public prune(options: {
+    minActivation?: number;
+    maxAgeDays?: number;
+    maxEntities?: number;
+    currentTime?: number;
+  } = {}): { prunedEntities: number; prunedEdges: number } {
+    const minActivation = options.minActivation ?? 0.02;
+    const maxAgeMs = (options.maxAgeDays ?? 90) * 24 * 60 * 60 * 1000;
+    const maxEntities = options.maxEntities ?? 10_000;
+    const now = options.currentTime ?? Date.now();
+
+    const startEdges = this.edges.size;
+    let prunedEntities = 0;
+
+    // Phase 1: Prune entities that have decayed below threshold and exceeded age
+    for (const [id, entity] of this.entities.entries()) {
+      if (entity.type === "DEVICE" || entity.type === "PERSON") continue;
+      if (entity.activation <= minActivation && (now - entity.lastActive) > maxAgeMs) {
+        if (this.removeEntity(id)) prunedEntities++;
+      }
+    }
+
+    // Phase 2: If still over capacity, evict lowest-activation non-core entities
+    if (this.entities.size > maxEntities) {
+      const candidates = [...this.entities.values()]
+        .filter((e) => e.type !== "DEVICE" && e.type !== "PERSON")
+        .sort((a, b) => a.activation - b.activation);
+
+      const excess = this.entities.size - maxEntities;
+      for (let i = 0; i < excess && i < candidates.length; i++) {
+        if (this.removeEntity(candidates[i].id)) prunedEntities++;
+      }
+    }
+
+    // Phase 3: Prune stale low-weight edges
+    for (const [edgeId, edge] of this.edges.entries()) {
+      if (edge.weight <= 0.02 && (now - edge.lastObserved) > maxAgeMs) {
+        this.edges.delete(edgeId);
+        this.adjacency.get(edge.sourceId)?.delete(edgeId);
+        this.reverseAdjacency.get(edge.targetId)?.delete(edgeId);
+      }
+    }
+
+    return {
+      prunedEntities,
+      prunedEdges: startEdges - this.edges.size,
+    };
+  }
+
   /** Return a detached snapshot of the complete graph for export and persistence. */
   public snapshot(): { entities: GraphEntity[]; edges: GraphEdge[] } {
     return {

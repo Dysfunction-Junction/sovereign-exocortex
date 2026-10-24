@@ -1,4 +1,4 @@
-import { readFile, appendFile, mkdir, open } from "node:fs/promises";
+import { readFile, appendFile, mkdir, open, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,7 @@ export class LocalLTM {
   private resolvedPath: string | undefined;
   private options: LocalLTMOptions;
   private resolvedEmbed: { embedder: OllamaEmbedder | null; vectors: VectorCache | null } | undefined;
+  private cachedMemories: { mtimeMs: number; size: number; entries: MemoryEntry[] } | null = null;
 
   constructor(filePath?: string, options: LocalLTMOptions = {}) {
     this.explicitPath = filePath;
@@ -133,52 +134,75 @@ export class LocalLTM {
     } finally {
       await fh.close();
     }
+    this.cachedMemories = null;
     return memory;
   }
 
   public async getAllMemories(): Promise<MemoryEntry[]> {
     if (!existsSync(this.filePath)) {
+      this.cachedMemories = null;
       return [];
     }
-    const raw = await readFile(this.filePath, "utf8");
-    const lines = raw.split("\n").filter((l) => l.trim().length > 0);
-    const results: MemoryEntry[] = [];
-    for (const line of lines) {
-      try {
-        const item = JSON.parse(line);
-        if (
-          item &&
-          typeof item === "object" &&
-          !Array.isArray(item) &&
-          typeof item.title === "string" &&
-          item.title.trim().length > 0 &&
-          typeof item.body === "string"
-        ) {
-          const tags = Array.isArray(item.tags)
-            ? (item.tags as unknown[])
-                .filter((t: unknown): t is string => typeof t === "string")
-                .map((t: string) => t.trim().slice(0, 64))
-                .filter((t: string) => t.length > 0)
-                .slice(0, 16)
-            : undefined;
-          const createdAtStr = typeof item.createdAt === "string" ? item.createdAt : "";
-          const ts = Date.parse(createdAtStr);
-          const clampedTs = Number.isNaN(ts) ? 0 : Math.min(ts, Date.now());
-          const normalizedCreatedAt = new Date(clampedTs).toISOString();
-          const cleanEntry: MemoryEntry = {
-            title: item.title.trim().slice(0, 512),
-            body: item.body.trim().slice(0, 65536),
-            createdAt: normalizedCreatedAt,
-            source: typeof item.source === "string" && item.source.trim() ? item.source.trim().slice(0, 128) : "unknown",
-            ...(tags && tags.length > 0 ? { tags } : {}),
-          };
-          results.push(cleanEntry);
-        }
-      } catch {
-        // Skip malformed lines
+
+    try {
+      const fileStat = await stat(this.filePath);
+      if (
+        this.cachedMemories &&
+        this.cachedMemories.mtimeMs === fileStat.mtimeMs &&
+        this.cachedMemories.size === fileStat.size
+      ) {
+        return this.cachedMemories.entries;
       }
+
+      const raw = await readFile(this.filePath, "utf8");
+      const lines = raw.split("\n").filter((l) => l.trim().length > 0);
+      const results: MemoryEntry[] = [];
+      for (const line of lines) {
+        try {
+          const item = JSON.parse(line);
+          if (
+            item &&
+            typeof item === "object" &&
+            !Array.isArray(item) &&
+            typeof item.title === "string" &&
+            item.title.trim().length > 0 &&
+            typeof item.body === "string"
+          ) {
+            const tags = Array.isArray(item.tags)
+              ? (item.tags as unknown[])
+                  .filter((t: unknown): t is string => typeof t === "string")
+                  .map((t: string) => t.trim().slice(0, 64))
+                  .filter((t: string) => t.length > 0)
+                  .slice(0, 16)
+              : undefined;
+            const createdAtStr = typeof item.createdAt === "string" ? item.createdAt : "";
+            const ts = Date.parse(createdAtStr);
+            const clampedTs = Number.isNaN(ts) ? 0 : Math.min(ts, Date.now());
+            const normalizedCreatedAt = new Date(clampedTs).toISOString();
+            const cleanEntry: MemoryEntry = {
+              title: item.title.trim().slice(0, 512),
+              body: item.body.trim().slice(0, 65536),
+              createdAt: normalizedCreatedAt,
+              source: typeof item.source === "string" && item.source.trim() ? item.source.trim().slice(0, 128) : "unknown",
+              ...(tags && tags.length > 0 ? { tags } : {}),
+            };
+            results.push(cleanEntry);
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+
+      this.cachedMemories = {
+        mtimeMs: fileStat.mtimeMs,
+        size: fileStat.size,
+        entries: results,
+      };
+
+      return results;
+    } catch {
+      return [];
     }
-    return results;
   }
 
   public async searchMemories(query: string, limit = 5): Promise<MemorySearchResult[]> {

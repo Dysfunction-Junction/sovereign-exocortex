@@ -34,7 +34,7 @@
     "@exocortex/world-model": "workspace:*",
     "@pieces-android/allowlist": "workspace:*",
     "jsonwebtoken": "^9.0.3",
-    "undici": "^8.10.0"
+    "undici": "^8.12.3"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.7",

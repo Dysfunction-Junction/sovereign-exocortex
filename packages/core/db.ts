@@ -285,6 +285,7 @@ export class EventIdConflictError extends Error {
 export class ExocortexDatabase {
   private readonly db: DatabaseSync;
   private txDepth = 0;
+  private getProposalStmt: ReturnType<DatabaseSync["prepare"]> | null = null;
 
   constructor(options: ExocortexDbOptions = {}) {
     const dbPath = options.path ?? ":memory:";
@@ -415,9 +416,9 @@ export class ExocortexDatabase {
     if (states.length === 0) return [];
     const marks = states.map(() => "?").join(",");
     const rows = this.db
-      .prepare(`SELECT proposal_id FROM proposals WHERE state IN (${marks})${notExpiredAt !== undefined ? " AND expires_at > ?" : ""} ORDER BY updated_at ASC`)
+      .prepare(`SELECT * FROM proposals WHERE state IN (${marks})${notExpiredAt !== undefined ? " AND expires_at > ?" : ""} ORDER BY updated_at ASC`)
       .all(...states, ...(notExpiredAt !== undefined ? [notExpiredAt] : [])) as any[];
-    return rows.map((r) => this.getProposal(String(r.proposal_id))!).filter(Boolean);
+    return rows.map((r) => this.mapProposalRow(r));
   }
 
   public listUnnotifiedSurfacedProposalIds(now = Date.now()): string[] {
@@ -750,10 +751,7 @@ export class ExocortexDatabase {
     );
   }
 
-  public getProposal(proposalId: string): ProposalRecord | null {
-    const stmt = this.db.prepare("SELECT * FROM proposals WHERE proposal_id = ?");
-    const row = stmt.get(proposalId) as any;
-    if (!row) return null;
+  private mapProposalRow(row: any): ProposalRecord {
     return {
       proposal_id: String(row.proposal_id),
       created_seq: Number(row.created_seq),
@@ -771,6 +769,13 @@ export class ExocortexDatabase {
       expires_at: Number(row.expires_at),
       updated_at: Number(row.updated_at),
     };
+  }
+
+  public getProposal(proposalId: string): ProposalRecord | null {
+    this.getProposalStmt ??= this.db.prepare("SELECT * FROM proposals WHERE proposal_id = ?");
+    const row = this.getProposalStmt.get(proposalId) as any;
+    if (!row) return null;
+    return this.mapProposalRow(row);
   }
 
   public getProposalSourceDeviceId(proposalId: string): string | null {
