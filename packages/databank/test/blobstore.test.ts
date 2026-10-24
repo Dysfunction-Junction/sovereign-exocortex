@@ -26,6 +26,29 @@ describe("BlobStore", () => {
     return Buffer.concat(parts);
   };
 
+  it("replaces a corrupt incumbent instead of deduplicating against it", async () => {
+    const data = Buffer.from("integrity matters ".repeat(200));
+    const first = await store.put(Readable.from([data]));
+    const blobPath = store.pathFor(first.id);
+    const good = readFileSync(blobPath);
+    writeFileSync(blobPath, good.subarray(0, Math.floor(good.length / 2))); // truncate: corrupt incumbent
+    assert.equal((await store.verify(first.id)).ok, false);
+
+    const second = await store.put(Readable.from([data]));
+    assert.equal(second.id, first.id);
+    assert.equal(second.deduped, false, "a corrupt incumbent must not be reported as a dedupe hit");
+    assert.equal((await store.verify(first.id)).ok, true);
+    assert.ok(readdirSync(dirname(blobPath)).some((f) => f.includes(".corrupt-")), "the bad copy is kept for inspection");
+  });
+
+  it("still deduplicates against an intact incumbent", async () => {
+    const data = Buffer.from("same bytes");
+    const first = await store.put(Readable.from([data]));
+    const second = await store.put(Readable.from([data]));
+    assert.equal(second.id, first.id);
+    assert.equal(second.deduped, true);
+  });
+
   it("stores, dedupes identical content and reads it back", async () => {
     const a = await store.put(Readable.from([Buffer.from("photo bytes")]));
     const b = await store.put(Readable.from([Buffer.from("photo bytes")]));

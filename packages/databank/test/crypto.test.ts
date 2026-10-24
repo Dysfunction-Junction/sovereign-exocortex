@@ -242,3 +242,33 @@ describe("legacy XDB2 compatibility", () => {
     rmSync(b.dir, { recursive: true, force: true });
   });
 });
+
+describe("encryptStream failure handling", () => {
+  it("rejects (and does not crash the process) when the destination cannot be opened", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dbk-crypto-fail-"));
+    try {
+      const dest = join(dir, "missing-dir", "blob");
+      async function* slow() {
+        await new Promise((r) => setTimeout(r, 100)); // destination errors while the source is still pending
+        yield Buffer.from("payload");
+      }
+      await assert.rejects(encryptStream(keys, Readable.from(slow()), dest), /ENOENT/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects when the source stream fails mid-way and leaves no usable output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "dbk-crypto-fail-"));
+    try {
+      const dest = join(dir, "blob");
+      async function* failing() {
+        yield Buffer.alloc(FRAME_SIZE * 2, 1);
+        throw new Error("source exploded");
+      }
+      await assert.rejects(encryptStream(keys, Readable.from(failing()), dest), /source exploded/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
