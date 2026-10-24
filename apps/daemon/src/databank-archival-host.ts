@@ -9,8 +9,7 @@
  * - Always probes ArchiveClient.health() first.
  * - If the remote vault is locked, unreachable, or timed out, logs diagnostic
  *   telemetry and skips without throwing or crashing exocortexd.
- * - Prunes locally archived memories with atomic backup (.pre-prune timestamped copy)
- *   when remote archiving succeeds.
+ * - Archives only: pruning the local file is refused until concurrent writers are coordinated.
  * - Appends a structured `DATABANK_ARCHIVAL_COMPLETED` audit event to the ledger.
  */
 
@@ -40,6 +39,9 @@ export interface DatabankArchivalOptions {
   getDb?: () => ExocortexDatabase | null;
   now?: () => number;
 }
+
+/** Shared with the archive functions' guard text so callers can map the refusal to a 4xx/501. */
+export const PRUNE_DISABLED_REASON = "Memory pruning is disabled until concurrent writers are coordinated";
 
 export type DatabankRunResult =
   | (RemoteArchiveResult & { ok: true })
@@ -181,6 +183,9 @@ export class DatabankArchivalHost {
   public async runArchival(options: { olderThanDays?: number; prune?: boolean; force?: boolean } = {}): Promise<DatabankRunResult> {
     if (this.running) {
       return { ok: false, reason: "already_running" };
+    }
+    if (options.prune ?? this.prune) {
+      return { ok: false, reason: PRUNE_DISABLED_REASON };
     }
 
     const client = this.getClient();

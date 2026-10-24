@@ -33,7 +33,7 @@ import {
 import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
-import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
+import { defaultDatabankArchivalHost, PRUNE_DISABLED_REASON } from "./databank-archival-host.js";
 import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
@@ -677,8 +677,8 @@ export const server = createServer(async (req, res) => {
 
   if (method === "POST" && url.pathname === "/v3/events") {
     try {
-      if (!deviceHasScope(getDatabase(), auth.deviceId, "telemetry:write", "admin")) {
-        sendJson(res, 403, { error: "forbidden: event ingestion requires telemetry:write or admin scope" });
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "telemetry:write", "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: event ingestion requires telemetry:write, admin, or admin:write scope" });
         return;
       }
       const raw = await readBody(req, 1024 * 1024);
@@ -1571,6 +1571,10 @@ export const server = createServer(async (req, res) => {
       if (!result.ok) {
         if (result.reason === "already_running") {
           sendJson(res, 409, { ok: false, error: "archival already in progress" });
+          return;
+        }
+        if (result.reason === PRUNE_DISABLED_REASON) {
+          sendJson(res, 501, { ok: false, error: result.reason });
           return;
         }
         if (result.reason === "locked-or-unreachable" || result.reason === "unauthorized") {

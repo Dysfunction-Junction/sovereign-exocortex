@@ -56,6 +56,7 @@ describe("mishmash delegate", () => {
         payload: { playbookId },
       });
       expect(outcome.status).toBe(501);
+      expect(outcome.body.ok).toBe(false);
       const result = outcome.body.result as any;
       expect(result.ok).toBe(false);
       expect(result.error).toBe("HTTP playbook execution is not implemented");
@@ -464,11 +465,11 @@ describe("mishmash delegate", () => {
         demote,
       );
       expect(rebound.status).toBe(403);
-      // Not quarantined: the rejected demotes changed nothing (execution itself is 501, not 403).
+      // Not quarantined: the rejected demotes changed nothing (execution is 501, not 403).
       expect(
         handleMeshDelegate({ ...envelope, action: "playbook", payload: { playbookId: "victim" } })
           .status,
-      ).not.toBe(403);
+      ).toBe(501);
 
       const local = await post(port, { "content-type": "application/json" }, {
         ...envelope,

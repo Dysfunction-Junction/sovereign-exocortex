@@ -296,3 +296,40 @@ test("shadow mode blocks mutating mesh delegations even for an admin:write devic
     setDatabase(null);
   }
 });
+
+test("explicit prune request on /v3/databank/archive is refused with 501, not a server error", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_archive_admin", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v3/databank/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_archive_admin", TEST_SECRET)}` },
+      body: JSON.stringify({ prune: true }),
+    });
+    assert.equal(res.status, 501);
+    assert.match((await res.json()).error, /pruning is disabled/);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("a device with only admin:write can ingest events", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_writer", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v3/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_admin_writer", TEST_SECRET)}` },
+      body: JSON.stringify({ device_id: "dev_admin_writer", events: [{ event_id: "e_admin_writer", kind: "touch", ts_device: 1728000000000, payload: { type: "screen_view", screen: "status" } }] }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});

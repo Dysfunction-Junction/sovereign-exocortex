@@ -188,13 +188,16 @@ export function handleMeshDelegate(body: unknown): { status: number; body: Recor
     // No playbook controller is wired to this HTTP endpoint: never report a run that did not happen.
     return {
       status: 501,
-      body: envelope(record, {
-        node: NODE,
-        action: "playbook",
+      body: {
+        ...envelope(record, {
+          node: NODE,
+          action: "playbook",
+          ok: false,
+          error: "HTTP playbook execution is not implemented",
+          playbookId,
+        }),
         ok: false,
-        error: "HTTP playbook execution is not implemented",
-        playbookId,
-      }),
+      },
     };
   }
   if (record.action === "synthesize") {
