@@ -18,9 +18,9 @@
     "@exocortex/memory": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "esbuild": "^0.28.0"
+    "typescript": "^5.9.3"
   }
 }

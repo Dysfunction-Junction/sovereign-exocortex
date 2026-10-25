@@ -17,12 +17,12 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@cursor/sdk": "^1.0.24",
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@cursor/sdk": "^1.0.40",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.5",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12"

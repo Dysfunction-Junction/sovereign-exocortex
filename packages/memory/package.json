@@ -19,7 +19,7 @@
     "test": "tsx test/runner.ts"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.6.5",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
