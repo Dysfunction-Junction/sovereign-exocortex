@@ -13,8 +13,11 @@ param(
   [switch]$Lock,
   [switch]$Status,
   [switch]$NoPause,
-  [string]$Target = if ($env:DATABANK_TARGET) { $env:DATABANK_TARGET } else { "user@databank-host" }
+  [string]$Target = $env:DATABANK_TARGET
 )
+
+# A param default cannot be an if-expression (it is a parse error), so fall back here.
+if (-not $Target) { $Target = "user@databank-host" }
 
 $ErrorActionPreference = "Stop"
 $sshArgs = @("-o", "BatchMode=yes", "-o", "ConnectTimeout=10", $Target)
