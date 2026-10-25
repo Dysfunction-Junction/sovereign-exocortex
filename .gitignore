@@ -23,6 +23,8 @@ __pycache__/
 # Logs and runtime databases
 *.log
 *.jsonl
+.supervisor-pids.json
+*.supervisor-pids.json
 packages/triad/triad/logs/
 triad/logs/
 .triad_proposed_fix.patch
