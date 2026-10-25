@@ -13,6 +13,7 @@ Transforms software from brittle static source code into an evolving digital org
 
 import sys
 import os
+import stat
 import subprocess
 import shutil
 import json
@@ -263,7 +264,9 @@ class MorphogeneticEngine:
 
                 # Write bytes verbatim: write_text() translates LF to CRLF on Windows, turning
                 # every line of an LF file into a spurious change in the verified diff.
-                target_file_path.write_bytes(candidate.mutated_code.encode("utf-8"))
+                pinned_bytes = candidate.mutated_code.encode("utf-8")
+                target_file_path.write_bytes(pinned_bytes)
+                pinned_mode = stat.S_IMODE(target_file_path.stat().st_mode)
 
                 # 2. Strict Invariant Check: Zero forbidden tokens / regressions
                 raw_forbidden = os.environ.get("FORBIDDEN_MUTATION_TOKENS", "deprecated_root_api,banned_proxy")
@@ -296,6 +299,17 @@ class MorphogeneticEngine:
                 pointer_after = git_pointer.read_bytes() if git_pointer.is_file() else None
                 if pointer_before is None or pointer_after != pointer_before:
                     candidate.verification_output = "Darwinian Rejection: verified code modified the worktree git pointer"
+                    return False
+
+                # The accepted diff must come from the bytes that were scanned and tested. A runner that can
+                # write the workspace could leave different content (or a different mode) in the target.
+                try:
+                    current_bytes = target_file_path.read_bytes()
+                    current_mode = stat.S_IMODE(target_file_path.stat().st_mode)
+                except OSError:
+                    current_bytes, current_mode = None, None
+                if current_bytes != pinned_bytes or current_mode != pinned_mode:
+                    candidate.verification_output = "Darwinian Rejection: target changed during verification"
                     return False
 
                 # A zero exit is not enough: only the declared target may differ, and it must be an

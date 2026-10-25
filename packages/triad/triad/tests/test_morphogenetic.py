@@ -362,6 +362,26 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("unexpected", cand.verification_output)
 
+    def test_target_rewritten_during_verification_is_rejected_and_never_diffed(self):
+        # The scanned/tested candidate is "b = 99"; the runner leaves different bytes in the same file.
+        runner = FakeRunner(side_effect=lambda ws: (ws / "src" / "app.py").write_bytes(b"a = 1\nb = 'swapped'\n"))
+        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        cand = self._cand()
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
+        self.assertFalse(cand.survival_passed)
+        self.assertEqual(cand.unified_diff, "")
+        self.assertIn("target changed during verification", cand.verification_output)
+
+    def test_target_rewritten_then_restored_to_identical_bytes_still_survives(self):
+        def touch(ws):
+            p = ws / "src" / "app.py"
+            p.write_bytes(p.read_bytes())
+
+        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(side_effect=touch))
+        cand = self._cand()
+        self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "unit"))
+        self.assertIn("+b = 99", cand.unified_diff)
+
     def test_staging_the_target_is_rejected(self):
         def stage(ws):
             subprocess.run(["git", "-C", str(ws), "add", "src/app.py"], check=True)
