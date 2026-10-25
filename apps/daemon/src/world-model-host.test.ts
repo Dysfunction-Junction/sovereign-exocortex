@@ -408,7 +408,7 @@ test("WorldModelHost: cold start hydrates learned params when the recorder attac
     const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
     recorder.ensureHostDevice();
     seeded.setShadowRecorder(recorder);
-    seeded.ingestObservation({ invariantId: "inv_bridge_connected", observedState: false, confidence: 0.9, observedAt: 1, factor: "link_health", observation: "ws_dropped" } as never);
+    seeded.ingestObservation({ invariantId: "inv_clean_test_suite", observedState: false, confidence: 0.9, observedAt: 1, factor: "repo_health", observation: "tests_fail" } as never);
     seeded.persistBeliefState(1, db);
     const saved = db.listModelParams();
     assert.ok(saved.length > 0, "fixture must persist model params");

@@ -114,7 +114,7 @@ export default function BiometricApprovalModal() {
         </div>
 
         <h3 style={{ margin: "0 0 8px 0", fontSize: "16px", fontWeight: 600, color: "#fff" }}>
-          {active.summary || "Something needs your OK"}
+          {explanation.title}
         </h3>
 
         <div style={{ fontSize: "13px", color: "#d1d5db", marginBottom: "16px", lineHeight: 1.45 }}>

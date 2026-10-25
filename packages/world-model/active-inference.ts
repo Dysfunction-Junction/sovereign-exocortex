@@ -228,6 +228,9 @@ export class ActiveInferenceEngine {
 
       const invariant = this.invariants.get(metric.invariantId);
       if (!invariant) continue;
+      // A phone link drop is only reported after the link is back, and no action can fix it from here.
+      // The daemon's link watchdog notifies the user instead of asking a question.
+      if (invariant.category === 'HARDWARE_LINK') continue;
 
       // 1. Pragmatic Policy: Direct corrective action restoring the prior preferred state
       const pragmaticPolicy: InferencePolicy = {

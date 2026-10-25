@@ -167,6 +167,43 @@ export class PushNotifier {
     return { sent };
   }
 
+  /**
+   * Plain notice with no question attached (e.g. "your phone has not checked in"). Unlike a proposal push it
+   * carries no proposal id and nothing is marked notified. `sent` is the number of devices FCM accepted.
+   */
+  async sendNotice(title: string, body: string): Promise<{ sent: number }> {
+    const acct = this.loadAccount();
+    if (!acct) return { sent: 0 };
+    let sent = 0;
+    try {
+      const db = this.opts.getDb();
+      const tokens = db.listActivePushTokens();
+      if (tokens.length === 0) return { sent: 0 };
+      const access = await this.accessToken(acct);
+      const url = `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(this.env.FCM_PROJECT_ID!)}/messages:send`;
+      for (const t of tokens) {
+        const res = await this.fetchImpl(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: { token: t.token, notification: { title, body }, data: { type: "notice" }, android: { priority: "HIGH" } },
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (res.ok) sent++;
+        else if (res.status === 404 || res.status === 400) {
+          const text = await res.text().catch(() => "");
+          if (/UNREGISTERED|NOT_FOUND|INVALID_ARGUMENT/.test(text)) db.deleteDevicePushToken(t.device_id);
+        } else {
+          this.log(`[push-notifier] FCM HTTP ${res.status} for device ${t.device_id}`);
+        }
+      }
+    } catch (err) {
+      this.log(`[push-notifier] notice failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return { sent };
+  }
+
   /** Notify any SURFACED, unexpired proposal not yet marked notified in SQLite. */
   async pollOnce(): Promise<number> {
     let fresh: string[] = [];

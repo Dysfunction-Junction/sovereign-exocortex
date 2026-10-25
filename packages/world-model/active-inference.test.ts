@@ -145,9 +145,20 @@ describe('ActiveInferenceEngine (Pillar 3)', () => {
     expect(epistemic!.actionPayload.command).toBe('diagnostic_probe');
   });
 
+  it('does not turn a dropped phone link into a question: the link watchdog tells the user instead', () => {
+    const metric = engine.evaluateObservation({
+      invariantId: 'inv_bridge_connected',
+      observedState: false,
+      observedAt: Date.now(),
+      confidence: 1.0,
+    });
+    expect(metric.isAnomaly).toBe(true);
+    expect(engine.generatePolicies([metric])).toEqual([]);
+  });
+
   it('converts policy to proposal envelope for cognitive gate routing', () => {
     const obs: SystemObservation = {
-      invariantId: 'inv_bridge_connected',
+      invariantId: 'inv_clean_test_suite',
       observedState: false,
       observedAt: Date.now(),
       confidence: 1.0,
@@ -158,7 +169,7 @@ describe('ActiveInferenceEngine (Pillar 3)', () => {
     const proposal = engine.policyToProposal(policies[0]);
 
     expect(proposal.id).toBe(policies[0].id);
-    expect(proposal.candidateId).toBe('inv_bridge_connected');
+    expect(proposal.candidateId).toBe('inv_clean_test_suite');
     expect(proposal.confidence).toBeGreaterThan(0.8);
   });
 });
