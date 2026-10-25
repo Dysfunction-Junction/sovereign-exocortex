@@ -1559,6 +1559,84 @@ describe("process lifecycle", () => {
     expect(outcome.code !== null || outcome.signal !== null).toBe(true);
   });
 
+  it.skipIf(process.platform !== "win32")("cancel terminates provider descendants on Windows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mesh-process-tree-"));
+    cleanupPaths.push(root);
+    const provider = [
+      "const { spawn } = require('node:child_process');",
+      "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      "console.log(JSON.stringify({ grandchild: g.pid }));",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    let grandchild = 0;
+    const running = startLineProcess({
+      command: process.execPath,
+      args: ["-e", provider],
+      cwd: root,
+      env: buildSafeEnv(),
+      timeoutMs: 20_000,
+      eventsPath: join(root, "events.ndjson"),
+      onStdoutLine(line) {
+        grandchild = (JSON.parse(line) as { grandchild: number }).grandchild;
+      },
+    });
+    for (let i = 0; i < 100 && !grandchild; i += 1) await new Promise((r) => setTimeout(r, 50));
+    expect(grandchild).toBeGreaterThan(0);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(alive(grandchild)).toBe(true);
+    await running.cancel();
+    await running.completion.catch(() => undefined);
+    for (let i = 0; i < 40 && alive(grandchild); i += 1) await new Promise((r) => setTimeout(r, 50));
+    const leaked = alive(grandchild);
+    if (leaked) process.kill(grandchild, "SIGKILL"); // don't leave the test's own orphan behind
+    expect(leaked).toBe(false);
+  });
+
+  it.skipIf(process.platform !== "win32")("owner disappearance terminates provider descendants on Windows", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mesh-owner-tree-"));
+    cleanupPaths.push(root);
+    const pidFile = join(root, "grandchild.pid");
+    const provider = [
+      "const { spawn } = require('node:child_process');",
+      "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+      `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(g.pid));`,
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const supervisor = join(process.cwd(), "bin", "supervise.mjs");
+    const child = spawn(process.execPath, [supervisor], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...buildSafeEnv(),
+        AGENT_MESH_OWNER_PID: "2147483646", // not a live pid: the owner is already gone
+        AGENT_MESH_SUPERVISED_PROCESS: JSON.stringify({ command: process.execPath, args: ["-e", provider] }),
+      },
+    });
+    await new Promise<void>((resolve) => child.once("close", () => resolve()));
+    const grandchild = Number(await readFile(pidFile, "utf8"));
+    expect(grandchild).toBeGreaterThan(0);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 40 && alive(grandchild); i += 1) await new Promise((r) => setTimeout(r, 50));
+    const leaked = alive(grandchild);
+    if (leaked) process.kill(grandchild, "SIGKILL");
+    expect(leaked).toBe(false);
+  });
+
   it("terminates supervised providers when their mesh owner disappears", async () => {
     const supervisor = join(process.cwd(), "bin", "supervise.mjs");
     const child = spawn(process.execPath, [supervisor], {

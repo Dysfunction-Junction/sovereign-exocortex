@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable, Protocol, Union
+from triad.docker_runner import OutputLimitExceeded
 
 try:
     from triad.worktree import isolated_worktree, create_worktree, remove_worktree
@@ -283,6 +284,9 @@ class MorphogeneticEngine:
                     res = self.verification_runner.run(workspace=sandbox, profile=verification_profile, timeout=120)
                 except subprocess.TimeoutExpired:
                     candidate.verification_output = "Darwinian Rejection: verification timed out"
+                    return False
+                except OutputLimitExceeded:
+                    candidate.verification_output = "Darwinian Rejection: verification output exceeded the host limit"
                     return False
 
                 candidate.verification_output = (res.stdout + "\n" + res.stderr).strip()

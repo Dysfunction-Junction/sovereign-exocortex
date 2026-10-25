@@ -9,8 +9,7 @@
  * - Always probes ArchiveClient.health() first.
  * - If the remote vault is locked, unreachable, or timed out, logs diagnostic
  *   telemetry and skips without throwing or crashing exocortexd.
- * - Prunes locally archived memories with atomic backup (.pre-prune timestamped copy)
- *   when remote archiving succeeds.
+ * - Archives only: pruning the local file is refused until concurrent writers are coordinated.
  * - Appends a structured `DATABANK_ARCHIVAL_COMPLETED` audit event to the ledger.
  */
 
@@ -40,6 +39,9 @@ export interface DatabankArchivalOptions {
   getDb?: () => ExocortexDatabase | null;
   now?: () => number;
 }
+
+/** Shared with the archive functions' guard text so callers can map the refusal to a 4xx/501. */
+export const PRUNE_DISABLED_REASON = "Memory pruning is disabled until concurrent writers are coordinated";
 
 export type DatabankRunResult =
   | (RemoteArchiveResult & { ok: true })
@@ -82,7 +84,8 @@ export class DatabankArchivalHost {
     this.enabled = options.enabled ?? (process.env.EXOCORTEX_ARCHIVAL_ENABLED !== "0");
     this.intervalMs = Math.max(10_000, options.intervalMs ?? DEFAULT_ARCHIVE_INTERVAL_MS);
     this.olderThanDays = Math.max(7, options.olderThanDays ?? DEFAULT_OLDER_THAN_DAYS);
-    this.prune = options.prune ?? true;
+    // Pruning is refused by the archive functions until writers are coordinated, so archive-only is the default.
+    this.prune = options.prune ?? false;
     this.customMemoryFilePath = options.memoryFilePath;
     this.customClient = options.client;
     this.getDb = options.getDb ?? (() => (hasDatabase() ? getDatabase() : null));
@@ -180,6 +183,9 @@ export class DatabankArchivalHost {
   public async runArchival(options: { olderThanDays?: number; prune?: boolean; force?: boolean } = {}): Promise<DatabankRunResult> {
     if (this.running) {
       return { ok: false, reason: "already_running" };
+    }
+    if (options.prune ?? this.prune) {
+      return { ok: false, reason: PRUNE_DISABLED_REASON };
     }
 
     const client = this.getClient();

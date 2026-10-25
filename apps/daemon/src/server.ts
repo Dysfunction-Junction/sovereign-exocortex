@@ -33,7 +33,7 @@ import {
 import { defaultPushNotifier } from "./push-notifier.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
-import { defaultDatabankArchivalHost } from "./databank-archival-host.js";
+import { defaultDatabankArchivalHost, PRUNE_DISABLED_REASON } from "./databank-archival-host.js";
 import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
@@ -677,6 +677,10 @@ export const server = createServer(async (req, res) => {
 
   if (method === "POST" && url.pathname === "/v3/events") {
     try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "telemetry:write", "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: event ingestion requires telemetry:write, admin, or admin:write scope" });
+        return;
+      }
       const raw = await readBody(req, 1024 * 1024);
       let decoded: unknown;
       try {
@@ -735,21 +739,21 @@ export const server = createServer(async (req, res) => {
       const stored =
         deduped.req.events.length > 0
           ? db.ingestBatch(deduped.req)
-          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"] };
+          : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"], insertedEvents: [] as ReturnType<typeof db.ingestBatch>["events"] };
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
-      if (result.events.length > 0) {
+      if (result.insertedEvents.length > 0) {
         try {
           // Attach the shadow recorder to the normal append-only event pipeline. The host
           // maps only explicitly supported observation signals into shadow proposals.
           ensureShadowRecorder();
-          defaultWorldModelHost.onEventsAppended(result.events, db);
+          defaultWorldModelHost.onEventsAppended(result.insertedEvents, db);
         } catch (wmErr) {
           console.error("[world-model-host] event batch ingest hook error:", wmErr);
         }
 
         // Frontier 1: PreCognitive neuromotor readiness & dynamic wake threshold tracking
         try {
-          defaultPreCognitiveHost.onEventsAppended(result.events, db);
+          defaultPreCognitiveHost.onEventsAppended(result.insertedEvents, db);
         } catch (precogErr) {
           console.error("[precognitive-host] event batch hook error:", precogErr instanceof Error ? precogErr.message : precogErr);
         }
@@ -757,7 +761,7 @@ export const server = createServer(async (req, res) => {
         // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
         if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
           try {
-            defaultPredictionHost.onEventsAppended(result.events, db);
+            defaultPredictionHost.onEventsAppended(result.insertedEvents, db);
           } catch (predErr) {
             console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
           }
@@ -765,13 +769,13 @@ export const server = createServer(async (req, res) => {
 
         // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
         try {
-          defaultTriageHost.onEventsAppended(result.events, db);
+          defaultTriageHost.onEventsAppended(result.insertedEvents, db);
         } catch (triageErr) {
           console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
         }
 
         // Synchronize any shadow label events into shadow_labels table
-        for (const ev of result.events) {
+        for (const ev of result.insertedEvents) {
           if (ev.kind === "label") {
             try {
               const payload = JSON.parse(ev.payload);
@@ -1569,6 +1573,10 @@ export const server = createServer(async (req, res) => {
           sendJson(res, 409, { ok: false, error: "archival already in progress" });
           return;
         }
+        if (result.reason === PRUNE_DISABLED_REASON) {
+          sendJson(res, 501, { ok: false, error: result.reason });
+          return;
+        }
         if (result.reason === "locked-or-unreachable" || result.reason === "unauthorized") {
           sendJson(res, 503, { ok: false, error: `vault unavailable: ${result.reason}` });
           return;
@@ -1969,6 +1977,11 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
+      // Generic delegation can mutate downstream state; admin-only until an action-level capability map exists.
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: delegation requires admin or admin:write scope" });
+        return;
+      }
       const raw = await readBody(req, 64 * 1024);
       let decoded: unknown;
       try {
@@ -1983,7 +1996,9 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         return;
       }
       // Shadow mode: propose-only. Device/phone actuation is never delegated while SHADOW is on.
-      if (parsed.to === "hermes-api" && process.env.SHADOW !== "0") {
+      const MUTATING_MESH_ACTIONS = ["demote", "synthesize", "dispatch", "playbook"];
+      const mutatesMesh = parsed.to === "agent-mesh-mcp" && MUTATING_MESH_ACTIONS.includes(parsed.action.trim().toLowerCase());
+      if ((parsed.to === "hermes-api" || mutatesMesh) && process.env.SHADOW !== "0") {
         sendJson(res, 423, {
           ok: false,
           error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
@@ -2017,6 +2032,10 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
   if (method === "POST" && url.pathname === "/network/approve") {
     try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "approval:write", "admin")) {
+        sendJson(res, 403, { error: "forbidden: approval or rejection requires approval:write or admin scope" });
+        return;
+      }
       const raw = await readBody(req, 16 * 1024);
       let decoded: unknown;
       try {

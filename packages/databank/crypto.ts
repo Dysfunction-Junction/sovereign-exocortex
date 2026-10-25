@@ -18,8 +18,8 @@
 
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, readFileSync } from "node:fs";
-import { once } from "node:events";
-import { Transform, type Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 export const LEGACY_MAGIC = Buffer.from("XDB2");
 export const MAGIC_V3 = Buffer.from("XDB3");
@@ -122,20 +122,15 @@ export async function encryptStream(
   source: Readable,
   destPath: string,
 ): Promise<{ id: string; size: number }> {
-  const out = createWriteStream(destPath, { flags: "wx", mode: 0o600 });
   const header = Buffer.concat([MAGIC_V3, randomBytes(SALT_LEN)]);
   const frameKey = keys.deriveBlobKey(header.subarray(MAGIC_V3.length));
   const hasher = keys.idHasher();
   let size = 0;
-  let index = 0;
-  let pending: Buffer = Buffer.alloc(0);
 
-  const write = async (buf: Buffer): Promise<void> => {
-    if (!out.write(buf)) await once(out, "drain");
-  };
-
-  try {
-    await write(header);
+  async function* frames(): AsyncGenerator<Buffer> {
+    let index = 0;
+    let pending: Buffer = Buffer.alloc(0);
+    yield header;
     for await (const chunk of source) {
       const c = chunk as Buffer;
       hasher.update(c);
@@ -143,17 +138,16 @@ export async function encryptStream(
       pending = pending.length === 0 ? c : Buffer.concat([pending, c]);
       // Hold back at least one byte so the last frame can always be flagged final.
       while (pending.length > FRAME_SIZE) {
-        await write(sealFrame(frameKey, header, index++, false, pending.subarray(0, FRAME_SIZE)));
+        yield sealFrame(frameKey, header, index++, false, pending.subarray(0, FRAME_SIZE));
         pending = pending.subarray(FRAME_SIZE);
       }
     }
-    await write(sealFrame(frameKey, header, index, true, pending));
-    out.end();
-    await once(out, "finish");
-  } catch (err) {
-    out.destroy();
-    throw err;
+    yield sealFrame(frameKey, header, index, true, pending);
   }
+
+  // pipeline observes errors on both ends and destroys both streams, so a destination or source
+  // failure rejects here instead of surfacing as an unhandled stream error.
+  await pipeline(Readable.from(frames()), createWriteStream(destPath, { flags: "wx", mode: 0o600 }));
   return { id: hasher.digest(), size };
 }
 

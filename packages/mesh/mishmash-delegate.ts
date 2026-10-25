@@ -185,17 +185,19 @@ export function handleMeshDelegate(body: unknown): { status: number; body: Recor
       };
     }
 
-    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    // No playbook controller is wired to this HTTP endpoint: never report a run that did not happen.
     return {
-      status: 200,
-      body: envelope(record, {
-        node: NODE,
-        action: "playbook",
-        playbookId,
-        runId,
-        status: "completed",
-        summary: `Playbook ${playbookId} executed successfully through mesh orchestration`,
-      }),
+      status: 501,
+      body: {
+        ...envelope(record, {
+          node: NODE,
+          action: "playbook",
+          ok: false,
+          error: "HTTP playbook execution is not implemented",
+          playbookId,
+        }),
+        ok: false,
+      },
     };
   }
   if (record.action === "synthesize") {

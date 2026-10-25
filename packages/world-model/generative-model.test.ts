@@ -295,6 +295,23 @@ describe("LearnedActiveInferenceEngine", () => {
     expect(repoFactor?.version).toBeGreaterThanOrEqual(2);
   });
 
+  it("importModelParams applies the highest version regardless of input order", () => {
+    const base = new LearnedActiveInferenceEngine().exportModelParams(1).find((r) => r.factor === "repo_health" && r.kind === "A")!;
+    const olderCounts = JSON.parse(base.counts) as number[][];
+    const newerCounts = olderCounts.map((row) => [...row]);
+    newerCounts[0][0] += 5;
+    const older = { ...base, version: 2, counts: JSON.stringify(olderCounts) };
+    const newer = { ...base, version: 3, counts: JSON.stringify(newerCounts) };
+
+    for (const records of [[newer, older], [older, newer]]) {
+      const engine = new LearnedActiveInferenceEngine();
+      engine.importModelParams(records);
+      const factor = engine.getFactor("repo_health")!;
+      expect(factor.aCounts[0][0]).toBe(newerCounts[0][0]);
+      expect(factor.version).toBe(3);
+    }
+  });
+
   it("creates accurate BeliefSnapshotRecord", () => {
     const engine = new LearnedActiveInferenceEngine();
     const snapshot = engine.createBeliefSnapshot(100);

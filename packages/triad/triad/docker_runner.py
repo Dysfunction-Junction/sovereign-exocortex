@@ -20,6 +20,7 @@ the image, so use image-relative commands (``python``, not ``sys.executable``).
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -31,6 +32,76 @@ _SAFE_ENV = {
     "PYTHONUTF8": "1",
     "HOME": "/tmp",
 }
+
+
+class OutputLimitExceeded(RuntimeError):
+    """The verification produced more output than the host is willing to buffer. Callers must reject."""
+
+
+def bounded_run(
+    cmd: List[str],
+    *,
+    timeout: float,
+    max_total_bytes: int,
+) -> "subprocess.CompletedProcess[str]":
+    """Like ``subprocess.run(capture_output=True)`` but never buffers more than ``max_total_bytes``.
+
+    stdout and stderr are drained concurrently; the moment their combined size passes the budget the
+    process is killed and ``OutputLimitExceeded`` is raised. Retained output is bounded on the
+    timeout path too.
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    lock = threading.Lock()
+    total = 0
+    overflow = threading.Event()
+    chunks: Dict[str, List[bytes]] = {"out": [], "err": []}
+
+    def drain(stream, key: str) -> None:
+        nonlocal total
+        try:
+            while True:
+                data = stream.read(8192)
+                if not data:
+                    return
+                with lock:
+                    if overflow.is_set():
+                        continue  # keep draining so the child is never blocked, retain nothing
+                    total += len(data)
+                    if total > max_total_bytes:
+                        overflow.set()
+                        chunks["out"].clear()
+                        chunks["err"].clear()
+                    else:
+                        chunks[key].append(data)
+                if overflow.is_set():
+                    proc.kill()
+        except (OSError, ValueError):
+            return
+
+    threads = [
+        threading.Thread(target=drain, args=(proc.stdout, "out"), daemon=True),
+        threading.Thread(target=drain, args=(proc.stderr, "err"), daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        for t in threads:
+            t.join(timeout=5)
+        raise subprocess.TimeoutExpired(cmd, timeout)
+    for t in threads:
+        t.join(timeout=5)
+    if overflow.is_set():
+        raise OutputLimitExceeded(f"verification output exceeded {max_total_bytes} bytes")
+    return subprocess.CompletedProcess(
+        cmd,
+        proc.returncode,
+        b"".join(chunks["out"]).decode("utf-8", "replace"),
+        b"".join(chunks["err"]).decode("utf-8", "replace"),
+    )
 
 
 class IsolationUnavailable(RuntimeError):
@@ -50,6 +121,8 @@ class DockerRunner:
         max_output_bytes: int = 64 * 1024,
         docker_bin: Optional[str] = None,
         runner: Callable[..., "subprocess.CompletedProcess[str]"] = subprocess.run,
+        streamer: Optional[Callable[..., "subprocess.CompletedProcess[str]"]] = None,
+        max_stream_bytes: Optional[int] = None,
     ):
         for name, argv in profiles.items():
             if not argv or not all(isinstance(a, str) and a for a in argv):
@@ -63,6 +136,10 @@ class DockerRunner:
         self.max_output_bytes = max_output_bytes
         self._docker = docker_bin or shutil.which("docker") or "docker"
         self._run = runner
+        # The long-running `docker run` goes through a bounded streaming reader. A custom `runner` (tests)
+        # keeps handling it unless a `streamer` is given explicitly.
+        self._streamer = streamer or (bounded_run if runner is subprocess.run else None)
+        self.max_stream_bytes = max_stream_bytes if max_stream_bytes is not None else max_output_bytes * 16
         self._checked: Optional[Tuple[bool, str]] = None
 
     # -- runtime checks -------------------------------------------------------------------------
@@ -148,7 +225,10 @@ class DockerRunner:
         name = f"triad-verify-{uuid.uuid4().hex[:12]}"
         cmd = self.build_command(workspace, profile, name)
         try:
-            res = self._run(cmd, capture_output=True, text=True, timeout=timeout)
+            if self._streamer is not None:
+                res = self._streamer(cmd, timeout=timeout, max_total_bytes=self.max_stream_bytes)
+            else:
+                res = self._run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             # Killing the docker CLI does not stop the container: kill it and every descendant.
             self._cleanup(name)

@@ -48,18 +48,22 @@ describe("mishmash delegate", () => {
     expect(result.executionId).toMatch(/^exec_/);
   });
 
-  it("handles playbook action and returns completed execution state", () => {
-    const outcome = handleMeshDelegate({
-      ...envelope,
-      action: "playbook",
-      payload: { playbookId: "ambient_biometric_sync" },
-    });
-    expect(outcome.status).toBe(200);
-    const result = outcome.body.result as any;
-    expect(result.action).toBe("playbook");
-    expect(result.playbookId).toBe("ambient_biometric_sync");
-    expect(result.runId).toMatch(/^run_/);
-    expect(result.status).toBe("completed");
+  it("refuses to report execution for a playbook: HTTP execution is not implemented", () => {
+    for (const playbookId of ["ambient_biometric_sync", "no_such_playbook_xyz"]) {
+      const outcome = handleMeshDelegate({
+        ...envelope,
+        action: "playbook",
+        payload: { playbookId },
+      });
+      expect(outcome.status).toBe(501);
+      expect(outcome.body.ok).toBe(false);
+      const result = outcome.body.result as any;
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe("HTTP playbook execution is not implemented");
+      expect(result.playbookId).toBe(playbookId);
+      expect(result.runId).toBeUndefined();
+      expect(result.status).toBeUndefined();
+    }
   });
 
   it("synthesizes a new playbook DAG with pb_hash and unescalated tier 1", () => {
@@ -461,10 +465,11 @@ describe("mishmash delegate", () => {
         demote,
       );
       expect(rebound.status).toBe(403);
+      // Not quarantined: the rejected demotes changed nothing (execution is 501, not 403).
       expect(
         handleMeshDelegate({ ...envelope, action: "playbook", payload: { playbookId: "victim" } })
           .status,
-      ).toBe(200);
+      ).toBe(501);
 
       const local = await post(port, { "content-type": "application/json" }, {
         ...envelope,

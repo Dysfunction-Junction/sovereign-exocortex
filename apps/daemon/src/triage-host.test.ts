@@ -123,11 +123,11 @@ describe("TriageHost", () => {
     assert.equal(t!.length, 1500);
   });
   it("fires onVerdictStored hook when verdict is stored", async () => {
-    let firedWith: { deviceId: string; category: string; seq: number } | null = null;
+    const fired: Array<{ deviceId: string; category: string; seq: number }> = [];
     const h = new TriageHost({
       fetchImpl: okFetch({ category: "urgent", reason: "action needed" }),
       onVerdictStored: (deviceId, verdict, seq) => {
-        firedWith = { deviceId, category: verdict.category, seq };
+        fired.push({ deviceId, category: verdict.category, seq });
       },
     });
 
@@ -135,9 +135,9 @@ describe("TriageHost", () => {
     h.onEventsAppended(batch.events, db);
     await h.idle();
 
-    assert.ok(firedWith);
-    assert.equal(firedWith!.deviceId, DEVICE);
-    assert.equal(firedWith!.category, "urgent");
-    assert.equal(firedWith!.seq, batch.events[0].seq);
+    assert.equal(fired.length, 1);
+    assert.equal(fired[0].deviceId, DEVICE);
+    assert.equal(fired[0].category, "urgent");
+    assert.equal(fired[0].seq, batch.events[0].seq);
   });
 });

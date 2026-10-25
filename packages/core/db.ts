@@ -576,21 +576,27 @@ export class ExocortexDatabase {
   public ingestBatch(req: IngestReq): {
     insertedCount: number;
     duplicateCount: number;
+    /** Every submitted event's stored row, duplicates included (API compatibility). */
     events: EventRecord[];
+    /** Only rows this call appended: the sole input projections may learn from. */
+    insertedEvents: EventRecord[];
   } {
     return this.withTransaction(() => {
       const results: EventRecord[] = [];
+      const insertedEvents: EventRecord[] = [];
       let insertedCount = 0;
       let duplicateCount = 0;
 
       for (const eventIn of req.events) {
         const res = this.ingestEvent(req.device_id, eventIn);
         results.push(res.event);
-        if (res.status === 'inserted') insertedCount++;
-        else duplicateCount++;
+        if (res.status === 'inserted') {
+          insertedCount++;
+          insertedEvents.push(res.event);
+        } else duplicateCount++;
       }
 
-      return { insertedCount, duplicateCount, events: results };
+      return { insertedCount, duplicateCount, events: results, insertedEvents };
     });
   }
 

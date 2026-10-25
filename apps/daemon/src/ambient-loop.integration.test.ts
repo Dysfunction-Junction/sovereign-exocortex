@@ -224,7 +224,8 @@ test("ambient autonomic loop: telemetry -> pattern ranking -> SecondGuess stagin
     assert.equal(dispatchBody.result.skill.id, "mesh-do");
     assert.ok(dispatchBody.result.executionId.startsWith("exec_"));
 
-    // Step 13: Mesh Playbook Execution: autonomous playbook run state
+    // Step 13: Mesh Playbook Execution: HTTP playbook execution is not implemented, so the mesh must say so
+    // instead of fabricating a completed run.
     const playbookOutcome = await forwardDelegate(
       envelope("agent-mesh-mcp", "playbook", "mesh", {
         playbookId: "ambient_biometric_sync",
@@ -232,15 +233,16 @@ test("ambient autonomic loop: telemetry -> pattern ranking -> SecondGuess stagin
       }),
       relayEnv,
     );
-    assert.equal(playbookOutcome.status, 200, `mesh playbook status: ${JSON.stringify(playbookOutcome.body)}`);
+    assert.equal(playbookOutcome.status, 501, `mesh playbook status: ${JSON.stringify(playbookOutcome.body)}`);
     const playbookBody = playbookOutcome.body as {
       ok: boolean;
-      result: { status: string; playbookId: string; runId: string };
+      result: { ok: boolean; error: string; playbookId: string; runId?: string; status?: string };
     };
-    assert.equal(playbookBody.ok, true);
-    assert.equal(playbookBody.result.status, "completed");
+    assert.equal(playbookBody.ok, false);
+    assert.equal(playbookBody.result.error, "HTTP playbook execution is not implemented");
     assert.equal(playbookBody.result.playbookId, "ambient_biometric_sync");
-    assert.ok(playbookBody.result.runId.startsWith("run_"));
+    assert.equal(playbookBody.result.runId, undefined);
+    assert.equal(playbookBody.result.status, undefined);
 
     // Step 14: Bi-directional Device Actuation via Hermes Bridge (:3000 -> :8766)
     const deviceOutcome = await forwardDelegate(

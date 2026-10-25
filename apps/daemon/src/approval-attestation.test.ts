@@ -103,7 +103,7 @@ function deviceRow(id: string) {
     platform: "android" as const,
     pubkey_spki: new Uint8Array([0]),
     key_attested: 0,
-    scopes: ["telemetry:write"],
+    scopes: ["telemetry:write", "approval:write"],
     enrolled_at: Date.now(),
     revoked_at: null,
   };

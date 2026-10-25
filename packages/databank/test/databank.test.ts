@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -176,7 +176,7 @@ describe("Databank", () => {
     assert.equal(res.bad[0].id, r.blobId);
   });
 
-  it("archives old memories, skips new and malformed lines, and prunes with a backup", async () => {
+  it("archives old memories, skips new and malformed lines, and refuses to prune", async () => {
     const day = 86_400_000;
     const now = Date.UTC(2026, 9, 11);
     const file = join(root, "memories.jsonl");
@@ -188,12 +188,13 @@ describe("Databank", () => {
     assert.deepEqual([dry.scanned, dry.archived, dry.kept, dry.pruned], [3, 2, 2, false]);
     assert.ok(readFileSync(file, "utf8").includes("old one"));
 
-    const done = await archiveMemories(bank, file, { olderThanDays: 90, prune: true, now });
-    assert.equal(done.alreadyArchived, 2);
-    assert.equal(done.archived, 0);
-    assert.ok(done.pruned && existsSync(done.backup!));
-    const left = readFileSync(file, "utf8");
-    assert.ok(left.includes("fresh") && left.includes("{not json") && !left.includes("old one"));
+    const before = readFileSync(file, "utf8");
+    await assert.rejects(archiveMemories(bank, file, { olderThanDays: 90, prune: true, now }), /pruning is disabled/);
+    assert.equal(readFileSync(file, "utf8"), before, "a refused prune must not touch the memory file");
+    assert.deepEqual(readdirSync(root).filter((f) => f.includes(".pre-prune-") || f.includes(".tmp-")), []);
+
+    const again = await archiveMemories(bank, file, { olderThanDays: 90, now });
+    assert.equal(again.alreadyArchived, 2);
     assert.equal((await bank.search("old two"))[0].title, "old two");
   });
 

@@ -155,6 +155,8 @@ export async function waitForPing(
   throw new Error(`${id} did not answer ping (${last})\n${log()}`);
 }
 
+const PROTECTED_TOKEN_KEYS = new Set(["TRIAD_SERVER_TOKEN", "GATEWAY_TOKEN", "PIECES_GATEWAY_TOKEN"]);
+
 export function buildChildEnv(portVariable: string, port: number, extraEnv: Record<string, string> = {}, nodeId?: string): NodeJS.ProcessEnv {
   const allowedKeys = [
     "PATH", "Path", "SYSTEMROOT", "SystemRoot", "WINDIR", "windir",
@@ -163,10 +165,12 @@ export function buildChildEnv(portVariable: string, port: number, extraEnv: Reco
     "LOCAL_LTM_FILE", "PIECES_OS_URL", "MISHMASH_TSX", "MISHMASH_PYTHON",
     "PYTHONIOENCODING", "PYTHONUTF8"
   ];
+  // Credentials never ride in the shared extraEnv: they are added below, per node, from an explicit allowlist.
+  const shared = Object.fromEntries(Object.entries(extraEnv).filter(([key]) => !PROTECTED_TOKEN_KEYS.has(key)));
   const env: NodeJS.ProcessEnv = {
     PYTHONUNBUFFERED: "1",
     [portVariable]: String(port),
-    ...extraEnv,
+    ...shared,
   };
   // Only the triad gets its own server token; no other node child sees it.
   if (nodeId === "autonomous-triad" && process.env.TRIAD_SERVER_TOKEN) {
@@ -226,6 +230,7 @@ export async function startMishmash(options: {
       upstreams[spec.id] = upstream;
       env[spec.envKey] = upstream;
     }
+    // handle.env is returned to the caller (daemon relay/forwarding); buildChildEnv strips these before any child sees them.
     if (process.env.TRIAD_SERVER_TOKEN) env.TRIAD_SERVER_TOKEN = process.env.TRIAD_SERVER_TOKEN;
     if (process.env.GATEWAY_TOKEN) env.GATEWAY_TOKEN = process.env.GATEWAY_TOKEN;
     if (process.env.PIECES_GATEWAY_TOKEN) env.PIECES_GATEWAY_TOKEN = process.env.PIECES_GATEWAY_TOKEN;

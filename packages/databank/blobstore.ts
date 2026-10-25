@@ -63,8 +63,13 @@ export class BlobStore {
       }
       const finalPath = this.pathFor(res.id);
       if (await this.has(res.id)) {
-        await rm(tmp, { force: true });
-        return { id: res.id, size: res.size, encrypted: true, deduped: true };
+        // Existence is not integrity: authenticate the incumbent before trusting it as a dedupe hit.
+        if ((await this.verify(res.id)).ok) {
+          await rm(tmp, { force: true });
+          return { id: res.id, size: res.size, encrypted: true, deduped: true };
+        }
+        // Keep the bad copy for inspection, then replace it with the freshly written, id-checked one.
+        await rename(finalPath, `${finalPath}.corrupt-${Date.now()}`);
       }
       await mkdir(dirname(finalPath), { recursive: true });
       await rename(tmp, finalPath);

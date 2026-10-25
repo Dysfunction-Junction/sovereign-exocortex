@@ -73,9 +73,9 @@ async function main(): Promise<void> {
     }
     case "archive-memories": {
       const file = positional[0] ?? process.env.LOCAL_LTM_FILE;
-      if (!file) throw new Error("usage: archive-memories <memories.jsonl> --older-than-days N [--prune]");
+      if (!file) throw new Error("usage: archive-memories <memories.jsonl> --older-than-days N");
       const bank = open();
-      console.log(JSON.stringify(await archiveMemories(bank, file, { olderThanDays: Number(flag("older-than-days") ?? 90), prune: has("prune") })));
+      console.log(JSON.stringify(await archiveMemories(bank, file, { olderThanDays: Number(flag("older-than-days") ?? 90) })));
       bank.close();
       return;
     }
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | archive-memories <file> --older-than-days N [--prune] | search <q> | reindex | stats | verify [--limit N] | serve");
+      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | archive-memories <file> --older-than-days N | search <q> | reindex | stats | verify [--limit N] | serve");
       process.exitCode = cmd ? 2 : 0;
   }
 }

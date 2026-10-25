@@ -16,14 +16,14 @@ process.env.NODE_ENV = "test";
 const { server } = await import("./server.js");
 const { isRevoked } = await import("./device-registry.js");
 
-function deviceRow(id: string) {
+function deviceRow(id: string, scopes: string[] = ["telemetry:write"]) {
   return {
     device_id: id,
     name: id,
     platform: "linux" as const,
     pubkey_spki: new Uint8Array([0]),
     key_attested: 0,
-    scopes: ["telemetry:write"],
+    scopes,
     enrolled_at: Date.now(),
     revoked_at: null,
   };
@@ -73,7 +73,7 @@ test("malformed Host header does not crash the handler", async () => {
 
 test("/network/approve fails closed when circuit-breaker state is unavailable", async () => {
   const db = new ExocortexDatabase({ path: ":memory:" });
-  db.registerDevice(deviceRow("dev_breaker"));
+  db.registerDevice(deviceRow("dev_breaker", ["approval:write"]));
   db.isCircuitBreakerTripped = () => {
     throw new Error("db unavailable");
   };
@@ -118,7 +118,7 @@ test("shadow mode blocks /network/approve and delegation to hermes-api", async (
   const prev = process.env.SHADOW;
   delete process.env.SHADOW; // default: shadow on
   const db = new ExocortexDatabase({ path: ":memory:" });
-  db.registerDevice(deviceRow("dev_shadow"));
+  db.registerDevice(deviceRow("dev_shadow", ["approval:write", "admin:write"]));
   setDatabase(db);
   const port = await listen();
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_shadow", TEST_SECRET)}` };
@@ -229,3 +229,107 @@ test("GET /mobile/local-config rejects untrusted Host header (DNS rebinding prot
   }
 });
 
+
+const deleg = (from: string) => JSON.stringify({ v: 1, id: "env-12345678", from, to: "autonomous-triad", capability: "intent", action: "review", payload: {} });
+
+test("zero-scope device is refused on events, delegation and approve/reject before any write or forward", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_zero", []));
+  setDatabase(db);
+  const port = await listen();
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_zero", TEST_SECRET)}` };
+  const post = (path: string, body: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: "POST", headers, body });
+  try {
+    const ev = await post("/v3/events", JSON.stringify({ device_id: "dev_zero", events: [{ event_id: "e_zero", kind: "telemetry", ts_device: 1, payload: { ok: true } }] }));
+    assert.equal(ev.status, 403);
+    assert.equal(db.listEvents({}).length, 0, "no event may be written");
+
+    assert.equal((await post("/network/delegate", deleg("dev_zero"))).status, 403);
+    for (const action of ["approve", "reject"]) {
+      const res = await post("/network/approve", JSON.stringify({ proposal_id: "p1", nonce: "n1", action }));
+      assert.equal(res.status, 403, action);
+    }
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("telemetry-only device cannot approve, reject or delegate", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_tele"));
+  setDatabase(db);
+  const port = await listen();
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_tele", TEST_SECRET)}` };
+  const post = (path: string, body: string) => fetch(`http://127.0.0.1:${port}${path}`, { method: "POST", headers, body });
+  try {
+    for (const action of ["approve", "reject"]) {
+      assert.equal((await post("/network/approve", JSON.stringify({ proposal_id: "p1", nonce: "n1", action }))).status, 403, action);
+    }
+    assert.equal((await post("/network/delegate", deleg("dev_tele"))).status, 403);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("shadow mode blocks mutating mesh delegations even for an admin:write device", async () => {
+  const prev = process.env.SHADOW;
+  delete process.env.SHADOW; // default: shadow on
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_shadow", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_admin_shadow", TEST_SECRET)}` };
+  try {
+    for (const action of ["demote", "synthesize", "dispatch", "playbook"]) {
+      const res = await fetch(`http://127.0.0.1:${port}/network/delegate`, {
+        method: "POST", headers,
+        body: JSON.stringify({ v: 1, id: "env-12345678", from: "dev_admin_shadow", to: "agent-mesh-mcp", capability: "mesh", action, payload: {} }),
+      });
+      assert.equal(res.status, 423, action);
+      assert.equal((await res.json()).shadow_mode, true, action);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.SHADOW; else process.env.SHADOW = prev;
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("explicit prune request on /v3/databank/archive is refused with 501, not a server error", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_archive_admin", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v3/databank/archive`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_archive_admin", TEST_SECRET)}` },
+      body: JSON.stringify({ prune: true }),
+    });
+    assert.equal(res.status, 501);
+    assert.match((await res.json()).error, /pruning is disabled/);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});
+
+test("a device with only admin:write can ingest events", async () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_admin_writer", ["admin:write"]));
+  setDatabase(db);
+  const port = await listen();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v3/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_admin_writer", TEST_SECRET)}` },
+      body: JSON.stringify({ device_id: "dev_admin_writer", events: [{ event_id: "e_admin_writer", kind: "touch", ts_device: 1728000000000, payload: { type: "screen_view", screen: "status" } }] }),
+    });
+    assert.equal(res.status, 200);
+  } finally {
+    server.close();
+    setDatabase(null);
+  }
+});

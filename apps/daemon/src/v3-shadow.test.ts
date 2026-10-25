@@ -241,6 +241,9 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
     assert.equal(trippedMetrics.effective_shadow, true);
     assert.ok(trippedMetrics.metrics.precision < 0.90);
 
+    // /network/approve itself requires approval:write; the shadow-pending check below uses a separate telemetry-only device.
+    memoryDb.grantDeviceScope("dev_phone_user", "approval:write");
+
     // 8. Test Circuit Breaker Rollback Clamping on /network/approve
     // Approval of an action MUST be rejected with HTTP 423 Locked when breaker is tripped
     const approveAttemptRes = await fetch(`${baseUrl}/network/approve`, {
@@ -278,13 +281,21 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
     });
 
     // Verify /v3/shadow/pending requires approval:write or admin scope
+    memoryDb.registerDevice({
+      device_id: "dev_unpriv",
+      name: "dev_unpriv",
+      platform: "android",
+      pubkey_spki: new Uint8Array([0]),
+      key_attested: 0,
+      scopes: ["telemetry:write"],
+      enrolled_at: Date.now(),
+      revoked_at: null,
+    });
     const unprivilegedRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
       method: "GET",
-      headers: authHeaders,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_unpriv", TEST_SECRET)}` },
     });
     assert.equal(unprivilegedRes.status, 403);
-
-    memoryDb.grantDeviceScope("dev_phone_user", "approval:write");
     const pendingShadowRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
       method: "GET",
       headers: authHeaders,
