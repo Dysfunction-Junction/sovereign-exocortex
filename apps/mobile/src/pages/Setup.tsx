@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
 import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
@@ -17,6 +17,7 @@ import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForg
 import { flushUsageEvents } from "../lib/flush";
 import { registerApprovalKey } from "../lib/approvalKey";
 import { parseConnectionQrPayload } from "../lib/connectionQr";
+import { exchangePairingToken } from "../lib/pairing";
 import { decodeJwtForDisplay, formatExpiry } from "../lib/jwtDisplay";
 import {
   isNotificationListenerGranted, getNotificationCaptureConfig, setNotificationCapture,
@@ -31,6 +32,8 @@ import { Switch } from "../components/Switch";
 import { ScanIcon, CheckIcon, WifiIcon, CloudIcon } from "../components/Icons";
 
 export default function Setup() {
+  const scanBusy = useRef(false);
+
   // Plan A (LAN)
   const [baseUrl, setBaseUrl] = useState("");
   const [token, setToken] = useState("");
@@ -253,6 +256,8 @@ export default function Setup() {
   }
 
   async function handleScanToConnect() {
+    if (scanBusy.current) return;
+    scanBusy.current = true;
     setScanError(null);
     try {
       const { camera } = await BarcodeScanner.checkPermissions();
@@ -268,38 +273,72 @@ export default function Setup() {
       const raw = barcodes[0]?.rawValue;
       if (!raw) return;
 
-      const { baseUrl: scannedUrl, token: scannedToken } = parseConnectionQrPayload(raw);
-      const scannedProblem = checkConnectionUrl(scannedUrl);
+      const parsed = parseConnectionQrPayload(raw);
+      setChecking(true);
+      setResult("idle");
+
+      const targetUrl = parsed.baseUrl;
+      const scannedProblem = checkConnectionUrl(targetUrl);
       if (scannedProblem) {
         setScanError(scannedProblem);
         return;
       }
-      setBaseUrl(scannedUrl);
-      setToken(scannedToken);
-      setChecking(true);
-      setResult("idle");
-      try {
-        const reachable = await checkProxyHealth(scannedUrl);
-        if (!reachable) {
+
+      // 1. Health check first so we never spend a single-use token or overwrite config if host is down
+      const reachable = await checkProxyHealth(targetUrl);
+      if (!reachable) {
+        setResult("unreachable");
+        return;
+      }
+
+      let activeToken = parsed.token ?? "";
+
+      // 2. Exchange token now that host reachability is confirmed
+      if (parsed.isPairingToken && parsed.pairingToken) {
+        try {
+          const pairResult = await exchangePairingToken(targetUrl, parsed.pairingToken);
+          activeToken = pairResult.token;
+        } catch (pairErr) {
+          setScanError(pairErr instanceof Error ? pairErr.message : String(pairErr));
           setResult("unreachable");
           return;
         }
-        await setProxyBaseUrl(scannedUrl);
-        await setProxyToken(scannedToken);
-        setResult(await deepCheckAfterSave());
-        await recordEvent({
-          type: "setup_saved",
-          screen: "setup",
-          mode: classifyMode(scannedUrl),
-          timestamp: new Date().toISOString(),
-        });
-        void flushUsageEvents();
-        AccessibilityScanner.flushOutbox().catch(() => {});
-      } finally {
-        setChecking(false);
       }
+
+      if (!activeToken) {
+        setScanError("No token could be extracted or exchanged from the QR code.");
+        setResult("unreachable");
+        return;
+      }
+
+      // 3. Persist credentials only after verified reachability and exchange
+      const mode = classifyMode(targetUrl);
+      if (mode === "remote") {
+        setRemoteUrl(targetUrl);
+        setRemoteToken(activeToken);
+        await setRemoteGatewayUrl(targetUrl);
+        await setRemoteGatewayToken(activeToken);
+      } else {
+        setBaseUrl(targetUrl);
+        setToken(activeToken);
+        await setProxyBaseUrl(targetUrl);
+        await setProxyToken(activeToken);
+      }
+
+      setResult(await deepCheckAfterSave());
+      await recordEvent({
+        type: "setup_saved",
+        screen: "setup",
+        mode,
+        timestamp: new Date().toISOString(),
+      });
+      void flushUsageEvents();
+      AccessibilityScanner.flushOutbox().catch(() => {});
     } catch (e) {
       setScanError(e instanceof Error ? e.message : String(e));
+    } finally {
+      scanBusy.current = false;
+      setChecking(false);
     }
   }
 
