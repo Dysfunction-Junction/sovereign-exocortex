@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ApprovalKeyPlugin.class);
         registerPlugin(DevicePermissionsPlugin.class);
         registerPlugin(SecureCredentialsPlugin.class);
+        registerPlugin(PairingPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }
