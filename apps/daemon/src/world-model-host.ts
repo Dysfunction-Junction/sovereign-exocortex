@@ -240,7 +240,7 @@ export class WorldModelHost {
     // 2. Active Projects & Invariants
     this.lifeGraph.addEntity({ id: "project_sovereign_exocortex", name: "Sovereign Exocortex Monorepo", type: "PROJECT" });
     this.lifeGraph.addEntity({ id: "project_bear_house_classic", name: "Bear House Classic", type: "PROJECT" });
-    this.lifeGraph.addEntity({ id: "project_cafeteria_menu", name: "2nd Helpings Cafeteria Manager", type: "PROJECT" });
+    this.lifeGraph.addEntity({ id: "project_oakridge_smokehouse", name: "Oakridge Smokehouse System", type: "PROJECT" });
     this.lifeGraph.addEntity({ id: "project_autonomous_triad", name: "Autonomous Triad Advisory", type: "PROJECT" });
 
     // 3. Systemic Goals & States
@@ -251,7 +251,7 @@ export class WorldModelHost {
     // 4. Multi-Relational Associative Edges
     this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0);
     this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95);
-    this.lifeGraph.addEdge(selfId, "project_cafeteria_menu", "WORKS_ON", 0.9);
+    this.lifeGraph.addEdge(selfId, "project_oakridge_smokehouse", "WORKS_ON", 0.9);
     this.lifeGraph.addEdge(selfId, "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0);
     this.lifeGraph.addEdge(selfId, "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0);
 

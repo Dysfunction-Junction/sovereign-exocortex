@@ -12,7 +12,7 @@ describe('ActiveInferenceEngine (Pillar 3)', () => {
     graph = new LivingLifeGraph();
     graph.addEntity({ id: 'project_sovereign_exocortex', name: 'Exocortex Monorepo', type: 'PROJECT' });
     graph.addEntity({ id: 'device_phone_galaxy_s26', name: 'Galaxy S26 Ultra', type: 'DEVICE' });
-    graph.addEntity({ id: 'project_cafeteria_menu', name: '2nd Helpings Menu', type: 'PROJECT' });
+    graph.addEntity({ id: 'project_oakridge_smokehouse', name: 'Oakridge Smokehouse System', type: 'PROJECT' });
     graph.addEntity({ id: 'project_bear_house_classic', name: 'Bear House Classic', type: 'PROJECT' });
 
     engine = new ActiveInferenceEngine(graph);

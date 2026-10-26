@@ -116,7 +116,7 @@ export const DEFAULT_INVARIANTS: SystemInvariant[] = [
   {
     id: 'inv_cafeteria_synced',
     name: 'Oakridge 2nd Helpings Menu In Sync',
-    targetEntityId: 'project_cafeteria_menu',
+    targetEntityId: 'project_oakridge_smokehouse',
     preferredState: true,
     priorProbability: 0.96,
     toleranceThreshold: 0.05,
