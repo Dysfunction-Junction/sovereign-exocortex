@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { existsSync, createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { join, resolve, extname, relative, isAbsolute, sep } from "node:path";
+import { join, resolve, extname, relative, isAbsolute, sep, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
@@ -54,6 +55,16 @@ import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } fr
 // keepAliveTimeout forces undici to open a new socket well before Tailscale
 // has a chance to drop the old one silently underneath it.
 setGlobalDispatcher(new Agent({ keepAliveTimeout: 4000, keepAliveMaxTimeout: 4000 }));
+
+if (!process.env.GATEWAY_JWT_SECRET && typeof process.loadEnvFile === "function") {
+  const localEnvPath = resolve(process.cwd(), ".env");
+  const daemonEnvPath = resolve(dirname(fileURLToPath(import.meta.url)), "../.env");
+  if (existsSync(localEnvPath)) {
+    try { process.loadEnvFile(localEnvPath); } catch {}
+  } else if (existsSync(daemonEnvPath)) {
+    try { process.loadEnvFile(daemonEnvPath); } catch {}
+  }
+}
 
 const PORT = Number(process.env.GATEWAY_PORT ?? 8788);
 // Home PC's Tailscale IP, not its LAN IP - this gateway runs on a remote host
