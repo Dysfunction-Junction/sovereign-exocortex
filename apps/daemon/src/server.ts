@@ -1774,6 +1774,26 @@ export const server = createServer(async (req, res) => {
 
   // Approval-key registration. The security boundary for biometric approvals: the key that later verifies
   // them must be bound by someone holding the PC-side enrollment secret AND the phone proving possession.
+  // Advisory approval-key status check; /network/approve remains the hardware enforcement point.
+  if (method === "GET" && url.pathname === "/v3/devices/approval-key") {
+    const dev = getDatabase().getDevice(auth.deviceId);
+    if (!dev || dev.revoked_at) {
+      sendJson(res, 404, { error: "device not enrolled or revoked" });
+      return;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    sendJson(res, 200, {
+      ok: true,
+      device_id: dev.device_id,
+      name: dev.name,
+      platform: dev.platform,
+      key_attested: Number(dev.key_attested) === 1,
+      has_key: Boolean(dev.pubkey_spki && dev.pubkey_spki.length > 0),
+      enrolled_at: dev.enrolled_at,
+    });
+    return;
+  }
+
   if (method === "POST" && url.pathname === "/v3/devices/approval-key/challenge") {
     sendJson(res, 200, { ok: true, challenge: approvalKeyChallenges.issue(auth.deviceId) });
     return;

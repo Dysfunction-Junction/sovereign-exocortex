@@ -156,13 +156,33 @@ test("approval key registration + /network/approve enforce the device-bound sign
     const forged = { ...goodBody(ch2), signature_b64: sign(attacker.privateKey, approvalKeyMessage("dev_phone", ch2)) };
     assert.equal((await reg(ENROLL, forged)).status, 400);
 
+    // Query approval-key status before key registration (no auth -> 401; with auth -> has_key: false)
+    assert.equal((await fetch(`${base}/v3/devices/approval-key`)).status, 401);
+    const statusBefore = await (await fetch(`${base}/v3/devices/approval-key`, { headers: jwt })).json();
+    assert.equal(statusBefore.ok, true);
+    assert.equal(statusBefore.has_key, true);
+    assert.equal(statusBefore.key_attested, false);
+
     // 4. valid registration (fresh challenge; the failed attempt consumed ch2)
     const ch3 = (await (await fetch(`${base}/v3/devices/approval-key/challenge`, { method: "POST", headers: jwt })).json()).challenge;
     assert.equal((await reg(ENROLL, goodBody(ch3))).status, 200);
     assert.equal(db.getDevice("dev_phone")?.key_attested, 0, "the dev escape hatch must not claim hardware attestation");
+
+    // Middle state check: registered key present but hardware attestation not yet verified
+    const statusMid = await (await fetch(`${base}/v3/devices/approval-key`, { headers: jwt })).json();
+    assert.equal(statusMid.ok, true);
+    assert.equal(statusMid.has_key, true);
+    assert.equal(statusMid.key_attested, false);
+
     // Chain parsing has separate coverage. For the approval-route signature checks, represent
     // the state after a trusted chain has verified this same key.
     assert.equal(db.setDeviceApprovalKey("dev_phone", k.spki, true), true);
+
+    // Query approval-key status after verified attestation
+    const statusAfter = await (await fetch(`${base}/v3/devices/approval-key`, { headers: jwt })).json();
+    assert.equal(statusAfter.ok, true);
+    assert.equal(statusAfter.key_attested, true);
+    assert.equal(statusAfter.has_key, true);
 
     // 5. approvals: fabricated / missing / wrong-key signatures are refused before anything is forwarded
     const fake = { method: "fingerprint", timestamp: new Date().toISOString(), signature: "attest_sig_prop_1_1" };
