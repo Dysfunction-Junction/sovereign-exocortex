@@ -21,7 +21,7 @@ pnpm workspace with 13 projects including the root: primarily TypeScript, plus P
 | Path | Package | What it does |
 |---|---|---|
 | `apps/daemon` | `@exocortex/daemon` | `exocortexd` host: gateway on `:8788`, device enrollment and scoped grants, JWT auth, attestation checks, shadow recorder, FCM push, mesh launcher and sentinel |
-| `apps/mobile` | `@exocortex/mobile` | Capacitor Android app: accessibility capture, on-device triage, biometric approval modal |
+| `apps/mobile` | `@exocortex/mobile` | Capacitor Android app: accessibility capture, on-device triage, biometric approval modal, QR-based first-time pairing (`pairing.ts`, `PairingPlugin.java`) for standalone installs outside the desktop shell. As of 2026-10-25 this is the sole mobile app client — a formerly separate copy in a sibling repo sharing the same Android `appId` has been retired. |
 | `apps/desktop` | `@exocortex/desktop` | Windows-targeted Tauri shell sharing the mobile/web frontend, with tray integration and local daemon discovery |
 | `apps/cli` | `@exocortex/cli` | `exo` command: `status`, `world`, `memory`, `gate`, `test` |
 | `apps/neo4j-import` | — | Standalone Neo4j import and graph evaluation utilities |
@@ -113,6 +113,8 @@ pnpm --filter @exocortex/daemon exec tsx --env-file-if-exists=.env src/mishmash-
 pnpm desktop:build
 ```
 
+Once those sibling checkouts exist, `apps/daemon/ops/supervisor.ts` can start/stop/restart/status-check all 9 services (this daemon plus the 8 above) as a group, and two scheduled tasks (`MeshSupervisorStartup`, `MeshSupervisorWatchdog`) can keep them running automatically at boot and restart anything that dies. See [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md#6-optional-the-wider-local-mesh).
+
 The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To exercise the whole approval path on real hardware, follow [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md).
 
 ## Honest limits
@@ -151,6 +153,8 @@ Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AU
 
 ## Docs
 
+- [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md): start-from-nothing onboarding — install, configure, pair a phone, verify end-to-end, plus known pitfalls (port collisions, the retired duplicate mobile app)
+- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md): operator manual once the system is running — architecture, telemetry pipelines, cognitive core, security model, port/service health-check matrix, mesh supervisor
 - [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md): schema, event pipeline, world model math
 - [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md): phone-to-triad approval test
 - [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md): shadow mode calibration & baseline gap evaluation

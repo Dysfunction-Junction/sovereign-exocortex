@@ -107,7 +107,8 @@ The desktop interface serves as the primary executive command center, providing 
 ### Workstation Node Architecture
 - **Host Binary:** Built with **Tauri v2** and **Rust 1.90** (`apps/desktop`).
 - **Loopback IPC Bridge (`get_local_config`):** Tauri implements a native loopback TCP bridge that communicates with the daemon on `127.0.0.1:8788` over a raw socket. Because this operates at the native OS layer with no browser `Origin` header, it bypasses WebView2 CORS restrictions and pairs automatically on first boot.
-- **Auto-Pairing:** Retrieves proxy bearer tokens and daemon JWTs automatically, storing them in Capacitor Preferences with zero manual QR scanning or proxy configuration.
+- **Auto-Pairing (Desktop/Tauri app only):** The Tauri desktop shell retrieves proxy bearer tokens and daemon JWTs automatically via the loopback IPC bridge, storing them in Capacitor Preferences with zero manual QR scanning. This applies only when the mobile frontend runs *inside* the Tauri desktop app.
+- **QR Pairing (mobile Android app):** The standalone Android app (installed on a phone, not run inside Tauri) has no loopback bridge to the PC, so first-time setup uses a manual QR-code pairing flow instead: the PC's `pieces-gateway` issues a short-lived, single-use pairing token (`POST /mobile/pair`), rendered as a QR code; the phone scans it via the Setup screen's camera-based Scan to Connect to exchange the token for a device JWT. See [Setup & Onboarding Guide](SETUP_GUIDE.md) for the full walkthrough.
 
 ### 3D Living Brain Mechanics
 The canvas is rendered via `ForceGraph3D` and Three.js, mapping the active topology of the World Model across 8 entity taxonomies:
@@ -302,10 +303,31 @@ The Exocortex is maintained and extended by a collaborative triad of specialized
 |---|---|---|---|
 | **8788** | Exocortex Daemon Gateway | `node.exe` (Scheduled Task: `ExocortexDaemon`) | `curl http://127.0.0.1:8788/mobile/health` |
 | **8787** | Pieces Android Proxy | `node.exe` (Scheduled Task: `PiecesAndroidProxy`) | `curl http://127.0.0.1:8787/health` |
-| **39300** | PiecesOS Core REST API | `os_server.exe` (Windows Service) | `curl http://127.0.0.1:39300/is_alive` |
+| **39300** | PiecesOS Core REST API | `os_server.exe` (Windows Service) | `curl http://127.0.0.1:39300/.well-known/health` |
 | **7474** | Neo4j HTTP Query API | `java.exe` (Neo4j Desktop `Exocortex` DBMS) | `curl http://127.0.0.1:7474` |
 | **7687** | Neo4j Bolt Protocol | `java.exe` (Neo4j Desktop `Exocortex` DBMS) | Test-NetConnection -Port 7687 |
 | **8766** | Hermes Android Relay | `python.exe` (`android-relay-env`) | WebSocket listener |
+| **8790** | Pieces Android Companion Gateway (`pieces-gateway`) | `node.exe` (separate `pieces-android-shizuku-fix` repo; `apps/pieces-gateway`) | `curl http://127.0.0.1:8790/mobile/health` |
+
+> **Why 8790 and not 8788:** `apps/pieces-gateway` (a sibling repo, not part of this monorepo) and this repo's own daemon (`apps/daemon`) both defaulted to port `8788` in their source. On a machine running both, whichever started first silently won the port and the other's Tailscale-exposed hostname would reach the wrong service with no obvious error beyond an auth failure. Fixed by giving `pieces-gateway` its own `.env` with `GATEWAY_PORT=8790`; see [Setup & Onboarding Guide](SETUP_GUIDE.md#pieces-gateway-vs-the-daemon-same-default-port-different-apps) for the full story if you hit this again on a fresh machine.
+
+### Autonomous Mesh Supervisor
+
+In addition to the per-service scheduled tasks above, the full 9-service local mesh (this daemon plus `hermes-api`, `autonomous-triad`, `pieces-for-all`, `agent-mesh-mcp`, `pattern-analyzer`, `registry-app`, `gut-instinct`, `tool-registry-heartbeat` — see [`mishmash-nodes.ts`](../apps/daemon/src/mishmash-nodes.ts)) is managed as a group by a supervisor at `apps/daemon/ops/`:
+
+| Scheduled Task | Script | Trigger | Purpose |
+|---|---|---|---|
+| `MeshSupervisorStartup` | `ops/supervisor-startup.ps1` | Logon + Boot | Runs `supervisor.ts start`: launches any of the 9 services that isn't already listening on its port. Non-destructive — skips services already up. |
+| `MeshSupervisorWatchdog` | `ops/supervisor-watchdog.ps1` | Every 2 minutes | Polls `supervisor.ts status`; any node reported `DOWN` is confirmed on a second check, then restarted via `supervisor.ts restart <id>`. |
+
+Manual control (`apps/daemon`):
+```powershell
+npx tsx ops/supervisor.ts status            # table of all 9 services, UP/DOWN, PID, managed-vs-external
+npx tsx ops/supervisor.ts start             # start anything that's down
+npx tsx ops/supervisor.ts restart <id>      # e.g. ops/supervisor.ts restart hermes-api
+npx tsx ops/supervisor.ts stop              # stop only processes the supervisor itself launched
+```
+Auto-restart-on-crash is handled by the watchdog task above, not by the supervisor script's own `start` command — `start` is a one-shot sweep, run automatically at logon/boot and every 2 minutes by the two scheduled tasks.
 
 ### Common Operational Procedures
 
