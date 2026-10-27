@@ -1,6 +1,6 @@
 /**
  * @file triage-host.ts
- * Local LLM triage of ingested telemetry text (Ollama, qwen3:1.7b by default).
+ * Local LLM triage of ingested telemetry text (llama.cpp server, qwen3:1.7b by default).
  *
  * For every `telemetry` event that carries captured text, a job is queued and a category
  * (urgent / routine / noise) plus a short reason is stored in the append-only `triage_results`
@@ -19,7 +19,7 @@ export const TRIAGE_CATEGORIES = ["urgent", "routine", "noise"] as const;
 export type TriageCategory = (typeof TRIAGE_CATEGORIES)[number];
 
 export const DEFAULT_TRIAGE_MODEL = "qwen3:1.7b";
-const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
+const DEFAULT_LLAMA_CPP_URL = "http://127.0.0.1:8080";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_QUEUE = 50;
 const MAX_TEXT_CHARS = 1500;
@@ -116,7 +116,7 @@ export class TriageHost {
   constructor(opts: TriageHostOptions = {}) {
     this.enabled = opts.enabled ?? true;
     this.model = opts.model ?? DEFAULT_TRIAGE_MODEL;
-    this.baseUrl = (opts.baseUrl ?? DEFAULT_OLLAMA_URL).replace(/\/+$/, "");
+    this.baseUrl = (opts.baseUrl ?? DEFAULT_LLAMA_CPP_URL).replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxQueue = opts.maxQueue ?? DEFAULT_MAX_QUEUE;
     this.fetchImpl = opts.fetchImpl ?? fetch;
@@ -170,16 +170,16 @@ export class TriageHost {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
-      const res = await this.fetchImpl(`${this.baseUrl}/api/chat`, {
+      const res = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: ctrl.signal,
         body: JSON.stringify({
           model: this.model,
           stream: false,
-          think: false,
-          format: RESPONSE_SCHEMA,
-          options: { temperature: 0, num_ctx: 2048 },
+          temperature: 0,
+          max_tokens: 96,
+          response_format: { type: "json_object", schema: RESPONSE_SCHEMA },
           messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: text },
@@ -187,8 +187,8 @@ export class TriageHost {
         }),
       });
       if (!res.ok) return null;
-      const body = (await res.json()) as { message?: { content?: unknown } };
-      const content = body?.message?.content;
+      const body = (await res.json()) as { choices?: Array<{ message?: { content?: unknown } }> };
+      const content = body?.choices?.[0]?.message?.content;
       if (typeof content !== "string") return null;
       const parsed = JSON.parse(content) as { category?: unknown; reason?: unknown };
       if (!TRIAGE_CATEGORIES.includes(parsed.category as TriageCategory)) return null;
@@ -225,5 +225,5 @@ export class TriageHost {
 export const defaultTriageHost = new TriageHost({
   enabled: process.env.EXOCORTEX_TRIAGE !== "0" && process.env.NODE_ENV !== "test",
   model: process.env.EXOCORTEX_TRIAGE_MODEL || DEFAULT_TRIAGE_MODEL,
-  baseUrl: process.env.OLLAMA_URL,
+  baseUrl: process.env.LLAMA_CPP_URL,
 });

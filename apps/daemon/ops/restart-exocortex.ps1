@@ -13,7 +13,7 @@
   so a plain restart silently keeps the old code and the old environment.
 
   By default it replaces the gateway (8788) and the memory node (39400). It never touches the Pieces proxy
-  (8787), Ollama (11434) or the databank (on Lubuntu).
+  (8787), llama.cpp (8080), Ollama (11434) or the databank (on Lubuntu).
 #>
 param(
   [int[]]$Ports = @(8788, 39400)

@@ -1,4 +1,4 @@
-/** CPU-only Ollama benchmark using the same category and response schema as triage-host. */
+/** CPU-only llama.cpp benchmark using the same category and response schema as triage-host. */
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -39,7 +39,7 @@ function fmt(value: number | null, digits = 1): string {
   return value === null || !Number.isFinite(value) ? "n/a" : value.toFixed(digits);
 }
 
-async function ollama<T>(baseUrl: string, route: string, init?: RequestInit): Promise<T> {
+async function llamaCpp<T>(baseUrl: string, route: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${baseUrl}${route}`, {
     ...init,
     signal: AbortSignal.timeout(180_000),
@@ -58,27 +58,26 @@ async function benchmarkModel(baseUrl: string, model: string, samples: Sample[])
   for (const sample of samples) {
     const started = performance.now();
     try {
-      const result = await ollama<{
-        message?: { content?: unknown }; prompt_eval_count?: number; eval_count?: number; eval_duration?: number;
-      }>(baseUrl, "/api/chat", {
+      const result = await llamaCpp<{
+        choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      }>(baseUrl, "/v1/chat/completions", {
         method: "POST",
         body: JSON.stringify({
-          model, stream: false, think: false, format: FORMAT,
-          options: { temperature: 0, num_ctx: 2048, num_gpu: 0 },
+          model, stream: false, temperature: 0, max_tokens: 96,
+          response_format: { type: "json_object", schema: FORMAT },
           messages: [{ role: "system", content: SYSTEM_PROMPT }, { role: "user", content: sample.text }],
         }),
       });
       const latencyMs = performance.now() - started;
-      const content = result.message?.content;
+      const content = result.choices?.[0]?.message?.content;
       const parsed = typeof content === "string" ? JSON.parse(content) as { category?: unknown } : {};
       const predicted = ["urgent", "routine", "noise"].includes(String(parsed.category)) ? String(parsed.category) : null;
-      const outputTokens = Number.isFinite(result.eval_count) ? result.eval_count! : null;
-      const evalDurationSeconds = Number.isFinite(result.eval_duration) && result.eval_duration! > 0 ? result.eval_duration! / 1e9 : null;
+      const outputTokens = Number.isFinite(result.usage?.completion_tokens) ? result.usage!.completion_tokens! : null;
       measurements.push({
         id: sample.id, expected: sample.label, predicted, correct: predicted === sample.label,
-        latencyMs, promptTokens: Number.isFinite(result.prompt_eval_count) ? result.prompt_eval_count! : null,
-        outputTokens,
-        tokensPerSecond: outputTokens !== null && evalDurationSeconds ? outputTokens / evalDurationSeconds : null,
+        latencyMs, promptTokens: Number.isFinite(result.usage?.prompt_tokens) ? result.usage!.prompt_tokens! : null,
+        outputTokens, tokensPerSecond: null,
       });
     } catch (error) {
       measurements.push({
@@ -89,16 +88,8 @@ async function benchmarkModel(baseUrl: string, model: string, samples: Sample[])
     }
   }
 
-  let modelSizeBytes: number | null = null;
-  let vramBytes: number | null = null;
-  try {
-    const ps = await ollama<{ models?: Array<{ name: string; size?: number; size_vram?: number }> }>(baseUrl, "/api/ps");
-    const loaded = ps.models?.find((entry) => entry.name === model || entry.name.startsWith(`${model}:`));
-    modelSizeBytes = loaded?.size ?? null;
-    vramBytes = loaded?.size_vram ?? null;
-  } catch {
-    // Some Ollama versions do not expose /api/ps; measurements remain valid without resident-size data.
-  }
+  const modelSizeBytes: number | null = null;
+  const vramBytes: number | null = null;
 
   const latencies = measurements.map((m) => m.latencyMs);
   const throughput = measurements.flatMap((m) => m.tokensPerSecond === null ? [] : [m.tokensPerSecond]);
@@ -114,13 +105,12 @@ async function benchmarkModel(baseUrl: string, model: string, samples: Sample[])
 
 function report(results: Awaited<ReturnType<typeof benchmarkModel>>[], count: number, baseUrl: string): string {
   const lines = [
-    "# Local Ollama triage benchmark",
+    "# Local llama.cpp triage benchmark",
     "",
     `Generated: ${new Date().toISOString()}`,
     `Endpoint: ${baseUrl}`,
     `Dataset size: ${count}`,
-    "Execution: sequential requests, CPU forced with `num_gpu: 0`; latency includes HTTP/model response time.",
-    "Memory: `size` and `size_vram` are Ollama resident model measurements from `/api/ps`, when available. `size` is model footprint, not process RSS.",
+    "Execution: sequential requests; latency includes HTTP/model response time. tokens/sec and resident memory are not supplied by the portable OpenAI-compatible response.",
     "",
     "| Model | Accuracy | Mean latency | Median | P95 | Mean output tok/s | Model bytes | VRAM bytes |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -132,7 +122,7 @@ function report(results: Awaited<ReturnType<typeof benchmarkModel>>[], count: nu
 }
 
 async function main(): Promise<void> {
-  const baseUrl = (flag("url", process.env.OLLAMA_URL ?? "http://127.0.0.1:11434")!).replace(/\/+$/u, "");
+  const baseUrl = (flag("url", process.env.LLAMA_CPP_URL ?? "http://127.0.0.1:8080")!).replace(/\/+$/u, "");
   const datasetPath = flag("dataset");
   const samples = JSON.parse(await readFile(datasetPath ? resolve(datasetPath) : DEFAULT_DATASET, "utf8")) as Sample[];
   if (!Array.isArray(samples) || samples.length === 0 || samples.some((s) => !s.id || !s.text || !["urgent", "routine", "noise"].includes(s.label))) {

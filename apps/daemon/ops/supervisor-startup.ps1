@@ -1,9 +1,8 @@
 # Hidden-window startup launcher for the mesh process supervisor.
 # Invoked by the MeshSupervisorStartup scheduled task at logon/boot.
 #
-# Runs `supervisor.ts start` once to bring up any of the 9 mesh services
-# that aren't already listening, then exits (the supervisor itself is not
-# a long-running watchdog in this pass -- see supervisor-core.ts header).
+# Runs `supervisor.ts start` once to bring up any of the 9 mesh services,
+# and starts local llama.cpp inference if it is not already healthy.
 
 $ErrorActionPreference = 'Continue'
 
@@ -37,6 +36,9 @@ if (Test-Path $LogFile) {
 }
 
 Log "=== supervisor-startup starting (pid $PID) ==="
+
+. (Join-Path $PSScriptRoot 'ensure-llama-server.ps1')
+if (-not (Ensure-LlamaServer)) { Log "llama-server startup failed; watchdog will retry" }
 
 foreach ($p in @($NodeExe, $TsxCli, $Supervisor)) {
     if (-not (Test-Path $p)) { Log "FATAL: missing $p"; exit 1 }

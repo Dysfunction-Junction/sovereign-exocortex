@@ -12,7 +12,7 @@ const DEVICE = "phone-1";
 function okFetch(content: unknown, calls: Array<Record<string, unknown>> = []): typeof fetch {
   return (async (_url: unknown, init?: { body?: string }) => {
     calls.push(JSON.parse(String(init?.body)));
-    return new Response(JSON.stringify({ message: { content: typeof content === "string" ? content : JSON.stringify(content) } }), { status: 200 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: typeof content === "string" ? content : JSON.stringify(content) } }] }), { status: 200 });
   }) as unknown as typeof fetch;
 }
 
@@ -44,7 +44,7 @@ describe("TriageHost", () => {
     db.ingestBatch({ device_id: DEVICE, events: events.map((e) => ({ ...e, event_id: `e${++n}`, schema_ver: 1 as const })) });
   const rows = () => db.raw.prepare("SELECT * FROM triage_results ORDER BY event_seq").all() as Array<Record<string, unknown>>;
 
-  it("stores a verdict from qwen3:1.7b with the JSON schema and think disabled", async () => {
+  it("stores a verdict from qwen3:1.7b using llama.cpp structured JSON output", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const h = new TriageHost({ fetchImpl: okFetch({ category: "urgent", reason: "refill expires tomorrow" }, calls) });
     h.onEventsAppended(ingest([telemetry("your prescription refill is ready")]).events, db);
@@ -54,8 +54,9 @@ describe("TriageHost", () => {
     assert.equal(r[0].category, "urgent");
     assert.equal(r[0].model, "qwen3:1.7b");
     assert.equal(calls[0].model, "qwen3:1.7b");
-    assert.equal(calls[0].think, false);
-    assert.ok(calls[0].format);
+    assert.equal(calls[0].stream, false);
+    assert.equal((calls[0].response_format as { type: string }).type, "json_object");
+    assert.ok((calls[0].response_format as { schema?: unknown }).schema);
   });
 
   it("ignores non-telemetry events and telemetry without text", async () => {
@@ -94,7 +95,7 @@ describe("TriageHost", () => {
     const gate = new Promise<void>((r) => (release = r));
     const slow = (async () => {
       await gate;
-      return new Response(JSON.stringify({ message: { content: JSON.stringify({ category: "noise", reason: "x" }) } }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ category: "noise", reason: "x" }) } }] }), { status: 200 });
     }) as unknown as typeof fetch;
     const h = new TriageHost({ fetchImpl: slow, maxQueue: 2 });
     h.onEventsAppended(ingest([telemetry("1"), telemetry("2"), telemetry("3"), telemetry("4")]).events, db);

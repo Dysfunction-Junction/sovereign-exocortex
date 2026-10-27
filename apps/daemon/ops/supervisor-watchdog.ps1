@@ -1,6 +1,7 @@
 # Runs every 2 minutes (MeshSupervisorWatchdog scheduled task).
-# Polls the 9-service local mesh via `supervisor.ts status` and restarts
-# anything reported DOWN via `supervisor.ts restart <id>`. Mirrors the
+# Keeps local llama.cpp inference healthy, then polls the 9-service local mesh
+# via `supervisor.ts status` and restarts anything reported DOWN via
+# `supervisor.ts restart <id>`. Mirrors the
 # pattern in pieces-android-shizuku-fix/apps/proxy/scripts/health-watchdog.ps1
 # (probe twice before acting, log every decision, never touch healthy nodes).
 
@@ -69,6 +70,9 @@ function Invoke-Supervisor([string[]]$SupervisorArgs, [int]$TimeoutSec = 60) {
 foreach ($p in @($NodeExe, $TsxCli, $Supervisor)) {
     if (-not (Test-Path $p)) { Log "FATAL: missing $p"; exit 1 }
 }
+
+. (Join-Path $PSScriptRoot 'ensure-llama-server.ps1')
+if (-not (Ensure-LlamaServer)) { Log "llama-server ensure failed; will retry on next watchdog pass" }
 
 $mutex = New-Object System.Threading.Mutex($false, 'Global\MeshSupervisorOps')
 if (-not $mutex.WaitOne(0)) {

@@ -317,8 +317,8 @@ In addition to the per-service scheduled tasks above, the full 9-service local m
 
 | Scheduled Task | Script | Trigger | Purpose |
 |---|---|---|---|
-| `MeshSupervisorStartup` | `ops/supervisor-startup.ps1` | Logon + Boot | Runs `supervisor.ts start`: launches any of the 9 services that isn't already listening on its port. Non-destructive — skips services already up. |
-| `MeshSupervisorWatchdog` | `ops/supervisor-watchdog.ps1` | Every 2 minutes | Polls `supervisor.ts status`; any node reported `DOWN` is confirmed on a second check, then restarted via `supervisor.ts restart <id>`. |
+| `MeshSupervisorStartup` | `ops/supervisor-startup.ps1` | Logon + Boot | Ensures llama.cpp triage server is healthy, then runs `supervisor.ts start` for any of the 9 services that isn't already listening. |
+| `MeshSupervisorWatchdog` | `ops/supervisor-watchdog.ps1` | Every 2 minutes | Checks/restarts llama.cpp triage server, then polls `supervisor.ts status`; any node reported `DOWN` is confirmed on a second check and restarted via `supervisor.ts restart <id>`. |
 
 Manual control (`apps/daemon`):
 ```powershell

@@ -1,0 +1,9 @@
+# Handoff — llama.cpp triage keepalive (2026-10-27)
+
+Telemetry triage now calls the llama.cpp OpenAI-compatible endpoint on `127.0.0.1:8080`. The Windows CPU build is in `%LOCALAPPDATA%\llama.cpp`; it loads the existing Qwen 3 1.7B GGUF from `%USERPROFILE%\.ollama\models\blobs\...` with 2048 context, 8 CPU threads, and GPU layers disabled.
+
+`apps/daemon/ops/ensure-llama-server.ps1` checks `/health`, launches the server hidden when it is down, and restarts only the matching `llama-server.exe` when unhealthy. `supervisor-startup.ps1` invokes it during startup; `supervisor-watchdog.ps1` invokes it on each watchdog pass before taking the mesh mutex. A global llama mutex prevents simultaneous startup/logon/watchdog launches. The helper is dot-sourced, so its variables and log function use unique llama-prefixed names to avoid overwriting the parent watchdog's `Log` function and `$LogFile`. The existing `MeshSupervisorStartup` task is enabled for boot and logon; `MeshSupervisorWatchdog` is enabled and repeats every two minutes. Both run as S4U user `micha`.
+
+**Verification:** PowerShell parsed all three scripts without errors. A controlled stop followed by `Ensure-LlamaServer` restored the process and `/health` returned `ok`; manually invoking the scheduled watchdog completed with result 0. The watchdog and startup task definitions were inspected; an actual machine reboot was not performed. Earlier triage fixture run: 15 samples, 1.74 s mean, 73.3% accuracy (not an Ollama speed comparison). Daemon TypeScript typecheck passed.
+
+**Operational dependency:** the GGUF remains in Ollama's model blob store, so do not remove `qwen3:1.7b` from Ollama unless the model is copied and `ensure-llama-server.ps1` is updated. Logs: `%LOCALAPPDATA%\llama.cpp\keepalive.log`, `server.stdout.log`, `server.stderr.log`.
