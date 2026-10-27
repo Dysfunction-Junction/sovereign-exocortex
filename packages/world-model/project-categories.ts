@@ -41,21 +41,31 @@ const isPiecesExport = (properties: Record<string, unknown> | undefined): boolea
   return tags.some((t) => typeof t === 'string' && /^#?pieces$/i.test(t.trim())) || path.some((p) => /^pieces$/i.test(p));
 };
 
+/** File one document under exactly one owner: its canonical project, the Pieces export project, or the operator. */
+export function attachDocumentToOwner(
+  graph: LivingLifeGraph,
+  entity: { id: string; name: string; properties?: Record<string, unknown> },
+  operatorId: string,
+): void {
+  const tags = Array.isArray(entity.properties?.tags) ? entity.properties.tags : [];
+  let projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
+  if (projectIds.length === 0 && isPiecesExport(entity.properties)) projectIds = ['project_pieces_os'];
+  for (const id of projectIds) {
+    if (graph.getEntity(id)) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
+  }
+  const mentionsOperator = tags.some((tag) => typeof tag === 'string' && /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()));
+  if ((mentionsOperator || projectIds.length === 0) && graph.getEntity(operatorId)) {
+    graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9);
+  }
+}
+
 /**
- * Remove tag clouds and file every document under exactly one owner: its canonical project, the Pieces export
- * project, or (for the operator's own vault notes) the operator. Projects hang off the operator, so the only
+ * Remove tag clouds and file every document under exactly one owner. Projects hang off the operator, so the only
  * hubs are the operator and projects.
  */
 export function normalizeProjectCategories(graph: LivingLifeGraph, operatorId: string): void {
-  const snapshot = graph.snapshot();
-  for (const entity of snapshot.entities) {
-    if (entity.type !== 'DOC') continue;
-    const tags = Array.isArray(entity.properties?.tags) ? entity.properties.tags : [];
-    let projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
-    if (projectIds.length === 0 && isPiecesExport(entity.properties)) projectIds = ['project_pieces_os'];
-    for (const id of projectIds) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
-    const mentionsOperator = tags.some((tag) => typeof tag === 'string' && /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()));
-    if (mentionsOperator || projectIds.length === 0) graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9);
+  for (const entity of graph.snapshot().entities) {
+    if (entity.type === 'DOC') attachDocumentToOwner(graph, entity, operatorId);
   }
   for (const entity of graph.snapshot().entities) {
     if (entity.type === 'TOPIC' || /^person_michael_hebert$/i.test(entity.id)) graph.removeEntity(entity.id);

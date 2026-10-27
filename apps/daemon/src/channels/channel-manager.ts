@@ -13,7 +13,7 @@ import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
 import type { ChannelAdapter, ChannelId, ChannelStatus, SyncResult, IngestedDocument, IngestedEntity } from "./types.js";
 import type { WorldModelHost } from "../world-model-host.js";
-import { classifyProjectIds } from "@exocortex/world-model";
+import { attachDocumentToOwner } from "@exocortex/world-model";
 
 // Entity id prefixes each adapter writes (see the adapters' `id:` fields); purge must match them.
 const CHANNEL_ENTITY_PREFIXES: Record<ChannelId, readonly string[]> = {
@@ -102,14 +102,8 @@ export class ChannelManager {
         lastActive: existing ? existing.lastActive : Date.now(),
       });
 
-      // Tags are source metadata. Only explicit project names create graph
-      // relationships; generic vault tags must not become competing hubs.
-      for (const projectId of classifyProjectIds([doc.id, doc.title, doc.sourcePath, ...doc.tags])) {
-        graph.addEdge(doc.id, projectId, "REFERENCES", 0.9);
-      }
-      if (doc.tags.some((tag) => /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()))) {
-        graph.addEdge(process.env.EXOCORTEX_OPERATOR_ID || "person_operator", doc.id, "MENTIONS", 0.9);
-      }
+      // Tags are source metadata; each doc is filed under one project (or the operator), never a tag hub.
+      attachDocumentToOwner(graph, { id: doc.id, name: doc.title, properties: { sourcePath: doc.sourcePath, tags: doc.tags } }, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
 
       for (const link of doc.wikilinks) {
         const cleanLink = link.toLowerCase().replace(/\\/g, "/");
