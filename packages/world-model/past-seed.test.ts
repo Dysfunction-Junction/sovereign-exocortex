@@ -43,3 +43,15 @@ test('re-seeding preserves project count', () => {
   seedFromPastSessions(g, input, { now });
   assert.equal(g.entityCount, before);
 });
+
+test('no document is orphaned: Pieces exports go to the Pieces project, other vault notes to the operator', () => {
+  const g = new LivingLifeGraph();
+  g.addEntity({ id: 'person_operator', name: 'Operator', type: 'PERSON' });
+  g.addEntity({ id: 'doc:obsidian:Pieces/markdown/a.md', name: 'a', type: 'DOC', properties: { tags: ['pieces', 'markdown'], sourcePath: 'Pieces/markdown/a.md' } });
+  g.addEntity({ id: 'doc:obsidian:Daily/Today.md', name: 'Today', type: 'DOC', properties: { tags: [], sourcePath: 'Daily/Today.md' } });
+  seedFromPastSessions(g, [], { now });
+  normalizeProjectCategories(g, 'person_operator');
+  assert.ok(g.getNeighbors('doc:obsidian:Pieces/markdown/a.md').some((e) => e.id === 'project_pieces_os'));
+  assert.ok(g.getNeighbors('person_operator').some((e) => e.id === 'doc:obsidian:Daily/Today.md'));
+  assert.ok(g.getNeighbors('person_operator').some((e) => e.id === 'project_pieces_os'));
+});

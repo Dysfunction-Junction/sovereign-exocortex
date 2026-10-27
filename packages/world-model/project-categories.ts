@@ -9,6 +9,7 @@ export const CANONICAL_PROJECTS = [
   { id: 'project_gut_instinct', name: 'Gut-Instinct', aliases: ['gut-instinct', 'gut instinct'] },
   { id: 'project_registry_app', name: 'SecondGuess Registry App', aliases: ['registry-app', 'secondguess', 'second guess'] },
   { id: 'project_bear_house_classic', name: 'Bear House Classic', aliases: ['bear-house-classic', 'bear house classic', 'familyos'] },
+  { id: 'project_pieces_os', name: 'PiecesOS Workstream Memory', aliases: ['pieces-os', 'piecesos'] },
   { id: 'project_oakridge_smokehouse', name: 'Oakridge Smokehouse System', aliases: ['oakridge-smokehouse', 'oakridge-procurement', 'cafeteria-menu-manager', '2nd-helpings', 'second-helpings'] },
 ] as const;
 
@@ -34,24 +35,34 @@ export function seedCanonicalProjects(graph: LivingLifeGraph): void {
   for (const project of CANONICAL_PROJECTS) graph.addEntity({ id: project.id, type: 'PROJECT', name: project.name });
 }
 
-/** Remove tag clouds and attach documents directly to their canonical project(s). */
+const isPiecesExport = (properties: Record<string, unknown> | undefined): boolean => {
+  const tags = Array.isArray(properties?.tags) ? properties.tags : [];
+  const path = String(properties?.sourcePath ?? '').replace(/\\/g, '/').split('/');
+  return tags.some((t) => typeof t === 'string' && /^#?pieces$/i.test(t.trim())) || path.some((p) => /^pieces$/i.test(p));
+};
+
+/**
+ * Remove tag clouds and file every document under exactly one owner: its canonical project, the Pieces export
+ * project, or (for the operator's own vault notes) the operator. Projects hang off the operator, so the only
+ * hubs are the operator and projects.
+ */
 export function normalizeProjectCategories(graph: LivingLifeGraph, operatorId: string): void {
   const snapshot = graph.snapshot();
   for (const entity of snapshot.entities) {
     if (entity.type !== 'DOC') continue;
-    const projectIds = classifyProjectIds([
-      entity.id,
-      entity.name,
-      entity.properties?.sourcePath as string,
-      ...(Array.isArray(entity.properties?.tags) ? entity.properties.tags : []),
-    ]);
-    for (const id of projectIds) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
     const tags = Array.isArray(entity.properties?.tags) ? entity.properties.tags : [];
-    if (tags.some((tag) => typeof tag === 'string' && /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()))) {
-      graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9);
-    }
+    let projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
+    if (projectIds.length === 0 && isPiecesExport(entity.properties)) projectIds = ['project_pieces_os'];
+    for (const id of projectIds) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
+    const mentionsOperator = tags.some((tag) => typeof tag === 'string' && /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()));
+    if (mentionsOperator || projectIds.length === 0) graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9);
   }
   for (const entity of graph.snapshot().entities) {
     if (entity.type === 'TOPIC' || /^person_michael_hebert$/i.test(entity.id)) graph.removeEntity(entity.id);
+  }
+  if (graph.getEntity(operatorId)) {
+    for (const project of CANONICAL_PROJECTS) {
+      if (graph.getEntity(project.id)) graph.addEdge(operatorId, project.id, 'WORKS_ON', 0.8);
+    }
   }
 }
