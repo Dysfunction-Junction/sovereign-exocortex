@@ -12,6 +12,8 @@
 
 import {
   seedFromPastSessions,
+  seedCanonicalProjects,
+  normalizeProjectCategories,
   seedFromComms,
   type CommsSeedResult,
   type PastSeedResult,
@@ -174,13 +176,14 @@ export class WorldModelHost {
             payload: ev.payload,
           },
           this.lifeGraph,
-          { autoCreate, createMissingTopics: autoCreate },
+          { autoCreate, createMissingTopics: false },
         );
         this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
       } catch {
         // Ignore unparsable legacy payloads during replay
       }
     }
+    normalizeProjectCategories(this.lifeGraph, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
     this.hydrated = true;
   }
 
@@ -238,30 +241,14 @@ export class WorldModelHost {
     this.lifeGraph.addEntity({ id: "device_phone_galaxy_s26", name: "Mobile Companion", type: "DEVICE" });
 
     // 2. Active Projects & Invariants
-    this.lifeGraph.addEntity({ id: "project_sovereign_exocortex", name: "Sovereign Exocortex Monorepo", type: "PROJECT" });
-    this.lifeGraph.addEntity({ id: "project_bear_house_classic", name: "Bear House Classic", type: "PROJECT" });
-    this.lifeGraph.addEntity({ id: "project_oakridge_smokehouse", name: "Oakridge Smokehouse System", type: "PROJECT" });
-    this.lifeGraph.addEntity({ id: "project_autonomous_triad", name: "Autonomous Triad Advisory", type: "PROJECT" });
+    seedCanonicalProjects(this.lifeGraph);
 
     // 3. Systemic Goals & States
     this.lifeGraph.addEntity({ id: "goal_zero_cafeteria_disruption", name: "Zero Cafeteria Meal Disruption", type: "GOAL" });
     this.lifeGraph.addEntity({ id: "goal_100_percent_tests_pass", name: "100% Monorepo Test Pass Rate", type: "GOAL" });
     this.lifeGraph.addEntity({ id: "state_deep_focus", name: "Deep Focus Flow State", type: "CONTEXT_STATE" });
 
-    // 4. Canonical Knowledge Hub & Identity Topics
-    this.lifeGraph.addEntity({ id: "topic_michael_hebert", name: "Michael Hebert", type: "TOPIC" });
-    this.lifeGraph.addEntity({ id: "topic_pieces", name: "Pieces", type: "TOPIC" });
-    if (!this.lifeGraph.getEntity("topic_pieces_os")) {
-      this.lifeGraph.addEntity({ id: "topic_pieces_os", name: "pieces-os", type: "TOPIC" });
-    }
-    if (!this.lifeGraph.getEntity("topic_pieces_android")) {
-      this.lifeGraph.addEntity({ id: "topic_pieces_android", name: "pieces-android", type: "TOPIC" });
-    }
-    if (!this.lifeGraph.getEntity("topic_pieces_proxy")) {
-      this.lifeGraph.addEntity({ id: "topic_pieces_proxy", name: "pieces-proxy", type: "TOPIC" });
-    }
-
-    // 5. Multi-Relational Associative Edges
+    // 4. Operator-to-project links are the graph's top-level organization.
     this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0);
     this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95);
     this.lifeGraph.addEdge(selfId, "project_oakridge_smokehouse", "WORKS_ON", 0.9);
@@ -272,18 +259,14 @@ export class WorldModelHost {
     this.lifeGraph.addEdge(selfId, "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge(selfId, "device_phone_galaxy_s26", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge(selfId, "state_deep_focus", "CARES_ABOUT", 1.0);
-    this.lifeGraph.addEdge(selfId, "topic_michael_hebert", "CARES_ABOUT", 1.0);
 
     // Inter-hardware & systemic dependency edges
     this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95);
-    this.lifeGraph.addEdge("project_sovereign_exocortex", "topic_pieces", "DEPENDS_ON", 0.9);
-
-    // Pieces topic hierarchy bridges (linking root Pieces topic to subsystem topics)
-    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_os", "INTERACTS_WITH", 0.8);
-    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_android", "INTERACTS_WITH", 0.8);
-    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_proxy", "INTERACTS_WITH", 0.8);
+    for (const project of this.lifeGraph.snapshot().entities.filter((entity) => entity.type === "PROJECT")) {
+      this.lifeGraph.addEdge(selfId, project.id, "WORKS_ON", 0.85);
+    }
   }
 
   private pastSeeded = false;
@@ -306,7 +289,10 @@ export class WorldModelHost {
           return [];
         }
       });
-      return sessions.length > 0 ? seedFromPastSessions(this.lifeGraph, sessions) : null;
+      if (!sessions.length) return null;
+      const result = seedFromPastSessions(this.lifeGraph, sessions);
+      normalizeProjectCategories(this.lifeGraph, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
+      return result;
     } catch (err) {
       console.error("[life-graph] past seeding skipped:", err instanceof Error ? err.message : err);
       return null;

@@ -9,7 +9,7 @@
  */
 
 import { LivingLifeGraph } from './life-graph.js';
-import { seedFromPastSessions, type PastSession } from './past-seed.js';
+import type { PastSession } from './past-seed.js';
 
 export interface BacktestOptions {
   trainFraction?: number;
@@ -38,6 +38,16 @@ export interface BacktestReport {
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 const topicIds = (s: PastSession): string[] => [...new Set(s.tags.map(slug).filter(Boolean))].map((x) => `topic_${x}`);
 
+/** Backtests intentionally use transient tag topics; these never enter the production life graph. */
+function seedBacktestGraph(graph: LivingLifeGraph, sessions: PastSession[], minCount: number): void {
+  const counts = new Map<string, number>();
+  for (const session of sessions) for (const id of topicIds(session)) counts.set(id, (counts.get(id) ?? 0) + 1);
+  const kept = new Set([...counts].filter(([, count]) => count >= minCount).map(([id]) => id));
+  for (const id of kept) graph.addEntity({ id, type: 'TOPIC', name: id.slice(6) });
+  const main = sessions.map((session) => topicIds(session).filter((id) => kept.has(id)).sort((a, b) => counts.get(b)! - counts.get(a)! || a.localeCompare(b))[0]);
+  for (let i = 0; i + 1 < main.length; i++) if (main[i] && main[i + 1] && main[i] !== main[i + 1]) graph.addEdge(main[i]!, main[i + 1]!, 'TRANSITIONS_TO', 1);
+}
+
 function wilson(hits: number, n: number): [number, number] {
   if (n === 0) return [0, 0];
   const z = 1.96, p = hits / n, d = 1 + (z * z) / n;
@@ -59,7 +69,7 @@ export function backtestNextTopic(sessions: PastSession[], opts: BacktestOptions
     topicIds(s).filter((i) => kept.has(i)).sort((a, b) => counts.get(b)! - counts.get(a)! || a.localeCompare(b))[0];
 
   const graph = new LivingLifeGraph();
-  seedFromPastSessions(graph, train, { now: train[train.length - 1]!.ts, minTopicCount: minCount });
+  seedBacktestGraph(graph, train, minCount);
   const common = [...kept].sort((a, b) => counts.get(b)! - counts.get(a)! || a.localeCompare(b));
 
   const tally = () => ({ n: 0, ranked: 0, top1: 0, top3: 0, rr: 0 });
@@ -130,7 +140,7 @@ export function backtestAnyTopic(sessions: PastSession[], ks = [1, 3, 5], opts: 
   const keptOf = (s: PastSession) => topicIds(s).filter((i) => kept.has(i)).sort(byFreq);
 
   const graph = new LivingLifeGraph();
-  seedFromPastSessions(graph, train, { now: train[train.length - 1]!.ts, minTopicCount: minCount });
+  seedBacktestGraph(graph, train, minCount);
   const common = [...kept].sort(byFreq);
 
   const hits = { graph: {} as Record<number, number>, common: {} as Record<number, number>, repeat: {} as Record<number, number> };

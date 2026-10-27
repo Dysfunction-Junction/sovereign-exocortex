@@ -211,6 +211,13 @@ export class Neo4jSyncService {
   public async syncGraph(graph: GraphExport): Promise<{ entities: number; edges: number }> {
     await this.initSchema();
 
+    // Full sync is also the category migration boundary: remove stale tag hubs
+    // from previous graph versions before rebuilding the canonical projection.
+    await this.executeCypher([{
+      statement: "MATCH (n:Entity) WHERE n.type = 'TOPIC' OR n.id = 'person_michael_hebert' DETACH DELETE n",
+      parameters: {},
+    }]);
+
     // 1. Upsert entities in chunks
     for (let i = 0; i < graph.entities.length; i += this.batchSize) {
       const chunk = graph.entities.slice(i, i + this.batchSize);

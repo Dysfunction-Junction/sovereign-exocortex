@@ -203,7 +203,7 @@ function ensureShadowRecorder(): void {
     const people = defaultWorldModelHost.seedCommsFromPastEvents(getDatabase());
     if (people) console.log(`[life-graph] seeded ${people.people} people from ${people.events} past calls and texts`);
     const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
-    if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.topics} topics, ${seeded.persons} people, ${seeded.edges} edges`);
+    if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.projects} projects, ${seeded.edges} edges`);
   } catch (err) {
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();

@@ -2,44 +2,44 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { LivingLifeGraph } from './life-graph.js';
 import { seedFromPastSessions } from './past-seed.js';
+import { classifyProjectIds, normalizeProjectCategories } from './project-categories.js';
 
 const DAY = 86_400_000;
 const now = Date.UTC(2026, 9, 12);
-const s = (daysAgo: number, tags: string[], persons: string[] = []) => ({ ts: now - daysAgo * DAY, tags, persons });
+const s = (daysAgo: number, tags: string[]) => ({ ts: now - daysAgo * DAY, tags, persons: [] });
 
-function seeded() {
+test('only explicit project labels become project categories; vault tags stay metadata', () => {
   const g = new LivingLifeGraph();
-  g.addEntity({ id: 'person_michael', name: 'Michael', type: 'PERSON' });
-  const sessions = [
-    s(9, ['Android', 'proxy']), s(8, ['Android', 'proxy']), s(7, ['bearhouse']),
-    s(6, ['Android']), s(5, ['bearhouse']), s(4, ['one-off']), s(3, ['Android'], ['Sam']),
-  ];
-  return { g, r: seedFromPastSessions(g, sessions, { now }) };
-}
-
-test('drops one-off tags, keeps recurring topics', () => {
-  const { g, r } = seeded();
-  assert.equal(g.getEntity('topic_one_off'), undefined);
-  assert.ok(g.getEntity('topic_android'));
-  assert.equal(r.topics, 3);
-  assert.equal(r.persons, 1);
+  g.addEntity({ id: 'person_operator', name: 'Operator', type: 'PERSON' });
+  const r = seedFromPastSessions(g, [
+    s(2, ['Sovereign Exocortex', '#timeline', '#workstream_summaries', '#markdown', 'Pieces']),
+  ], { now });
+  assert.deepEqual(classifyProjectIds(['Sovereign Exocortex', '#timeline', 'Pieces']), ['project_sovereign_exocortex']);
+  assert.equal(r.projects, 1);
+  assert.equal(g.getEntity('topic_timeline'), undefined);
+  assert.equal(g.getEntity('topic_pieces'), undefined);
+  assert.equal(g.getEntity('project_sovereign_exocortex')?.type, 'PROJECT');
+  assert.ok(g.getNeighbors('person_operator').some((e) => e.id === 'project_sovereign_exocortex'));
 });
 
-test('recent topics are more active than old ones', () => {
-  const { g } = seeded();
-  assert.ok(g.getEntity('topic_android')!.activation > g.getEntity('topic_proxy')!.activation);
+test('documents are linked directly to projects and legacy topic/person hubs are removed', () => {
+  const g = new LivingLifeGraph();
+  g.addEntity({ id: 'person_operator', name: 'Operator', type: 'PERSON' });
+  g.addEntity({ id: 'topic_michael_hebert', name: 'Michael Hebert', type: 'TOPIC' });
+  g.addEntity({ id: 'topic_timeline', name: '#timeline', type: 'TOPIC' });
+  g.addEntity({ id: 'doc:obsidian:Projects/Bear House Classic/Plan.md', name: 'Plan', type: 'DOC', properties: { tags: ['timeline', 'FamilyOS'] } });
+  seedFromPastSessions(g, [], { now });
+  normalizeProjectCategories(g, 'person_operator');
+  assert.equal(g.getEntity('topic_michael_hebert'), undefined);
+  assert.equal(g.getEntity('topic_timeline'), undefined);
+  assert.ok(g.getNeighbors('doc:obsidian:Projects/Bear House Classic/Plan.md').some((e) => e.id === 'project_bear_house_classic'));
 });
 
-test('transition edges give a next-topic distribution', () => {
-  const { g } = seeded();
-  const next = g.predictNextState('topic_android');
-  assert.ok(next.length > 0);
-  assert.equal(next[0]!.predictedId, 'topic_bearhouse');
-});
-
-test('seeding is repeatable without changing entity count', () => {
-  const { g } = seeded();
+test('re-seeding preserves project count', () => {
+  const g = new LivingLifeGraph();
+  const input = [s(1, ['agent-mesh-mcp'])];
+  seedFromPastSessions(g, input, { now });
   const before = g.entityCount;
-  seedFromPastSessions(g, [s(1, ['Android']), s(2, ['Android'])], { now });
+  seedFromPastSessions(g, input, { now });
   assert.equal(g.entityCount, before);
 });

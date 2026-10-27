@@ -13,6 +13,7 @@ import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
 import type { ChannelAdapter, ChannelId, ChannelStatus, SyncResult, IngestedDocument, IngestedEntity } from "./types.js";
 import type { WorldModelHost } from "../world-model-host.js";
+import { classifyProjectIds } from "@exocortex/world-model";
 
 // Entity id prefixes each adapter writes (see the adapters' `id:` fields); purge must match them.
 const CHANNEL_ENTITY_PREFIXES: Record<ChannelId, readonly string[]> = {
@@ -101,30 +102,13 @@ export class ChannelManager {
         lastActive: existing ? existing.lastActive : Date.now(),
       });
 
-      for (const tag of doc.tags) {
-        const slug = tag.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-        if (!slug) continue;
-        let topicId = `topic_${slug}`;
-        let topicName = tag;
-        // Alias known hub / persona hashes (e.g. michael_hebert persona hash)
-        if (slug.includes("michael_hebert")) {
-          topicId = "topic_michael_hebert";
-          topicName = "Michael Hebert";
-        }
-        if (!graph.getEntity(topicId)) {
-          graph.addEntity({
-            id: topicId,
-            type: "TOPIC",
-            name: topicName.startsWith("#") ? topicName : `#${topicName}`,
-            activation: 0.8,
-            lastActive: Date.now(),
-          });
-        }
-        try {
-          graph.addEdge(doc.id, topicId, "HAS_TOPIC", 0.8);
-        } catch {
-          // Safe edge insert
-        }
+      // Tags are source metadata. Only explicit project names create graph
+      // relationships; generic vault tags must not become competing hubs.
+      for (const projectId of classifyProjectIds([doc.id, doc.title, doc.sourcePath, ...doc.tags])) {
+        graph.addEdge(doc.id, projectId, "REFERENCES", 0.9);
+      }
+      if (doc.tags.some((tag) => /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()))) {
+        graph.addEdge(process.env.EXOCORTEX_OPERATOR_ID || "person_operator", doc.id, "MENTIONS", 0.9);
       }
 
       for (const link of doc.wikilinks) {
