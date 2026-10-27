@@ -248,16 +248,42 @@ export class WorldModelHost {
     this.lifeGraph.addEntity({ id: "goal_100_percent_tests_pass", name: "100% Monorepo Test Pass Rate", type: "GOAL" });
     this.lifeGraph.addEntity({ id: "state_deep_focus", name: "Deep Focus Flow State", type: "CONTEXT_STATE" });
 
-    // 4. Multi-Relational Associative Edges
+    // 4. Canonical Knowledge Hub & Identity Topics
+    this.lifeGraph.addEntity({ id: "topic_michael_hebert", name: "Michael Hebert", type: "TOPIC" });
+    this.lifeGraph.addEntity({ id: "topic_pieces", name: "Pieces", type: "TOPIC" });
+    if (!this.lifeGraph.getEntity("topic_pieces_os")) {
+      this.lifeGraph.addEntity({ id: "topic_pieces_os", name: "pieces-os", type: "TOPIC" });
+    }
+    if (!this.lifeGraph.getEntity("topic_pieces_android")) {
+      this.lifeGraph.addEntity({ id: "topic_pieces_android", name: "pieces-android", type: "TOPIC" });
+    }
+    if (!this.lifeGraph.getEntity("topic_pieces_proxy")) {
+      this.lifeGraph.addEntity({ id: "topic_pieces_proxy", name: "pieces-proxy", type: "TOPIC" });
+    }
+
+    // 5. Multi-Relational Associative Edges
     this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0);
     this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95);
     this.lifeGraph.addEdge(selfId, "project_oakridge_smokehouse", "WORKS_ON", 0.9);
     this.lifeGraph.addEdge(selfId, "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0);
     this.lifeGraph.addEdge(selfId, "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0);
 
+    // Operator physical substrate & cognitive state links
+    this.lifeGraph.addEdge(selfId, "device_host_pc", "INTERACTS_WITH", 1.0);
+    this.lifeGraph.addEdge(selfId, "device_phone_galaxy_s26", "INTERACTS_WITH", 1.0);
+    this.lifeGraph.addEdge(selfId, "state_deep_focus", "CARES_ABOUT", 1.0);
+    this.lifeGraph.addEdge(selfId, "topic_michael_hebert", "CARES_ABOUT", 1.0);
+
+    // Inter-hardware & systemic dependency edges
     this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);
     this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95);
+    this.lifeGraph.addEdge("project_sovereign_exocortex", "topic_pieces", "DEPENDS_ON", 0.9);
+
+    // Pieces topic hierarchy bridges (linking root Pieces topic to subsystem topics)
+    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_os", "INTERACTS_WITH", 0.8);
+    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_android", "INTERACTS_WITH", 0.8);
+    this.lifeGraph.addEdge("topic_pieces", "topic_pieces_proxy", "INTERACTS_WITH", 0.8);
   }
 
   private pastSeeded = false;

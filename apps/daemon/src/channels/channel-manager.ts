@@ -102,12 +102,20 @@ export class ChannelManager {
       });
 
       for (const tag of doc.tags) {
-        const topicId = `topic:${tag.toLowerCase()}`;
+        const slug = tag.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        if (!slug) continue;
+        let topicId = `topic_${slug}`;
+        let topicName = tag;
+        // Alias known hub / persona hashes (e.g. michael_hebert persona hash)
+        if (slug.includes("michael_hebert")) {
+          topicId = "topic_michael_hebert";
+          topicName = "Michael Hebert";
+        }
         if (!graph.getEntity(topicId)) {
           graph.addEntity({
             id: topicId,
             type: "TOPIC",
-            name: `#${tag}`,
+            name: topicName.startsWith("#") ? topicName : `#${topicName}`,
             activation: 0.8,
             lastActive: Date.now(),
           });
@@ -121,15 +129,45 @@ export class ChannelManager {
 
       for (const link of doc.wikilinks) {
         const cleanLink = link.toLowerCase().replace(/\\/g, "/");
-        const targetId = `doc:${cleanLink}`;
+        const bareLink = link.replace(/\\/g, "/").replace(/\.md$/i, "");
+        const cleanBareLink = cleanLink.replace(/\.md$/i, "");
+
+        let targetId = `doc:${cleanLink}`;
+        const candidateObsidianId = `doc:obsidian:${bareLink}.md`;
+        const candidateObsidianLower = `doc:obsidian:${cleanBareLink}.md`;
+
+        if (graph.getEntity(candidateObsidianId)) {
+          targetId = candidateObsidianId;
+        } else if (graph.getEntity(candidateObsidianLower)) {
+          targetId = candidateObsidianLower;
+        } else {
+          // Check existing entities for a case-insensitive path match
+          for (const ent of graph.snapshot().entities) {
+            if (ent.type === "DOC" && ent.id.toLowerCase() === candidateObsidianLower) {
+              targetId = ent.id;
+              break;
+            }
+          }
+          // Direct project link if referencing Sovereign Exocortex monorepo
+          if (cleanBareLink.includes("sovereign") && cleanBareLink.includes("exocortex") && graph.getEntity("project_sovereign_exocortex")) {
+            targetId = "project_sovereign_exocortex";
+          }
+        }
+
+        // If targetId is not an existing entity, prefer canonical doc:obsidian prefix for vault paths
         if (!graph.getEntity(targetId)) {
-          graph.addEntity({
-            id: targetId,
-            type: "DOC",
-            name: link,
-            activation: 0.5,
-            lastActive: Date.now(),
-          });
+          if (bareLink.includes("/")) {
+            targetId = `doc:obsidian:${bareLink}.md`;
+          }
+          if (!graph.getEntity(targetId)) {
+            graph.addEntity({
+              id: targetId,
+              type: "DOC",
+              name: link,
+              activation: 0.5,
+              lastActive: Date.now(),
+            });
+          }
         }
         try {
           graph.addEdge(doc.id, targetId, "REFERENCES", 0.9);
