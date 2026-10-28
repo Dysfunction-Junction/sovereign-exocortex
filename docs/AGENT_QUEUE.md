@@ -26,8 +26,8 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 0.2 | CI workflow | Claude | Done |
 | - | Move `packages/triad` off Ollama to llama.cpp :8080 (branch `feat/ollama-cutover-triad`) | Claude Code | In progress |
 | 0.3 | Raise root `engines` to Node >= 24 (PR #23) | agy | Done |
-| 0.5 | `checkout_argv` works on Git < 2.44 | agy | In review |
-| 0.6 | Tag `person:` entities with source channel; purge by tag on Gmail disconnect | agy | Ready |
+| 0.5 | `checkout_argv` works on Git < 2.44 (PR #24) | agy | Done |
+| 0.6 | Tag `person:` entities with source channel; purge by tag on Gmail disconnect | agy | In review |
 | 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) | agy | Ready |
 | 4.0 | Daily review screen in the phone app for one-tap shadow labels | agy | Ready |
 | 3.3 | Inference broker (queue, priority triage > embed > vision) | Claude Code | Ready |

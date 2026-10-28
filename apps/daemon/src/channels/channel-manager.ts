@@ -167,6 +167,7 @@ export class ChannelManager {
         properties: {
           ...(entity.properties || {}),
           channelId: entity.channelId,
+          sourceChannel: (entity.properties as Record<string, unknown> | undefined)?.sourceChannel || entity.channelId,
           untrusted: entity.untrusted, // Fixed field placed last to prevent clobbering
         },
         activation,
@@ -237,9 +238,24 @@ export class ChannelManager {
 
   purgeChannel(id: ChannelId): number {
     if (!this.worldModelHost) return 0;
+    const graph = this.worldModelHost.lifeGraph;
     let removed = 0;
     for (const prefix of CHANNEL_ENTITY_PREFIXES[id]) {
-      removed += this.worldModelHost.lifeGraph.removeEntitiesByPrefix(prefix);
+      removed += graph.removeEntitiesByPrefix(prefix);
+    }
+    // Also remove any entities tagged with this source channel (e.g. person: entities created by Gmail)
+    for (const entity of graph.snapshot().entities) {
+      const props = entity.properties as Record<string, unknown> | undefined;
+      if (!props) continue;
+      const isTagged =
+        props.sourceChannel === id ||
+        props.channelId === id ||
+        (Array.isArray(props.tags) && (props.tags.includes(`source:${id}`) || props.tags.includes(id)));
+      if (isTagged) {
+        if (graph.removeEntity(entity.id)) {
+          removed++;
+        }
+      }
     }
     return removed;
   }
