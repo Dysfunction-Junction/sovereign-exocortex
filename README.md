@@ -102,7 +102,7 @@ pnpm --filter @exocortex/daemon enroll -- "My Phone"
 pnpm --filter @exocortex/mobile dev
 ```
 
-The root `pnpm start` currently points to the missing `apps/daemon/src/index.ts`; use the daemon package script above. Desktop development also needs a configuration fix: `apps/desktop/src-tauri/tauri.conf.json` invokes `pnpm dev` from the desktop package, recursively launching Tauri instead of starting the mobile Vite frontend.
+The root `pnpm start` runs the same daemon script. Desktop development (`pnpm desktop:dev`) starts the mobile Vite frontend before launching Tauri.
 
 ### Optional services
 
