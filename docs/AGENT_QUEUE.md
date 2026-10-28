@@ -48,6 +48,6 @@ Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md
 | 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Done |
 | 2.6 | Scope check on /v3/channels/* (spec R1) | Codex | Ready (review, first) |
 | 2.3a | Re-tier `self_heal_restore`: it writes local graph state, so it is T2, not T0 (spec R10, PR #59) | agy | Done |
-| 1.2 | Adapters emit channel events (spec R6) | agy | In progress |
+| 1.2 | Adapters emit channel events (spec R6) | agy | In review |
 | 1.3-1.6 | Projection (R7, Codex), async consumer, replay test, resync (R8, Codex) | Codex | Blocked on 1.2 |
 | - | Home proxy `/mobile/ask` off Ollama, then retire Ollama (spec R9, other repo) | Codex | Ready (review) |

@@ -31,6 +31,7 @@ function validateContent(value: ChannelVaultContent): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("vault content must be an object");
   const allowed = new Set(["title", "body", "display_name", "email", "url"]);
   for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue;
     if (!allowed.has(key) || typeof item !== "string") throw new TypeError(`invalid vault content field: ${key}`);
   }
 }
@@ -76,6 +77,12 @@ export class ChannelVault {
     const content = JSON.parse(plain) as ChannelVaultContent;
     validateContent(content);
     return content;
+  }
+
+  getChannelKey(channel: ChannelId): Buffer {
+    const key = this.channelKey(channel, true);
+    if (!key) throw new Error(`Could not create or load key for ${channel}`);
+    return key;
   }
 
   purgeChannel(channel: ChannelId): number {

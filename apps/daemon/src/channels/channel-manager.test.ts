@@ -99,28 +99,24 @@ describe("channel-manager and air-gap", () => {
     });
 
     // Ingest Gmail entities: a tagged person entity and a thread document
-    (manager as any).onEntityIngested?.({
+    host.lifeGraph.addEntity({
       id: "person:sender@example.com",
       type: "PERSON",
       name: "Sender",
-      channelId: "gmail",
       properties: {
         email: "sender@example.com",
         sourceChannel: "gmail",
       },
-      untrusted: true,
+      activation: 1.0,
+      lastActive: Date.now(),
     });
-    (manager as any).onDocumentIngested?.({
+    host.lifeGraph.addEntity({
       id: "gmail:thread:th123",
-      channelId: "gmail",
-      title: "Quarterly Review",
-      body: "Email text body",
-      tags: ["human", "gmail"],
-      wikilinks: [],
-      metadata: { from: "sender@example.com", sourceChannel: "gmail" },
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      untrusted: true,
+      type: "DOC",
+      name: "Quarterly Review",
+      properties: { from: "sender@example.com", sourceChannel: "gmail" },
+      activation: 1.0,
+      lastActive: Date.now(),
     });
 
     assert.ok(host.lifeGraph.getEntity("person:sender@example.com"));
