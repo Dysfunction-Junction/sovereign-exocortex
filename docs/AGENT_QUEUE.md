@@ -31,7 +31,7 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) (PR #28) | agy | Done |
 | 4.0 | Daily review screen in the phone app for one-tap shadow labels (PR #29) | agy | Done |
 | 3.3 | Inference broker (queue, priority triage > embed > vision) (PR #26) | Claude Code | Done |
-| 2.1-2.2 | Delegate capability map, route /network/delegate through it. Build from `docs/DELEGATE_CAPABILITIES_DESIGN.md` (branch `design/2.1-delegate-capabilities`) as amended by the Opus review | Claude Code | Ready |
+| 2.1-2.2 | Delegate capability map, /network/delegate routed through it (PR #34, Opus-reviewed design) | Claude Code | Done |
 | 3.3a | OS priority for llama-server roles (PR #36). Triage p95 1.30 s quiet, 1.49 s under embed backfill (+14.5%); broker proxy not needed | agy | Done |
 | 2.4a | Container verification on real workspaces. `docker_runner.py` runs as uid 65534, but `mkdtemp` and `git clone --shared` workspaces are 0700, so every run fails closed outside tests. Fix: on Linux run the container as the invoking uid:gid (refuse uid 0), keep every other flag; never chmod 0777 host data. Add a test with a 0700 workspace. Note `--shared` clones keep objects in the host bare repo, which is not mounted: anything calling `git` inside the container breaks. Docker runs in WSL2 (Engine 29.9, image `python:3.12-slim`, `--pull never`) | Claude Code | Ready (before 2.4) |
 | 4.0a | Shadow surfacing volume: Precision@surface counts only surfaced proposals (correct), so the review screen does not speed the gate. Propose a shadow-only surfacing threshold change | Opus | Needs design |
