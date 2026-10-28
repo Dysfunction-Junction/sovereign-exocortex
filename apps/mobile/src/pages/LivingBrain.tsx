@@ -95,7 +95,9 @@ export default function LivingBrain() {
   };
 
   const selectedNodeRef = useRef<GraphNode | null>(null);
-  selectedNodeRef.current = selectedNode;
+  useEffect(() => {
+    selectedNodeRef.current = selectedNode;
+  }, [selectedNode]);
 
   // 2-Hop Synaptic Subgroup & Circuit Calculation
   const synapticCircuit = useMemo(() => {
@@ -159,7 +161,9 @@ export default function LivingBrain() {
   }, [selectedNode, graphData]);
 
   const synapticCircuitRef = useRef(synapticCircuit);
-  synapticCircuitRef.current = synapticCircuit;
+  useEffect(() => {
+    synapticCircuitRef.current = synapticCircuit;
+  }, [synapticCircuit]);
 
   const handleNodeClick = useCallback((node: GraphNode) => {
     setSelectedNode(node);
@@ -203,8 +207,6 @@ export default function LivingBrain() {
 
   // Load initial full snapshot
   const loadGraph = useCallback(async () => {
-    setLoading(true);
-    setError(null);
     try {
       const data = await getFullLivingGraph();
       setGraphData(data);
@@ -225,8 +227,10 @@ export default function LivingBrain() {
   }, []);
 
   useEffect(() => {
-    void loadGraph();
-    void refreshNeo4jStatus();
+    void Promise.resolve().then(() => {
+      void loadGraph();
+      void refreshNeo4jStatus();
+    });
     const interval = setInterval(() => {
       void refreshNeo4jStatus();
     }, 12000);
@@ -1301,7 +1305,7 @@ export default function LivingBrain() {
           <div style={{ color: "#f8fafc", fontSize: "12px", marginBottom: 14 }}>{error}</div>
           <button
             type="button"
-            onClick={() => void loadGraph()}
+            onClick={() => { setLoading(true); setError(null); void loadGraph(); }}
             className="secondary pill"
             style={{ fontSize: "12px", padding: "6px 14px" }}
           >

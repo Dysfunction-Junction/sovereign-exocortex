@@ -62,8 +62,32 @@ export default function Setup() {
   const [smsAllow, setSmsAllow] = useState<Set<string>>(new Set());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [enrollToken, setEnrollToken] = useState("");
+
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
+
+  async function refreshSmsState() {
+    const perms = await smsPermissions();
+    setSmsGranted(perms.sms);
+    setContactsGranted(perms.contacts);
+    if (perms.sms) {
+      try {
+        setSmsAllow(new Set(await getSmsAllowlist()));
+      } catch { /* not granted yet */ }
+    }
+  }
+
+  async function refreshNotifState() {
+    const [granted, cfg] = await Promise.all([
+      isNotificationListenerGranted(),
+      getNotificationCaptureConfig(),
+    ]);
+    setNotifListenerGranted(granted);
+    setNotifCapture(cfg.enabled);
+    setNotifAllApps(cfg.allApps);
+  }
+
+  const [mountTime] = useState(() => Date.now());
 
   useEffect(() => {
     (async () => {
@@ -86,8 +110,10 @@ export default function Setup() {
       AccessibilityScanner.isAccessibilityServiceEnabled()
         .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
         .catch(() => {});
-      fireAndForget(refreshNotifState(), "setup.refreshNotifState");
-      fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+      void Promise.resolve().then(() => {
+        fireAndForget(refreshNotifState(), "setup.refreshNotifState");
+        fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+      });
     }
     recordEventSafe({ type: "screen_view", screen: "setup", timestamp: new Date().toISOString() });
     void flushUsageEvents();
@@ -100,8 +126,10 @@ export default function Setup() {
       AccessibilityScanner.isAccessibilityServiceEnabled()
         .then(({ enabled }: { enabled: boolean }) => setAccessibilityGranted(enabled))
         .catch(() => {});
-      fireAndForget(refreshNotifState(), "setup.refreshNotifState");
-      fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+      void Promise.resolve().then(() => {
+        fireAndForget(refreshNotifState(), "setup.refreshNotifState");
+        fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+      });
     };
 
     let disposed = false;
@@ -124,26 +152,7 @@ export default function Setup() {
     };
   }, []);
 
-  async function refreshSmsState() {
-    const perms = await smsPermissions();
-    setSmsGranted(perms.sms);
-    setContactsGranted(perms.contacts);
-    if (perms.sms) {
-      try {
-        setSmsAllow(new Set(await getSmsAllowlist()));
-      } catch { /* not granted yet */ }
-    }
-  }
 
-  async function refreshNotifState() {
-    const [granted, cfg] = await Promise.all([
-      isNotificationListenerGranted(),
-      getNotificationCaptureConfig(),
-    ]);
-    setNotifListenerGranted(granted);
-    setNotifCapture(cfg.enabled);
-    setNotifAllApps(cfg.allApps);
-  }
 
   async function handleToggleNotifCapture(next: boolean) {
     setNotifCapture(next);
@@ -600,7 +609,7 @@ export default function Setup() {
           {(() => {
             const info = remoteToken ? decodeJwtForDisplay(remoteToken) : null;
             if (!info?.expiresAt) return null;
-            const expired = info.expiresAt.getTime() < Date.now();
+            const expired = info.expiresAt.getTime() < mountTime;
             return (
               <p className={`setup-note ${expired ? "status-error" : "hint"}`} style={{ fontSize: 12, margin: "6px 0 0" }}>
                 Device token {formatExpiry(info.expiresAt)}
