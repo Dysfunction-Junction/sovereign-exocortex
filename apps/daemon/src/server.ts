@@ -7,7 +7,9 @@ import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:cryp
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
-import { acceptedScopes, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
+import { ANY_DELEGATE_SCOPES, resolveDelegate, scopesSatisfy } from "./delegate-capabilities.js";
+import { recordDelegateDenial, type DelegateDenialReason } from "./delegate-audit.js";
+import { classifyBucket } from "./token-bucket.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, isApprovalAction, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
@@ -2030,10 +2032,14 @@ function getUnlabeledShadowProposals(
     try {
       // Default deny. "Not mapped", "missing scope" and "approval action" all return the same 403 so the response does
       // not reveal which actions exist (docs/DELEGATE_CAPABILITIES_DESIGN.md).
-      const denied = () => sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      let attempt: { to?: unknown; action?: unknown } = {};
+      const denied = (reason: DelegateDenialReason) => {
+        recordDelegateDenial(getDatabase(), { deviceId: auth.deviceId, ...attempt, reason });
+        sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      };
       // Devices with no delegate scope at all are refused before the body is read.
       if (!deviceHasScope(getDatabase(), auth.deviceId, ...ANY_DELEGATE_SCOPES)) {
-        denied();
+        denied("scope");
         return;
       }
       const raw = await readBody(req, 64 * 1024);
@@ -2049,19 +2055,36 @@ function getUnlabeledShadowProposals(
         sendJson(res, 400, { error: parsed.error });
         return;
       }
+      attempt = { to: parsed.to, action: parsed.action };
       // Approve/reject/release carry authority only /network/approve verifies.
-      const capability = isApprovalAction(parsed.action) ? null : resolveDelegate(parsed.to, parsed.action, parsed.payload);
-      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...acceptedScopes(capability))) {
-        denied();
+      if (isApprovalAction(parsed.action)) {
+        denied("approval_action");
+        return;
+      }
+      const capability = resolveDelegate(parsed.to, parsed.action, parsed.payload);
+      if (!capability) {
+        denied("unmapped");
+        return;
+      }
+      const dev = getDatabase().getDevice(auth.deviceId);
+      if (!dev || dev.revoked_at !== null || !Array.isArray(dev.scopes) || !scopesSatisfy(dev.scopes, capability)) {
+        denied("scope");
+        return;
+      }
+      // The triad classify action is a risk-scanner oracle: 30 per minute per device.
+      if (parsed.to === "autonomous-triad" && parsed.action === "classify" && !classifyBucket.take(auth.deviceId)) {
+        res.setHeader("Retry-After", "2");
+        sendJson(res, 429, { error: "rate limit: classify is limited to 30 per minute per device" });
         return;
       }
       // The caller never names itself: memory.add authorizes on `from`, so the daemon states who is calling.
       parsed.from = GATEWAY_NODE;
       // Shadow mode: propose-only. Anything the map marks "block" is refused while SHADOW is on.
       if (capability.shadow === "block" && process.env.SHADOW !== "0") {
+        recordDelegateDenial(getDatabase(), { deviceId: auth.deviceId, to: parsed.to, action: parsed.action, reason: "shadow" });
         sendJson(res, 423, {
           ok: false,
-          error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
+          error: `shadow mode: ${parsed.to}.${parsed.action} is blocked while SHADOW is on (set SHADOW=0 to allow it)`,
           shadow_mode: true,
         });
         return;

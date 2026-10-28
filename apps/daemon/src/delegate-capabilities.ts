@@ -15,6 +15,8 @@ export interface DelegateCapability {
 export const SCOPE_DELEGATE_READ = "delegate:read";
 export const SCOPE_DELEGATE_MEMORY_READ = "delegate:memory-read";
 export const SCOPE_DELEGATE_WRITE = "delegate:write";
+/** Granted to no device by default. T3 and T4 need it in addition to `admin:write`. */
+export const SCOPE_DELEGATE_ACTUATE = "delegate:actuate";
 export const ADMIN_SCOPES = ["admin", "admin:write"] as const;
 /** A device holding none of these may not delegate at all, so the body is not even read for it. */
 export const ANY_DELEGATE_SCOPES = [...ADMIN_SCOPES, SCOPE_DELEGATE_READ, SCOPE_DELEGATE_MEMORY_READ, SCOPE_DELEGATE_WRITE] as const;
@@ -80,12 +82,12 @@ export function resolveDelegate(to: string, action: string, payload: Record<stri
   return Object.hasOwn(table, action) ? table[action]! : null;
 }
 
-/** Scopes that satisfy a capability. T3 and T4 need `admin:write`; plain `admin` is not enough. */
-export function acceptedScopes(capability: DelegateCapability): readonly string[] {
-  if (capability.tier === "T3" || capability.tier === "T4") return ["admin:write"];
-  return [...ADMIN_SCOPES, ...capability.scopes];
+/** T3 and T4 act on devices or spawn work: they need BOTH `admin:write` and `delegate:actuate`. */
+export function needsActuate(capability: DelegateCapability): boolean {
+  return capability.tier === "T3" || capability.tier === "T4";
 }
 
 export function scopesSatisfy(deviceScopes: readonly string[], capability: DelegateCapability): boolean {
-  return acceptedScopes(capability).some((s) => deviceScopes.includes(s));
+  if (needsActuate(capability)) return deviceScopes.includes("admin:write") && deviceScopes.includes(SCOPE_DELEGATE_ACTUATE);
+  return [...ADMIN_SCOPES, ...capability.scopes].some((s) => deviceScopes.includes(s));
 }
