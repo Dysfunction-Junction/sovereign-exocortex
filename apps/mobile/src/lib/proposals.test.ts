@@ -364,6 +364,42 @@ describe("proposalManager", () => {
     expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("rejected");
   });
 
+  it("labelAlreadyDid submits signed already_did label directly", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelAlreadyDid(baseProposal.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("approved");
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "already_did",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+        latencyMs: expect.any(Number),
+      })
+    );
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("consumed");
+  });
+
+  it("labelIgnored submits signed ignored label directly", async () => {
+    proposalManager.ingestProposal(baseProposal);
+    const result = await proposalManager.labelIgnored(baseProposal.proposalId);
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe("rejected");
+    expect(api.submitShadowLabel).toHaveBeenCalledWith(
+      baseProposal.proposalId,
+      "ignored",
+      expect.objectContaining({
+        source: "tap",
+        attestation: LABEL_ATTESTATION,
+        latencyMs: expect.any(Number),
+      })
+    );
+    expect(proposalManager.get(baseProposal.proposalId)?.state).toBe("consumed");
+  });
+
   it("approve() automatically delegates to labelWanted when proposal has shadow: true", async () => {
     const shadowProp: IncomingProposal = {
       ...baseProposal,

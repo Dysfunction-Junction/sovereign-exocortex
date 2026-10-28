@@ -318,6 +318,72 @@ test("v3 shadow calibration endpoints & circuit breaker integration test", async
     const pendingMergedData = await pendingMergedRes.json();
     assert.ok(pendingMergedData.proposals.some((p: any) => p.proposalId === "prop_shadow_pending_test"));
 
+    // Verify GATED shadow proposals are included in /v3/shadow/pending for daily review
+    memoryDb.insertProposal({
+      proposal_id: "prop_shadow_gated_test",
+      created_seq: eventRes.event.seq,
+      invariant_id: null,
+      policy_type: "PRAGMATIC",
+      tier: 1,
+      summary: "Gated shadow candidate for one-tap daily review",
+      action: JSON.stringify({ target: "run_tests" }),
+      action_hash: new Uint8Array([7, 8, 9]),
+      efe: 0.75,
+      risk_term: 0.1,
+      ambiguity_term: 0.02,
+      state: "GATED",
+      shadow: 1,
+      expires_at: Date.now() + 3600000,
+      updated_at: Date.now(),
+    });
+
+    const pendingShadowGatedRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    assert.equal(pendingShadowGatedRes.status, 200);
+    const pendingShadowGatedData = await pendingShadowGatedRes.json();
+    const foundGated = pendingShadowGatedData.proposals.find((p: any) => p.proposalId === "prop_shadow_gated_test");
+    assert.ok(foundGated, "expected prop_shadow_gated_test in /v3/shadow/pending");
+    assert.equal(foundGated.state, "GATED");
+    assert.equal(foundGated.shadow, true);
+    assert.equal(foundGated.tier, 1);
+    assert.equal(foundGated.efe, 0.75);
+
+    // GATED proposal should NOT appear in /v3/proposals/pending (live popup queue)
+    const pendingLiveCheck = await fetch(`${baseUrl}/v3/proposals/pending?include_shadow=1`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    const pendingLiveCheckData = await pendingLiveCheck.json();
+    assert.ok(!pendingLiveCheckData.proposals.some((p: any) => p.proposalId === "prop_shadow_gated_test"));
+
+    // Labeling a GATED shadow proposal must never advance its state out of GATED
+    const labelGatedRes = await fetch(`${baseUrl}/v3/shadow/labels`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        proposal_id: "prop_shadow_gated_test",
+        label: "wanted",
+        source: "tap",
+        latency_ms: 300,
+      }),
+    });
+    assert.equal(labelGatedRes.status, 200);
+    const gatedAfterLabel = memoryDb.getProposal("prop_shadow_gated_test");
+    assert.equal(gatedAfterLabel?.state, "GATED");
+    const gatedShadowLabels = memoryDb.getShadowLabels("prop_shadow_gated_test");
+    assert.equal(gatedShadowLabels.length, 1);
+    assert.equal(gatedShadowLabels[0].label, "wanted");
+
+    // Once labeled, it should drop out of /v3/shadow/pending
+    const pendingAfterGatedLabelRes = await fetch(`${baseUrl}/v3/shadow/pending`, {
+      method: "GET",
+      headers: authHeaders,
+    });
+    const pendingAfterGatedLabelData = await pendingAfterGatedLabelRes.json();
+    assert.ok(!pendingAfterGatedLabelData.proposals.some((p: any) => p.proposalId === "prop_shadow_gated_test"));
+
     // An unsigned label is inferred; it cannot advance the proposal state.
     const labelShadowRes = await fetch(`${baseUrl}/v3/shadow/labels`, {
       method: "POST",

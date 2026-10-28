@@ -173,6 +173,9 @@ export class GmailAdapter implements ChannelAdapter {
               email: senderEmail,
               lastThreadId: th.id,
               attachmentCount: attachments.length,
+              sourceChannel: "gmail",
+              channelId: "gmail",
+              tags: ["source:gmail", "gmail"],
             },
             untrusted: true,
           };

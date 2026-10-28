@@ -1,3 +1,4 @@
+import { defaultInferenceBroker, type InferenceBroker } from "./inference-broker.js";
 import sharp from "sharp";
 
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
@@ -16,6 +17,7 @@ export type TestScreenshotClassification = {
 };
 
 export interface VisionAdapterOptions {
+  broker?: InferenceBroker;
   endpoint?: string;
   model?: string;
   fetchImpl?: typeof fetch;
@@ -174,20 +176,24 @@ export async function analyzeTestScreenshot(
     });
 
   const fetchImpl = options.fetchImpl ?? fetch;
-  const response = await fetchImpl(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-    body: requestBody(ollama, model, imageBase64),
+  // Vision is the lowest-priority lane: it waits behind triage and embeddings. The timeout starts when the call
+  // starts, not while it waits in line.
+  return (options.broker ?? defaultInferenceBroker).run("vision", async () => {
+    const response = await fetchImpl(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      body: requestBody(ollama, model, imageBase64),
+    });
+    if (!response.ok) {
+      throw new Error(`local vision service returned HTTP ${response.status}`);
+    }
+    const text = modelText(ollama, JSON.parse(await readBoundedResponse(response)));
+    if (typeof text !== "string" || text.length > MAX_MODEL_RESPONSE_BYTES) {
+      throw new Error("local vision service returned an invalid response envelope");
+    }
+    return parseClassification(JSON.parse(text));
   });
-  if (!response.ok) {
-    throw new Error(`local vision service returned HTTP ${response.status}`);
-  }
-  const text = modelText(ollama, JSON.parse(await readBoundedResponse(response)));
-  if (typeof text !== "string" || text.length > MAX_MODEL_RESPONSE_BYTES) {
-    throw new Error("local vision service returned an invalid response envelope");
-  }
-  return parseClassification(JSON.parse(text));
 }
 
 export function isConfidentTestClassification(

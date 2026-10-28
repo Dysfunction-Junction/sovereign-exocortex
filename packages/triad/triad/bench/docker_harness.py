@@ -203,11 +203,16 @@ def docker_is_running() -> bool:
     return probe.returncode == 0
 
 
+_HEX_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
 def checkout_argv(checkout: Path, base_commit: str) -> List[str]:
-    """Detach at a commit. ``--detach`` stays an option; the commit is not one."""
+    """Detach at a commit. Validates the commit as a hex SHA so --end-of-options is not needed on Git < 2.44."""
+    if not _HEX_COMMIT_RE.match(base_commit):
+        raise ValueError(f"Invalid commit SHA: {base_commit!r}")
     return [
         "git", "-C", str(checkout), "checkout",
-        "--detach", "--end-of-options", base_commit, "--",
+        "--detach", base_commit, "--",
     ]
 
 

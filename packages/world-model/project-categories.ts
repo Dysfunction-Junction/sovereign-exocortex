@@ -9,7 +9,6 @@ export const CANONICAL_PROJECTS = [
   { id: 'project_gut_instinct', name: 'Gut-Instinct', aliases: ['gut-instinct', 'gut instinct'] },
   { id: 'project_registry_app', name: 'SecondGuess Registry App', aliases: ['registry-app', 'secondguess', 'second guess'] },
   { id: 'project_bear_house_classic', name: 'Bear House Classic', aliases: ['bear-house-classic', 'bear house classic', 'familyos'] },
-  { id: 'project_pieces_os', name: 'PiecesOS Workstream Memory', aliases: ['pieces-os', 'piecesos'] },
   { id: 'project_oakridge_smokehouse', name: 'Oakridge Smokehouse System', aliases: ['oakridge-smokehouse', 'oakridge-procurement', 'cafeteria-menu-manager', '2nd-helpings', 'second-helpings'] },
 ] as const;
 
@@ -35,21 +34,14 @@ export function seedCanonicalProjects(graph: LivingLifeGraph): void {
   for (const project of CANONICAL_PROJECTS) graph.addEntity({ id: project.id, type: 'PROJECT', name: project.name });
 }
 
-const isPiecesExport = (properties: Record<string, unknown> | undefined): boolean => {
-  const tags = Array.isArray(properties?.tags) ? properties.tags : [];
-  const path = String(properties?.sourcePath ?? '').replace(/\\/g, '/').split('/');
-  return tags.some((t) => typeof t === 'string' && /^#?pieces$/i.test(t.trim())) || path.some((p) => /^pieces$/i.test(p));
-};
-
-/** File one document under exactly one owner: its canonical project, the Pieces export project, or the operator. */
+/** File one document under exactly one owner: its canonical project, otherwise the operator. */
 export function attachDocumentToOwner(
   graph: LivingLifeGraph,
   entity: { id: string; name: string; properties?: Record<string, unknown> },
   operatorId: string,
 ): void {
   const tags = Array.isArray(entity.properties?.tags) ? entity.properties.tags : [];
-  let projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
-  if (projectIds.length === 0 && isPiecesExport(entity.properties)) projectIds = ['project_pieces_os'];
+  const projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
   for (const id of projectIds) {
     if (graph.getEntity(id)) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
   }

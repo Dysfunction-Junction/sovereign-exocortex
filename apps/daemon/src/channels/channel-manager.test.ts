@@ -76,4 +76,73 @@ describe("channel-manager and air-gap", () => {
       assert.equal(host.lifeGraph.getEntity(ids[channel]), undefined, channel);
     }
   });
+
+  it("disconnectChannel('gmail') leaves 0 Gmail-created entities including tagged person nodes", async () => {
+    const host = WorldModelHost.createIsolatedForTest();
+    manager.attachToWorldModel(host);
+
+    // Operator and non-Gmail contacts must survive
+    host.lifeGraph.addEntity({
+      id: "person_operator",
+      type: "PERSON",
+      name: "Operator",
+      activation: 1.0,
+      lastActive: Date.now(),
+    });
+    host.lifeGraph.addEntity({
+      id: "person:other@example.com",
+      type: "PERSON",
+      name: "Other Contact",
+      properties: { sourceChannel: "manual" },
+      activation: 1.0,
+      lastActive: Date.now(),
+    });
+
+    // Ingest Gmail entities: a tagged person entity and a thread document
+    (manager as any).onEntityIngested?.({
+      id: "person:sender@example.com",
+      type: "PERSON",
+      name: "Sender",
+      channelId: "gmail",
+      properties: {
+        email: "sender@example.com",
+        sourceChannel: "gmail",
+      },
+      untrusted: true,
+    });
+    (manager as any).onDocumentIngested?.({
+      id: "gmail:thread:th123",
+      channelId: "gmail",
+      title: "Quarterly Review",
+      body: "Email text body",
+      tags: ["human", "gmail"],
+      wikilinks: [],
+      metadata: { from: "sender@example.com", sourceChannel: "gmail" },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      untrusted: true,
+    });
+
+    assert.ok(host.lifeGraph.getEntity("person:sender@example.com"));
+    assert.ok(host.lifeGraph.getEntity("gmail:thread:th123"));
+    assert.ok(host.lifeGraph.getEntity("person_operator"));
+    assert.ok(host.lifeGraph.getEntity("person:other@example.com"));
+
+    // Disconnect Gmail channel
+    await manager.disconnectChannel("gmail");
+
+    // All Gmail-created entities must be purged
+    assert.equal(host.lifeGraph.getEntity("person:sender@example.com"), undefined);
+    assert.equal(host.lifeGraph.getEntity("gmail:thread:th123"), undefined);
+
+    const gmailCreated = host.lifeGraph.snapshot().entities.filter((e) => {
+      const p = e.properties || {};
+      return e.id.startsWith("gmail:") || p.sourceChannel === "gmail" || p.channelId === "gmail";
+    });
+    assert.equal(gmailCreated.length, 0);
+
+    // Unrelated persons are preserved
+    assert.ok(host.lifeGraph.getEntity("person_operator"));
+    assert.ok(host.lifeGraph.getEntity("person:other@example.com"));
+  });
 });

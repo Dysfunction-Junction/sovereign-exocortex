@@ -7,7 +7,8 @@ import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:cryp
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
-import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
+import { ADMIN_SCOPES, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
+import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, isApprovalAction, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
@@ -40,7 +41,7 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
+import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
 
 
 
@@ -1910,8 +1911,12 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
-function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): PendingProposal[] {
-  const rows = db.listProposalsByState(["SURFACED", "STAGED"], now);
+function getUnlabeledShadowProposals(
+  db: ExocortexDatabase,
+  now: number,
+  states: ProposalState[] = ["SURFACED", "STAGED", "GATED"],
+): PendingProposal[] {
+  const rows = db.listProposalsByState(states, now);
   return rows
     .filter((r) => r.shadow === 1 && r.expires_at > now && db.getShadowLabels(r.proposal_id).length === 0)
     .map((r) => {
@@ -1930,6 +1935,10 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         expiresAt: r.expires_at,
         actionPayload,
         shadow: true,
+        state: r.state,
+        tier: r.tier,
+        efe: r.efe,
+        updatedAt: r.updated_at,
       };
     });
 }
@@ -1946,7 +1955,11 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         sendJson(res, 403, { error: "forbidden: requires approval:write or admin:read scope" });
         return;
       }
-      const proposals = getUnlabeledShadowProposals(db, Date.now());
+      const states: ProposalState[] = ["SURFACED", "STAGED", "GATED"];
+      if (url.searchParams.get("include_suppressed") === "1" || url.searchParams.get("all") === "1") {
+        states.push("SUPPRESSED");
+      }
+      const proposals = getUnlabeledShadowProposals(db, Date.now(), states);
       sendJson(res, 200, { ok: true, proposals });
     } catch (err) {
       sendInternalError(res, "failed to list shadow proposals", err);
@@ -1972,7 +1985,7 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         sendJson(res, 200, { ok: true, proposals: live });
         return;
       }
-      const shadowProposals = getUnlabeledShadowProposals(db, Date.now());
+      const shadowProposals = getUnlabeledShadowProposals(db, Date.now(), ["SURFACED", "STAGED"]);
       const shadowMap = new Map(shadowProposals.map((sp) => [sp.proposalId, sp]));
       const combined: PendingProposal[] = [];
       const seen = new Set<string>();
@@ -2009,9 +2022,12 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
 
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
-      // Generic delegation can mutate downstream state; admin-only until an action-level capability map exists.
-      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:write")) {
-        sendJson(res, 403, { error: "forbidden: delegation requires admin or admin:write scope" });
+      // Default deny. "Not mapped", "missing scope" and "approval action" all return the same 403 so the response does
+      // not reveal which actions exist (docs/DELEGATE_CAPABILITIES_DESIGN.md).
+      const denied = () => sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      // Devices with no delegate scope at all are refused before the body is read.
+      if (!deviceHasScope(getDatabase(), auth.deviceId, ...ANY_DELEGATE_SCOPES)) {
+        denied();
         return;
       }
       const raw = await readBody(req, 64 * 1024);
@@ -2027,10 +2043,16 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         sendJson(res, 400, { error: parsed.error });
         return;
       }
-      // Shadow mode: propose-only. Device/phone actuation is never delegated while SHADOW is on.
-      const MUTATING_MESH_ACTIONS = ["demote", "synthesize", "dispatch", "playbook"];
-      const mutatesMesh = parsed.to === "agent-mesh-mcp" && MUTATING_MESH_ACTIONS.includes(parsed.action.trim().toLowerCase());
-      if ((parsed.to === "hermes-api" || mutatesMesh) && process.env.SHADOW !== "0") {
+      // Approve/reject/release carry authority only /network/approve verifies.
+      const capability = isApprovalAction(parsed.action) ? null : resolveDelegate(parsed.to, parsed.action, parsed.payload);
+      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...ADMIN_SCOPES, ...capability.scopes)) {
+        denied();
+        return;
+      }
+      // The caller never names itself: memory.add authorizes on `from`, so the daemon states who is calling.
+      parsed.from = GATEWAY_NODE;
+      // Shadow mode: propose-only. Anything the map marks "block" is refused while SHADOW is on.
+      if (capability.shadow === "block" && process.env.SHADOW !== "0") {
         sendJson(res, 423, {
           ok: false,
           error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
@@ -2298,6 +2320,8 @@ if (process.env.NODE_ENV !== "test") {
     // Retries and logs internally; the .catch is a backstop so a future edit can't crash startup.
     warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
+  // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
+  ensureShadowRecorder();
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
   if (process.env.EXOCORTEX_PHONE_WATCH !== "0") {

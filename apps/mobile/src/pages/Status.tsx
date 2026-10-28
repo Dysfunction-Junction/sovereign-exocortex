@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { getStatus, getCachedStatus, ProxyNotConfiguredError, HomeNodeUnreachableError } from "../lib/api";
+import { getStatus, getCachedStatus, getPendingShadowProposals, ProxyNotConfiguredError, HomeNodeUnreachableError } from "../lib/api";
 import { recordEvent } from "../lib/usage";
 import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
@@ -11,7 +11,7 @@ import { Capacitor, registerPlugin } from "@capacitor/core";
 import { App } from "@capacitor/app";
 import { Switch } from "../components/Switch";
 import { PermissionsPanel } from "../components/PermissionsPanel";
-import { RefreshIcon } from "../components/Icons";
+import { RefreshIcon, ReviewIcon } from "../components/Icons";
 import { AnticipationRing } from "../components/AnticipationRing";
 import { AmbientGraphHud } from "../components/AmbientGraphHud";
 import { IntegrationsHub } from "../components/IntegrationsHub";
@@ -67,6 +67,7 @@ export default function Status() {
   const [passiveConfirmText, setPassiveConfirmText] = useState("");
   const [showPassiveConfirm, setShowPassiveConfirm] = useState(false);
   const [lastPassiveCapture, setLastPassiveCapture] = useState<{ pkg: string; at: string } | null>(getLastPassiveCapture());
+  const [shadowPendingCount, setShadowPendingCount] = useState<number | null>(null);
 
   async function load() {
     setState({ kind: "loading" });
@@ -78,6 +79,9 @@ export default function Status() {
     try {
       const { health, version } = await getStatus();
       setState({ kind: "ok", health, version });
+      getPendingShadowProposals()
+        .then((props) => setShadowPendingCount(props.length))
+        .catch(() => setShadowPendingCount(null));
     } catch (err) {
       if (err instanceof ProxyNotConfiguredError) {
         setState({ kind: "not-configured" });
@@ -103,7 +107,9 @@ export default function Status() {
       }
     }
 
-    fireAndForget(load(), "status.load");
+    queueMicrotask(() => {
+      fireAndForget(load(), "status.load");
+    });
     isScreenContextEnabled().then(setContextEnabled).catch(logRejection("status.screenContext")); // default false = fail-closed
     refreshA11y();
     AccessibilityScanner.getPassiveModeEnabled()
@@ -383,6 +389,34 @@ export default function Status() {
                 <div className="metric-label">{Capacitor.isNativePlatform() ? "Allowlist" : "Workstation"}</div>
                 <div className="metric-val">{Capacitor.isNativePlatform() ? `${allowlist.size} apps` : "Windows Host"}</div>
               </div>
+            </div>
+          </div>
+
+          {/* Daily Shadow Review Banner */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="card-row" style={{ alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <ReviewIcon size={22} className="accent-text" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 15 }}>Daily Shadow Review</h3>
+                  <p className="hint" style={{ margin: "2px 0 0", fontSize: 13 }}>
+                    {shadowPendingCount === null
+                      ? "Calibrate shadow proposals with one-tap answers."
+                      : shadowPendingCount === 0
+                        ? "All caught up! No shadow proposals awaiting review."
+                        : `${shadowPendingCount} proposal${shadowPendingCount === 1 ? "" : "s"} waiting for your one-tap review.`}
+                  </p>
+                </div>
+              </div>
+              <button
+                className={`pill ${(shadowPendingCount ?? 0) > 0 ? "primary" : "secondary"}`}
+                onClick={() => navigate("/review")}
+                style={{ fontSize: 13, padding: "6px 14px" }}
+              >
+                {(shadowPendingCount ?? 0) > 0
+                  ? `Review (${shadowPendingCount})`
+                  : "Open Review"}
+              </button>
             </div>
           </div>
 

@@ -23,7 +23,7 @@ export async function setBridgeState(state: BridgeState): Promise<void> {
 export type UsageEvent = (
   | { type: "ask"; screen: "ask"; query: string; result: "answered" | "unavailable" | "error"; timestamp: string }
   | { type: "search"; screen: "search"; query: string; resultCount: number; mode: "relevant" | "text" | "text-fallback"; timestamp: string }
-  | { type: "screen_view"; screen: "setup" | "status" | "recent" | "ask"; timestamp: string }
+  | { type: "screen_view"; screen: "setup" | "status" | "recent" | "ask" | "review"; timestamp: string }
   | { type: "setup_saved"; screen: "setup"; mode: "lan" | "remote"; timestamp: string }
   | {
       type: "health_observation";

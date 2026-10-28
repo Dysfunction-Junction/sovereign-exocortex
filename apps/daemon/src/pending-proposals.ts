@@ -178,6 +178,10 @@ export interface PendingProposal {
   expiresAt: number;
   actionPayload?: Record<string, unknown>;
   shadow?: boolean;
+  state?: string;
+  tier?: number;
+  efe?: number;
+  updatedAt?: number;
 }
 
 const warnedMalformedProposals = new Set<string>();
