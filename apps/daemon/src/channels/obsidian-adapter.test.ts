@@ -1,6 +1,10 @@
-import { describe, it } from "node:test";
+import { describe, it, before, after, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { parseMarkdownFile, ObsidianAdapter, getDefaultVaultPath } from "./obsidian-adapter.js";
+import type { IngestedDocument } from "./types.js";
 
 describe("obsidian-adapter", () => {
   describe("parseMarkdownFile", () => {
@@ -44,14 +48,112 @@ We are collaborating with #research and tracking progress under #release-v3.
     });
   });
 
+  describe("getDefaultVaultPath", () => {
+    it("respects OBSIDIAN_VAULT_PATH environment variable override", () => {
+      const original = process.env.OBSIDIAN_VAULT_PATH;
+      try {
+        process.env.OBSIDIAN_VAULT_PATH = "C:\\Custom\\TestVault";
+        assert.equal(getDefaultVaultPath(), "C:\\Custom\\TestVault");
+      } finally {
+        if (original !== undefined) {
+          process.env.OBSIDIAN_VAULT_PATH = original;
+        } else {
+          delete process.env.OBSIDIAN_VAULT_PATH;
+        }
+      }
+    });
+  });
+
   describe("ObsidianAdapter lifecycle", () => {
-    it("reports 100% airGapped: true in getStatus", async () => {
-      const adapter = new ObsidianAdapter(getDefaultVaultPath());
+    let tempVaultDir: string;
+    const activeAdapters: ObsidianAdapter[] = [];
+
+    const createAdapter = (
+      vaultPath?: string,
+      onDoc?: (doc: IngestedDocument) => void,
+    ): ObsidianAdapter => {
+      const adapter = new ObsidianAdapter(vaultPath, onDoc);
+      activeAdapters.push(adapter);
+      return adapter;
+    };
+
+    before(async () => {
+      tempVaultDir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-vault-"));
+      await fs.writeFile(
+        path.join(tempVaultDir, "Note 1.md"),
+        `# Note 1 Heading\n\nThis note references [[Note 2]] and #project.\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(tempVaultDir, "Note 2.md"),
+        `---\ntags: reference\n---\n# Note 2 Title\n\nContent for note 2.\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(tempVaultDir, "Plain.md"),
+        `Plain note content without frontmatter or headers.\n`,
+        "utf-8",
+      );
+    });
+
+    afterEach(() => {
+      while (activeAdapters.length > 0) {
+        const adapter = activeAdapters.pop();
+        adapter?.dispose();
+      }
+    });
+
+    after(async () => {
+      if (tempVaultDir) {
+        await fs.rm(tempVaultDir, {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 100,
+        });
+      }
+    });
+
+    it("reports connected and 100% airGapped: true when vault exists", async () => {
+      const adapter = createAdapter(tempVaultDir);
       const status = await adapter.getStatus();
       assert.equal(status.id, "obsidian");
       assert.equal(status.airGapped, true);
       assert.equal(status.status, "connected");
-      adapter.dispose();
+    });
+
+    it("reports disconnected status when vault path does not exist", async () => {
+      const adapter = createAdapter(path.join(tempVaultDir, "non_existent_folder"));
+      const status = await adapter.getStatus();
+      assert.equal(status.id, "obsidian");
+      assert.equal(status.airGapped, true);
+      assert.equal(status.status, "disconnected");
+    });
+
+    it("syncs notes and extracts wikilinks and tags from temp vault", async () => {
+      const ingested: IngestedDocument[] = [];
+      const adapter = createAdapter(tempVaultDir, (doc) => {
+        ingested.push(doc);
+      });
+      const result = await adapter.sync();
+      assert.equal(result.itemsSynced, 3);
+      assert.equal(ingested.length, 3);
+
+      const note1 = ingested.find((d) => d.title === "Note 1 Heading");
+      assert.ok(note1);
+      assert.deepEqual(note1.wikilinks, ["Note 2"]);
+      assert.ok(note1.tags.includes("project"));
+
+      const note2 = ingested.find((d) => d.title === "Note 2 Title");
+      assert.ok(note2);
+      assert.ok(note2.tags.includes("reference"));
+
+      const plain = ingested.find((d) => d.title === "Plain");
+      assert.ok(plain);
+
+      const status = await adapter.getStatus();
+      assert.equal(status.status, "connected");
+      assert.equal(status.itemCount, 3);
     });
   });
 });
