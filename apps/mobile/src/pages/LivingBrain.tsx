@@ -1,4 +1,5 @@
 import { buildNodeLabel, type LabelRole } from "../lib/graphLabel";
+import { calmLinkAlpha, hideDetails, isDetailType, loadHideDocs, saveHideDocs, shouldShowLabel } from "../lib/brainView";
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import ForceGraph3D, { type ForceGraph3DInstance } from "3d-force-graph";
 import * as THREE from "three";
@@ -35,12 +36,6 @@ const TYPE_COLORS: Record<string, string> = {
   DOC: "#94a3b8",           // Slate
   DEFAULT: "#818cf8",       // Indigo
 };
-
-/** Documents and topics are details around the people and projects, so they are drawn much smaller. */
-function isDetailType(type: string): boolean {
-  const t = type.toUpperCase();
-  return t === "DOC" || t === "TOPIC";
-}
 
 function getNodeColor(type: string): string {
   return TYPE_COLORS[type.toUpperCase()] ?? TYPE_COLORS.DEFAULT;
@@ -89,6 +84,9 @@ export default function LivingBrain() {
   const [nlQueryError, setNlQueryError] = useState<string | null>(null);
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [hideFloatingOrphans, setHideFloatingOrphans] = useState(true);
+  const [hideDocs, setHideDocs] = useState<boolean>(() => loadHideDocs());
+  const nodeTypeRef = useRef(new Map<string, string>());
+  const didFitRef = useRef(false);
 
   useEffect(() => {
     isSynapticAudioEnabled().then(setAudioEnabled).catch(() => {});
@@ -187,7 +185,7 @@ export default function LivingBrain() {
       fgRef.current.cameraPosition(
         { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
         node as any,
-        1200
+        800
       );
     }
   }, []);
@@ -361,22 +359,221 @@ export default function LivingBrain() {
 
     const nodeIds = new Set(nodes.map((n) => n.id));
 
-    const links = graphData.edges
-      .filter((e) => nodeIds.has(e.sourceId) && nodeIds.has(e.targetId))
-      .map((e) => ({
-        ...e,
-        source: e.sourceId,
-        target: e.targetId,
-      })) as GraphLink[];
+    let rawLinks = graphData.edges.filter((e) => nodeIds.has(e.sourceId) && nodeIds.has(e.targetId));
+    if (hideDocs) {
+      const kept = hideDetails(nodes, rawLinks);
+      nodes = kept.nodes;
+      rawLinks = kept.links;
+    }
+    const links = rawLinks.map((e) => ({
+      ...e,
+      source: e.sourceId,
+      target: e.targetId,
+    })) as GraphLink[];
 
     return { nodes, links };
-  }, [graphData, selectedFilter, hideFloatingOrphans]);
+  }, [graphData, selectedFilter, hideFloatingOrphans, hideDocs]);
+
+  useEffect(() => {
+    saveHideDocs(hideDocs);
+  }, [hideDocs]);
 
   // Mount & configure ForceGraph3D
   useEffect(() => {
     if (!containerRef.current || loading) return;
 
     if (!fgRef.current) {
+    const buildVisual = (node: GraphNode): THREE.Group => {
+          const group = new THREE.Group();
+      const selNode = selectedNodeRef.current;
+      const circuit = synapticCircuitRef.current;
+      const act = node.activation ?? 0;
+      const baseColor = new THREE.Color(node.color ?? getNodeColor(node.type));
+      const detail = isDetailType(node.type);
+      const seg = detail ? 8 : 16;
+      // Highlight states keep their ordering (selected > 1-hop > 2-hop) but a detail never outgrows a person.
+      const detailScale = detail ? 0.4 : 1;
+
+      const isSelected = Boolean(selNode && selNode.id === node.id);
+      const isHop1 = Boolean(selNode && circuit.hop1NodeIds.has(node.id));
+      const isHop2 = Boolean(selNode && circuit.hop2NodeIds.has(node.id));
+      const isInhibited = Boolean(selNode && !isSelected && !isHop1 && !isHop2);
+
+      if (isInhibited) {
+        // Lateral Inhibition: dormant, faded, tiny slate core
+        const geom = new THREE.SphereGeometry(1.2, seg, seg);
+        const mat = new THREE.MeshBasicMaterial({
+          color: 0x1e293b,
+          transparent: true,
+          opacity: 0.10,
+        });
+        group.add(new THREE.Mesh(geom, mat));
+        return group;
+      }
+
+      if (isSelected) {
+        // Initiator Neuron: action potential focal point
+        const radius = Math.max(5.0, 5.0 + act * 7) * (detail ? 0.6 : 1);
+        const geom = new THREE.SphereGeometry(radius, seg, seg);
+        const mat = new THREE.MeshLambertMaterial({
+          color: baseColor,
+          emissive: baseColor,
+          emissiveIntensity: 0.8,
+          transparent: true,
+          opacity: 1.0,
+        });
+        group.add(new THREE.Mesh(geom, mat));
+
+        // Inner Bioluminescent Aura
+        const innerGlowGeo = new THREE.SphereGeometry(radius * 1.5, seg, seg);
+        const innerGlowMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.5,
+          wireframe: true,
+        });
+        group.add(new THREE.Mesh(innerGlowGeo, innerGlowMat));
+
+        // Outer Pulsing Halo
+        const outerHaloGeo = new THREE.SphereGeometry(radius * 2.2, seg, seg);
+        const outerHaloMat = new THREE.MeshBasicMaterial({
+          color: baseColor,
+          transparent: true,
+          opacity: 0.25,
+          wireframe: true,
+        });
+        group.add(new THREE.Mesh(outerHaloGeo, outerHaloMat));
+        return group;
+      }
+
+      if (isHop1) {
+        // 1-Hop Primary Branch: vibrant, high conductance
+        const radius = Math.max(3.4, 3.4 + act * 6) * detailScale;
+        const geom = new THREE.SphereGeometry(radius, seg, seg);
+        const mat = new THREE.MeshLambertMaterial({
+          color: baseColor,
+          emissive: baseColor,
+          emissiveIntensity: 0.4,
+          transparent: true,
+          opacity: 0.95,
+        });
+        group.add(new THREE.Mesh(geom, mat));
+
+        const glowGeo = new THREE.SphereGeometry(radius * 1.4, seg, seg);
+        const glowMat = new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.35,
+          wireframe: true,
+        });
+        group.add(new THREE.Mesh(glowGeo, glowMat));
+        return group;
+      }
+
+      if (isHop2) {
+        // 2-Hop Secondary Cascade: medium presence
+        const radius = Math.max(2.4, 2.4 + act * 5) * detailScale;
+        const geom = new THREE.SphereGeometry(radius, seg, seg);
+        const mat = new THREE.MeshLambertMaterial({
+          color: baseColor,
+          emissive: baseColor,
+          emissiveIntensity: 0.2,
+          transparent: true,
+          opacity: 0.80,
+        });
+        group.add(new THREE.Mesh(geom, mat));
+
+        const glowGeo = new THREE.SphereGeometry(radius * 1.25, seg, seg);
+        const glowMat = new THREE.MeshBasicMaterial({
+          color: 0xa78bfa,
+          transparent: true,
+          opacity: 0.20,
+          wireframe: true,
+        });
+        group.add(new THREE.Mesh(glowGeo, glowMat));
+        return group;
+      }
+
+      // Default Baseline (no node selected)
+      // People, projects and devices are the landmarks; documents and topics are small dots.
+      const radius = detail ? Math.max(0.9, 0.9 + act * 1.1) : Math.max(3.2, 3.2 + act * 6);
+      const geom = new THREE.SphereGeometry(radius, seg, seg);
+      const mat = new THREE.MeshLambertMaterial({
+        color: baseColor,
+        transparent: true,
+        opacity: 0.9,
+      });
+      group.add(new THREE.Mesh(geom, mat));
+
+      if (act > 0.4) {
+        const glowGeo = new THREE.SphereGeometry(radius * 1.5, seg, seg);
+        const glowMat = new THREE.MeshBasicMaterial({
+          color: baseColor,
+          transparent: true,
+          opacity: act * 0.25,
+          wireframe: true,
+        });
+        group.add(new THREE.Mesh(glowGeo, glowMat));
+      }
+
+      return group;
+    };
+
+    const labelMaterials = new Map<string, THREE.SpriteMaterial>();
+    const labelMaterial = (text: string, color: string): THREE.SpriteMaterial => {
+      const key = `${color}|${text}`;
+      const cached = labelMaterials.get(key);
+      if (cached) return cached;
+      const canvas = document.createElement("canvas");
+      canvas.width = 512;
+      canvas.height = 96;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.font = "600 44px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = "rgba(7, 8, 14, 0.9)";
+        const shown = text.length > 26 ? `${text.slice(0, 25)}…` : text;
+        ctx.strokeText(shown, 256, 48);
+        ctx.fillStyle = color;
+        ctx.fillText(shown, 256, 48);
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+      labelMaterials.set(key, material);
+      return material;
+    };
+
+    // Adds an invisible tap target (radius at least 6) and, where the rule allows, a text label.
+    const decorateNode = (node: GraphNode, group: THREE.Group): THREE.Group => {
+      const size = new THREE.Box3().setFromObject(group).getSize(new THREE.Vector3());
+      const drawn = Math.max(size.x, size.y, size.z) / 2;
+      const hitRadius = Math.max(drawn, 6);
+      group.add(
+        new THREE.Mesh(
+          new THREE.SphereGeometry(hitRadius, 8, 8),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+        ),
+      );
+      const selNode = selectedNodeRef.current;
+      const circuit = synapticCircuitRef.current;
+      let role: LabelRole | null = null;
+      if (selNode) {
+        if (node.id === selNode.id) role = "initiator";
+        else if (circuit.hop1NodeIds.has(node.id)) role = "hop1";
+        else if (circuit.hop2NodeIds.has(node.id)) role = "hop2";
+        else role = "inhibited";
+      }
+      if (shouldShowLabel(node.type, role) && node.name) {
+        const sprite = new THREE.Sprite(labelMaterial(node.name, "#e2e8f0"));
+        sprite.scale.set(42, 42 * (96 / 512), 1);
+        sprite.position.set(0, drawn + 5, 0);
+        group.add(sprite);
+      }
+      return group;
+    };
+
       const fg = new (ForceGraph3D as any)()(containerRef.current)
         .backgroundColor("rgba(7, 8, 14, 0.98)")
         .nodeLabel((node: GraphNode) => {
@@ -391,143 +588,15 @@ export default function LivingBrain() {
           }
           return buildNodeLabel(node, role);
         })
-        .nodeThreeObject((node: GraphNode) => {
-          const group = new THREE.Group();
-          const selNode = selectedNodeRef.current;
-          const circuit = synapticCircuitRef.current;
-          const act = node.activation ?? 0;
-          const baseColor = new THREE.Color(node.color ?? getNodeColor(node.type));
-          const detail = isDetailType(node.type);
-          // Highlight states keep their ordering (selected > 1-hop > 2-hop) but a detail never outgrows a person.
-          const detailScale = detail ? 0.4 : 1;
-
-          const isSelected = Boolean(selNode && selNode.id === node.id);
-          const isHop1 = Boolean(selNode && circuit.hop1NodeIds.has(node.id));
-          const isHop2 = Boolean(selNode && circuit.hop2NodeIds.has(node.id));
-          const isInhibited = Boolean(selNode && !isSelected && !isHop1 && !isHop2);
-
-          if (isInhibited) {
-            // Lateral Inhibition: dormant, faded, tiny slate core
-            const geom = new THREE.SphereGeometry(1.2, 8, 8);
-            const mat = new THREE.MeshBasicMaterial({
-              color: 0x1e293b,
-              transparent: true,
-              opacity: 0.10,
-            });
-            group.add(new THREE.Mesh(geom, mat));
-            return group;
-          }
-
-          if (isSelected) {
-            // Initiator Neuron: action potential focal point
-            const radius = Math.max(5.0, 5.0 + act * 7) * (detail ? 0.6 : 1);
-            const geom = new THREE.SphereGeometry(radius, 24, 24);
-            const mat = new THREE.MeshLambertMaterial({
-              color: baseColor,
-              emissive: baseColor,
-              emissiveIntensity: 0.8,
-              transparent: true,
-              opacity: 1.0,
-            });
-            group.add(new THREE.Mesh(geom, mat));
-
-            // Inner Bioluminescent Aura
-            const innerGlowGeo = new THREE.SphereGeometry(radius * 1.5, 16, 16);
-            const innerGlowMat = new THREE.MeshBasicMaterial({
-              color: 0x38bdf8,
-              transparent: true,
-              opacity: 0.5,
-              wireframe: true,
-            });
-            group.add(new THREE.Mesh(innerGlowGeo, innerGlowMat));
-
-            // Outer Pulsing Halo
-            const outerHaloGeo = new THREE.SphereGeometry(radius * 2.2, 12, 12);
-            const outerHaloMat = new THREE.MeshBasicMaterial({
-              color: baseColor,
-              transparent: true,
-              opacity: 0.25,
-              wireframe: true,
-            });
-            group.add(new THREE.Mesh(outerHaloGeo, outerHaloMat));
-            return group;
-          }
-
-          if (isHop1) {
-            // 1-Hop Primary Branch: vibrant, high conductance
-            const radius = Math.max(3.4, 3.4 + act * 6) * detailScale;
-            const geom = new THREE.SphereGeometry(radius, 18, 18);
-            const mat = new THREE.MeshLambertMaterial({
-              color: baseColor,
-              emissive: baseColor,
-              emissiveIntensity: 0.4,
-              transparent: true,
-              opacity: 0.95,
-            });
-            group.add(new THREE.Mesh(geom, mat));
-
-            const glowGeo = new THREE.SphereGeometry(radius * 1.4, 12, 12);
-            const glowMat = new THREE.MeshBasicMaterial({
-              color: 0x38bdf8,
-              transparent: true,
-              opacity: 0.35,
-              wireframe: true,
-            });
-            group.add(new THREE.Mesh(glowGeo, glowMat));
-            return group;
-          }
-
-          if (isHop2) {
-            // 2-Hop Secondary Cascade: medium presence
-            const radius = Math.max(2.4, 2.4 + act * 5) * detailScale;
-            const geom = new THREE.SphereGeometry(radius, 16, 16);
-            const mat = new THREE.MeshLambertMaterial({
-              color: baseColor,
-              emissive: baseColor,
-              emissiveIntensity: 0.2,
-              transparent: true,
-              opacity: 0.80,
-            });
-            group.add(new THREE.Mesh(geom, mat));
-
-            const glowGeo = new THREE.SphereGeometry(radius * 1.25, 12, 12);
-            const glowMat = new THREE.MeshBasicMaterial({
-              color: 0xa78bfa,
-              transparent: true,
-              opacity: 0.20,
-              wireframe: true,
-            });
-            group.add(new THREE.Mesh(glowGeo, glowMat));
-            return group;
-          }
-
-          // Default Baseline (no node selected)
-          // People, projects and devices are the landmarks; documents and topics are small dots.
-          const radius = detail ? Math.max(0.9, 0.9 + act * 1.1) : Math.max(3.2, 3.2 + act * 6);
-          const geom = new THREE.SphereGeometry(radius, detail ? 10 : 16, detail ? 10 : 16);
-          const mat = new THREE.MeshLambertMaterial({
-            color: baseColor,
-            transparent: true,
-            opacity: 0.9,
-          });
-          group.add(new THREE.Mesh(geom, mat));
-
-          if (act > 0.4) {
-            const glowGeo = new THREE.SphereGeometry(radius * 1.5, 12, 12);
-            const glowMat = new THREE.MeshBasicMaterial({
-              color: baseColor,
-              transparent: true,
-              opacity: act * 0.25,
-              wireframe: true,
-            });
-            group.add(new THREE.Mesh(glowGeo, glowMat));
-          }
-
-          return group;
-        })
+        .nodeThreeObject((node: GraphNode) => decorateNode(node, buildVisual(node)))
         .linkColor((link: any) => {
           const selNode = selectedNodeRef.current;
-          if (!selNode) return "rgba(99, 102, 241, 0.25)";
+          if (!selNode) {
+            const types = nodeTypeRef.current;
+            const sId = typeof link.source === "object" ? link.source.id : link.source;
+            const tId = typeof link.target === "object" ? link.target.id : link.target;
+            return `rgba(99, 102, 241, ${calmLinkAlpha(types.get(sId), types.get(tId))})`;
+          }
           const circuit = synapticCircuitRef.current;
           if (circuit.hop1EdgeIds.has(link.id)) return "rgba(56, 189, 248, 0.95)";
           if (circuit.hop2EdgeIds.has(link.id)) return "rgba(167, 139, 250, 0.75)";
@@ -543,7 +612,7 @@ export default function LivingBrain() {
         })
         .linkDirectionalParticles((link: any) => {
           const selNode = selectedNodeRef.current;
-          if (!selNode) return 2;
+          if (!selNode) return 0;
           const circuit = synapticCircuitRef.current;
           if (circuit.hop1EdgeIds.has(link.id)) return 6;
           if (circuit.hop2EdgeIds.has(link.id)) return 3;
@@ -579,11 +648,18 @@ export default function LivingBrain() {
         });
 
       fgRef.current = fg;
+      // The first touch stops the orbit for good; the Orbit button can still turn it back on.
+      containerRef.current.addEventListener("pointerdown", () => setAutoRotate(false), { once: true });
     }
 
     const fg = fgRef.current;
     if (!fg) return;
+    nodeTypeRef.current = new Map(filteredData.nodes.map((n) => [n.id, n.type]));
     fg.graphData(filteredData);
+    if (!didFitRef.current && filteredData.nodes.length > 0) {
+      didFitRef.current = true;
+      setTimeout(() => fgRef.current?.zoomToFit(600, 40), 1500);
+    }
     const controls = fg.controls() as any;
     if (controls) {
       controls.autoRotate = autoRotate;
@@ -708,6 +784,42 @@ export default function LivingBrain() {
     <div style={{ position: "relative", width: "100%", height: "calc(100svh - 110px)", minHeight: "650px", overflow: "hidden", background: "#07080e" }}>
       {/* 3D WebGL Canvas Container */}
       <div ref={containerRef} style={{ width: "100%", height: "100%", outline: "none" }} />
+
+      {/* Legend: color to kind */}
+      <div
+        aria-label="Legend"
+        style={{
+          position: "absolute",
+          left: 12,
+          bottom: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+          padding: "8px 10px",
+          borderRadius: 12,
+          background: "rgba(13, 17, 30, 0.72)",
+          backdropFilter: "blur(10px)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          fontSize: 10,
+          color: "#cbd5e1",
+          pointerEvents: "none",
+        }}
+      >
+        {(["PERSON", "PROJECT", "DEVICE", "GOAL", "DOC"] as const).map((kind) => (
+          <span key={kind} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span
+              style={{
+                width: isDetailType(kind) ? 6 : 10,
+                height: isDetailType(kind) ? 6 : 10,
+                borderRadius: "50%",
+                background: getNodeColor(kind),
+                display: "inline-block",
+              }}
+            />
+            {kind === "DOC" ? "Document / topic" : kind.charAt(0) + kind.slice(1).toLowerCase()}
+          </span>
+        ))}
+      </div>
 
       {/* Active Synaptic Circuit Floating Banner */}
       {selectedNode && (
@@ -1278,6 +1390,26 @@ export default function LivingBrain() {
           }}
         >
           {hideFloatingOrphans ? "⚡ Connected Only" : "🌐 All Nodes"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setHideDocs((prev) => !prev)}
+          aria-pressed={hideDocs}
+          title="Hide document and topic nodes and their links"
+          style={{
+            background: hideDocs ? "rgba(56, 189, 248, 0.25)" : "rgba(13, 17, 30, 0.75)",
+            backdropFilter: "blur(12px)",
+            border: `1px solid ${hideDocs ? "#38bdf8" : "rgba(255, 255, 255, 0.08)"}`,
+            color: hideDocs ? "#38bdf8" : "#94a3b8",
+            fontSize: "11px",
+            fontWeight: 700,
+            padding: "5px 12px",
+            borderRadius: "20px",
+            cursor: "pointer",
+            transition: "all 180ms ease",
+          }}
+        >
+          {hideDocs ? "Documents hidden" : "Hide documents"}
         </button>
       </div>
 
