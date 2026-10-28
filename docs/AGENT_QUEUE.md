@@ -31,7 +31,7 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) (PR #28) | agy | Done |
 | 4.0 | Daily review screen in the phone app for one-tap shadow labels (PR #29) | agy | Done |
 | 3.3 | Inference broker (queue, priority triage > embed > vision) (PR #26) | Claude Code | Done |
-| 2.1-2.2 | Delegate capability map, route /network/delegate through it | Claude Code | Needs Opus review |
+| 2.1-2.2 | Delegate capability map, route /network/delegate through it (Opus-reviewed design: docs/DELEGATE_CAPABILITIES_DESIGN.md) | Claude Code | In review |
 | 1.1 | Channel event schema and email-body decision | Opus | Needs design |
 | 1.2-1.6, 2.3-2.5 | Ingestion build, scripted executors, kill-switch drill | agy | Blocked on 1.1 / 2.1 |
 | - | Move home proxy `/mobile/ask` off Ollama (other repo: pieces-android-shizuku-monitor) | Claude Code | Blocked (separate repo) |

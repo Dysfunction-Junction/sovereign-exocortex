@@ -7,7 +7,8 @@ import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:cryp
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
-import { canonicalJsonStringify, forwardApprove, forwardDelegate, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
+import { ADMIN_SCOPES, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
+import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, isApprovalAction, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
@@ -2021,9 +2022,12 @@ function getUnlabeledShadowProposals(
 
   if (method === "POST" && url.pathname === "/network/delegate") {
     try {
-      // Generic delegation can mutate downstream state; admin-only until an action-level capability map exists.
-      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:write")) {
-        sendJson(res, 403, { error: "forbidden: delegation requires admin or admin:write scope" });
+      // Default deny. "Not mapped", "missing scope" and "approval action" all return the same 403 so the response does
+      // not reveal which actions exist (docs/DELEGATE_CAPABILITIES_DESIGN.md).
+      const denied = () => sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      // Devices with no delegate scope at all are refused before the body is read.
+      if (!deviceHasScope(getDatabase(), auth.deviceId, ...ANY_DELEGATE_SCOPES)) {
+        denied();
         return;
       }
       const raw = await readBody(req, 64 * 1024);
@@ -2039,10 +2043,16 @@ function getUnlabeledShadowProposals(
         sendJson(res, 400, { error: parsed.error });
         return;
       }
-      // Shadow mode: propose-only. Device/phone actuation is never delegated while SHADOW is on.
-      const MUTATING_MESH_ACTIONS = ["demote", "synthesize", "dispatch", "playbook"];
-      const mutatesMesh = parsed.to === "agent-mesh-mcp" && MUTATING_MESH_ACTIONS.includes(parsed.action.trim().toLowerCase());
-      if ((parsed.to === "hermes-api" || mutatesMesh) && process.env.SHADOW !== "0") {
+      // Approve/reject/release carry authority only /network/approve verifies.
+      const capability = isApprovalAction(parsed.action) ? null : resolveDelegate(parsed.to, parsed.action, parsed.payload);
+      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...ADMIN_SCOPES, ...capability.scopes)) {
+        denied();
+        return;
+      }
+      // The caller never names itself: memory.add authorizes on `from`, so the daemon states who is calling.
+      parsed.from = GATEWAY_NODE;
+      // Shadow mode: propose-only. Anything the map marks "block" is refused while SHADOW is on.
+      if (capability.shadow === "block" && process.env.SHADOW !== "0") {
         sendJson(res, 423, {
           ok: false,
           error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
