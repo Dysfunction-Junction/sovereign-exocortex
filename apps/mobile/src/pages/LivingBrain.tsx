@@ -36,6 +36,12 @@ const TYPE_COLORS: Record<string, string> = {
   DEFAULT: "#818cf8",       // Indigo
 };
 
+/** Documents and topics are details around the people and projects, so they are drawn much smaller. */
+function isDetailType(type: string): boolean {
+  const t = type.toUpperCase();
+  return t === "DOC" || t === "TOPIC";
+}
+
 function getNodeColor(type: string): string {
   return TYPE_COLORS[type.toUpperCase()] ?? TYPE_COLORS.DEFAULT;
 }
@@ -391,6 +397,9 @@ export default function LivingBrain() {
           const circuit = synapticCircuitRef.current;
           const act = node.activation ?? 0;
           const baseColor = new THREE.Color(node.color ?? getNodeColor(node.type));
+          const detail = isDetailType(node.type);
+          // Highlight states keep their ordering (selected > 1-hop > 2-hop) but a detail never outgrows a person.
+          const detailScale = detail ? 0.4 : 1;
 
           const isSelected = Boolean(selNode && selNode.id === node.id);
           const isHop1 = Boolean(selNode && circuit.hop1NodeIds.has(node.id));
@@ -411,7 +420,7 @@ export default function LivingBrain() {
 
           if (isSelected) {
             // Initiator Neuron: action potential focal point
-            const radius = Math.max(5.0, 5.0 + act * 7);
+            const radius = Math.max(5.0, 5.0 + act * 7) * (detail ? 0.6 : 1);
             const geom = new THREE.SphereGeometry(radius, 24, 24);
             const mat = new THREE.MeshLambertMaterial({
               color: baseColor,
@@ -446,7 +455,7 @@ export default function LivingBrain() {
 
           if (isHop1) {
             // 1-Hop Primary Branch: vibrant, high conductance
-            const radius = Math.max(3.4, 3.4 + act * 6);
+            const radius = Math.max(3.4, 3.4 + act * 6) * detailScale;
             const geom = new THREE.SphereGeometry(radius, 18, 18);
             const mat = new THREE.MeshLambertMaterial({
               color: baseColor,
@@ -470,7 +479,7 @@ export default function LivingBrain() {
 
           if (isHop2) {
             // 2-Hop Secondary Cascade: medium presence
-            const radius = Math.max(2.4, 2.4 + act * 5);
+            const radius = Math.max(2.4, 2.4 + act * 5) * detailScale;
             const geom = new THREE.SphereGeometry(radius, 16, 16);
             const mat = new THREE.MeshLambertMaterial({
               color: baseColor,
@@ -493,8 +502,9 @@ export default function LivingBrain() {
           }
 
           // Default Baseline (no node selected)
-          const radius = Math.max(2, 2 + act * 6);
-          const geom = new THREE.SphereGeometry(radius, 16, 16);
+          // People, projects and devices are the landmarks; documents and topics are small dots.
+          const radius = detail ? Math.max(0.9, 0.9 + act * 1.1) : Math.max(3.2, 3.2 + act * 6);
+          const geom = new THREE.SphereGeometry(radius, detail ? 10 : 16, detail ? 10 : 16);
           const mat = new THREE.MeshLambertMaterial({
             color: baseColor,
             transparent: true,
