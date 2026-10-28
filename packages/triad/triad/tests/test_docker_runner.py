@@ -17,7 +17,7 @@ from unittest import mock
 
 from triad.docker_runner import DockerRunner, IsolationUnavailable, OutputLimitExceeded, _container_user, bounded_run
 from triad.morphogenetic import MorphogeneticEngine, MutationCandidate
-from triad.tests.test_morphogenetic import FakeRunner, _make_repo
+from triad.tests.test_morphogenetic import FakeRunner, _make_repo, _Engine
 
 PROFILES = {"unit": ["python", "-m", "unittest", "-q"], "pwd": ["python", "-c", "print('hi')"]}
 
@@ -171,7 +171,7 @@ class TestEngineGitPointerGuard(unittest.TestCase):
                 f.truncate()
 
         cand = self._cand()
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(side_effect=tamper))
+        engine = _Engine(self.repo, verification_runner=FakeRunner(side_effect=tamper))
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("git pointer", cand.verification_output)
         self.assertFalse(cand.survival_passed)
@@ -179,7 +179,7 @@ class TestEngineGitPointerGuard(unittest.TestCase):
 
     def test_untouched_pointer_still_survives(self):
         cand = self._cand()
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner())
+        engine = _Engine(self.repo, verification_runner=FakeRunner())
         self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "unit"))
 
 
@@ -325,7 +325,7 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
     def test_engine_verifies_a_real_repair_inside_a_container(self):
         repo = self._bug_repo()
         runner = DockerRunner({"calc": ["python", "-m", "unittest", "test_calc"]})
-        engine = MorphogeneticEngine(repo, verification_runner=runner)
+        engine = _Engine(repo, verification_runner=runner)
         good = MutationCandidate("good", "fix add", "calc.py", "", "def add(a, b):\n    return a + b\n")
         self.assertTrue(engine.evaluate_mutation_in_sandbox(good, "calc"), good.verification_output)
         self.assertIn("+    return a + b", good.unified_diff)
@@ -339,7 +339,7 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         # A "repair" whose import-time code tries the network and a host path; the container makes both fail,
         # and the assertions in its own code turn that into a failed verification, not a pass.
         runner = DockerRunner({"calc": ["python", "-m", "unittest", "test_calc"]})
-        engine = MorphogeneticEngine(repo, verification_runner=runner)
+        engine = _Engine(repo, verification_runner=runner)
         evil = MutationCandidate(
             "evil", "exfiltrate", "calc.py", "",
             "import socket\n"
@@ -387,7 +387,7 @@ class TestBoundedOutput(unittest.TestCase):
     def test_engine_rejects_a_candidate_whose_verification_overflows(self):
         with tempfile.TemporaryDirectory() as td:
             repo = _make_repo(td)
-            engine = MorphogeneticEngine(repo, verification_runner=FakeRunner(raises=OutputLimitExceeded("flood")))
+            engine = _Engine(repo, verification_runner=FakeRunner(raises=OutputLimitExceeded("flood")))
             cand = MutationCandidate("flood", "d", "src/app.py", "", "a = 1" + chr(10) + "b = 99" + chr(10))
             self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
             self.assertIn("output exceeded", cand.verification_output)

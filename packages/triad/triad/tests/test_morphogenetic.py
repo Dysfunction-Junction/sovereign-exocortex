@@ -11,10 +11,18 @@ from pathlib import Path
 from triad.morphogenetic import MorphogeneticEngine, RuntimeFrictionEvent, MutationCandidate
 
 
+def _Engine(*args, **kwargs):
+    """Engine for tests of the other gates: enabled, and without the reproduction requirement (tested separately)."""
+    kwargs.setdefault("enabled", True)
+    kwargs.setdefault("require_reproduction", False)
+    return MorphogeneticEngine(*args, **kwargs)
+
+
+
 class TestMorphogeneticEngine(unittest.TestCase):
     def setUp(self):
         self.repo_root = Path(__file__).resolve().parents[4]
-        self.engine = MorphogeneticEngine(self.repo_root, verification_runner=FakeRunner())
+        self.engine = _Engine(self.repo_root, verification_runner=FakeRunner())
 
     def test_intercept_friction(self):
         try:
@@ -126,7 +134,7 @@ class TestMorphogeneticEngine(unittest.TestCase):
             subprocess.run(base + ["add", "."], check=True)
             subprocess.run(base + ["commit", "-qm", "init"], check=True)
 
-            engine = MorphogeneticEngine(repo, verification_runner=FakeRunner())
+            engine = _Engine(repo, verification_runner=FakeRunner())
             candidate = MutationCandidate(
                 candidate_id="eol",
                 description="single line change",
@@ -160,7 +168,7 @@ class TestProtectedTargetPolicy(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.root = Path(self._td.name).resolve()
-        self.engine = MorphogeneticEngine(self.root, verification_runner=FakeRunner())
+        self.engine = _Engine(self.root, verification_runner=FakeRunner())
 
     def _protected(self, rel):
         return self.engine._is_protected_target(self.root, (self.root / rel).resolve())
@@ -219,7 +227,7 @@ class TestProtectedTargetPolicy(unittest.TestCase):
         subprocess.run(base + ["config", "core.symlinks", "true"], check=True)
         subprocess.run(base + ["add", "-A"], check=True)
         subprocess.run(base + ["commit", "-qm", "init"], check=True)
-        return MorphogeneticEngine(repo, verification_runner=FakeRunner())
+        return _Engine(repo, verification_runner=FakeRunner())
 
     def test_in_root_alias_to_a_protected_file_is_rejected(self):
         engine = self._repo_with_alias("src/alias.py", "tests/helper.py")
@@ -294,7 +302,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
 
     def test_no_runner_configured_rejects_and_runs_no_verification(self):
         from unittest import mock
-        engine = MorphogeneticEngine(self.repo)
+        engine = _Engine(self.repo)
         cand = self._cand()
         with mock.patch("triad.morphogenetic.subprocess.run") as run:
             self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
@@ -305,8 +313,8 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
     def test_unsafe_host_runner_requires_explicit_opt_in(self):
         from triad.morphogenetic import UnsafeHostRunner
         with self.assertRaises(ValueError):
-            MorphogeneticEngine(self.repo, verification_runner=UnsafeHostRunner({"unit": [sys.executable, "-c", "pass"]}))
-        MorphogeneticEngine(
+            _Engine(self.repo, verification_runner=UnsafeHostRunner({"unit": [sys.executable, "-c", "pass"]}))
+        _Engine(
             self.repo,
             verification_runner=UnsafeHostRunner({"unit": [sys.executable, "-c", "pass"]}),
             allow_unsafe_host_runner=True,
@@ -314,7 +322,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
 
     def test_passing_fake_runner_survives_with_a_literal_pathspec_diff(self):
         runner = FakeRunner(returncode=0)
-        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        engine = _Engine(self.repo, verification_runner=runner)
         cand = self._cand()
         self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertTrue(cand.survival_passed)
@@ -323,7 +331,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
         self.assertEqual(runner.calls[0]["timeout"], 120)
 
     def test_failing_fake_runner_is_apoptosis(self):
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(returncode=1, stderr="boom"))
+        engine = _Engine(self.repo, verification_runner=FakeRunner(returncode=1, stderr="boom"))
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertFalse(cand.survival_passed)
@@ -332,13 +340,13 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
 
     def test_runner_timeout_is_rejected_not_raised(self):
         runner = FakeRunner(raises=subprocess.TimeoutExpired(cmd="unit", timeout=120))
-        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        engine = _Engine(self.repo, verification_runner=runner)
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("timed out", cand.verification_output)
 
     def test_reevaluating_a_survivor_unsuccessfully_clears_stale_state(self):
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(returncode=0))
+        engine = _Engine(self.repo, verification_runner=FakeRunner(returncode=0))
         cand = self._cand()
         self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertTrue(cand.unified_diff)
@@ -349,7 +357,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
 
     def test_extra_untracked_file_is_rejected_even_when_verification_returns_zero(self):
         runner = FakeRunner(side_effect=lambda ws: (ws / "src" / "dropped.py").write_text("evil = 1\n"))
-        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        engine = _Engine(self.repo, verification_runner=runner)
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("unexpected", cand.verification_output)
@@ -357,7 +365,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
 
     def test_modifying_another_tracked_file_is_rejected(self):
         runner = FakeRunner(side_effect=lambda ws: (ws / "src" / "other.py").write_text("c = 'tampered'\n"))
-        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        engine = _Engine(self.repo, verification_runner=runner)
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("unexpected", cand.verification_output)
@@ -365,7 +373,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
     def test_target_rewritten_during_verification_is_rejected_and_never_diffed(self):
         # The scanned/tested candidate is "b = 99"; the runner leaves different bytes in the same file.
         runner = FakeRunner(side_effect=lambda ws: (ws / "src" / "app.py").write_bytes(b"a = 1\nb = 'swapped'\n"))
-        engine = MorphogeneticEngine(self.repo, verification_runner=runner)
+        engine = _Engine(self.repo, verification_runner=runner)
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertFalse(cand.survival_passed)
@@ -377,7 +385,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
             p = ws / "src" / "app.py"
             p.write_bytes(p.read_bytes())
 
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(side_effect=touch))
+        engine = _Engine(self.repo, verification_runner=FakeRunner(side_effect=touch))
         cand = self._cand()
         self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("+b = 99", cand.unified_diff)
@@ -386,7 +394,7 @@ class TestVerificationRunnerBoundary(unittest.TestCase):
         def stage(ws):
             subprocess.run(["git", "-C", str(ws), "add", "src/app.py"], check=True)
 
-        engine = MorphogeneticEngine(self.repo, verification_runner=FakeRunner(side_effect=stage))
+        engine = _Engine(self.repo, verification_runner=FakeRunner(side_effect=stage))
         cand = self._cand()
         self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "unit"))
         self.assertIn("unexpected", cand.verification_output)
