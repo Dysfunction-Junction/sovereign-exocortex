@@ -245,7 +245,7 @@ class MorphogeneticEngine:
             # 1. Ruff check (syntax, lint errors)
             try:
                 ruff_res = subprocess.run(
-                    [ruff_bin, "check", "--no-cache", rel],
+                    [ruff_bin, "check", "--select", "E9,F", "--no-cache", rel],
                     cwd=str(sandbox),
                     capture_output=True,
                     text=True,

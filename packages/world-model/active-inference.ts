@@ -243,7 +243,7 @@ export class ActiveInferenceEngine {
         expectedUtility: 0.92, // High expected utility towards preference
         informationGain: 0.15, // Low uncertainty resolution
         expectedFreeEnergyScore: 0.85,
-        estimatedRisk: invariant.category === 'CODE_HEALTH' ? 0.05 : 0.20,
+        estimatedRisk: 0.20, // Tier T2: writes local graph state (0.15 < risk <= 0.50)
         urgency: metric.surprisalNats > 3.0 ? 0.90 : 0.65,
         actionPayload: {
           command: 'self_heal_restore',
