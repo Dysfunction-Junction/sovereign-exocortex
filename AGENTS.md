@@ -49,6 +49,7 @@ Open [`README.md`](README.md) for status, the package table, how to run, and kno
 | [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md) | phone-to-approval hardware test |
 | [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md) | shadow calibration before a tier goes live |
 | [`docs/AGENT_QUEUE.md`](docs/AGENT_QUEUE.md) | what to build next, how to claim a row, the rules |
+| [`docs/CODEX_HANDOFF.md`](docs/CODEX_HANDOFF.md), [`docs/AGY_HANDOFF.md`](docs/AGY_HANDOFF.md) | per-agent instruction sets for the finish line |
 | [`docs/DATABANK_ARCHITECTURE.md`](docs/DATABANK_ARCHITECTURE.md) | cold archive |
 | [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md) | older audit follow-ups; the date is part of the name |
 
