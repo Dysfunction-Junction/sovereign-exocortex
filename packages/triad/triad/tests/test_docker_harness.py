@@ -161,7 +161,8 @@ class TestDockerHarness(unittest.TestCase):
                 check=True, capture_output=True,
             )
             argv = checkout_argv(checkout, commit)
-            self.assertLess(argv.index("--detach"), argv.index("--end-of-options"))
+            self.assertNotIn("--end-of-options", argv)
+            self.assertIn(commit, argv)
             checked = subprocess.run(argv, capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stderr)
             head = subprocess.run(
@@ -169,6 +170,17 @@ class TestDockerHarness(unittest.TestCase):
                 check=True, capture_output=True, text=True,
             ).stdout.strip()
             self.assertEqual(head, commit)
+
+
+    def test_checkout_argv_rejects_non_hex_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp)
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "--upload-pack=touch /tmp/pwn")
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "HEAD")
+            with self.assertRaises(ValueError):
+                checkout_argv(checkout, "not-a-sha!")
 
 
 class TestClaudeJudgesCodex(unittest.TestCase):
