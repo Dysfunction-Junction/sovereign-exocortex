@@ -14,6 +14,7 @@
 
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import type { RawEvent } from "@exocortex/core";
+import { defaultInferenceBroker, type InferenceBroker } from "./inference-broker.js";
 
 export const TRIAGE_CATEGORIES = ["urgent", "routine", "noise"] as const;
 export type TriageCategory = (typeof TRIAGE_CATEGORIES)[number];
@@ -62,6 +63,7 @@ export interface TriageVerdict {
 }
 
 export interface TriageHostOptions {
+  broker?: InferenceBroker;
   enabled?: boolean;
   model?: string;
   baseUrl?: string;
@@ -107,6 +109,7 @@ export class TriageHost {
   private readonly timeoutMs: number;
   private readonly maxQueue: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly broker: InferenceBroker;
   private readonly now: () => number;
   public onVerdictStored?: (deviceId: string, verdict: TriageVerdict, eventSeq: number) => void;
   private readonly queue: TriageJob[] = [];
@@ -120,6 +123,7 @@ export class TriageHost {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxQueue = opts.maxQueue ?? DEFAULT_MAX_QUEUE;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.broker = opts.broker ?? defaultInferenceBroker;
     this.now = opts.now ?? Date.now;
     this.onVerdictStored = opts.onVerdictStored;
   }
@@ -166,7 +170,16 @@ export class TriageHost {
     return verdict;
   }
 
+  /** Waits its turn in the broker (triage outranks embeddings and vision), then asks the model. */
   async classify(text: string): Promise<TriageVerdict | null> {
+    try {
+      return await this.broker.run("triage", () => this.ask(text));
+    } catch {
+      return null;
+    }
+  }
+
+  private async ask(text: string): Promise<TriageVerdict | null> {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     try {
