@@ -42,5 +42,6 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 2.3 | Scripted executors for every T0/T1 action (no LLM in the execute step) | agy | Ready |
 | 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) | Claude Code | Ready |
 | 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | In review (PR open, Opus review before merge) |
+| 2.6 | Require `admin:write` on /v3/channels/* (air-gap, configure, sync, purge, disconnect); found by the 2.5 review, they have no scope check | Claude Code | Ready (needs Opus review) |
 | 1.2-1.6 | Ingestion build | agy | Blocked on 1.1 |
 | - | Move home proxy `/mobile/ask` off Ollama (other repo: pieces-android-shizuku-monitor) | Claude Code | Blocked (separate repo) |

@@ -6,9 +6,16 @@
 //   /network/delegate  every `shadow: "block"` map entry, incl. all of hermes-api       drilled here
 //   /network/approve   approvals relay to the triad                                      drilled here
 // Everything else that mutates only moves or stores data inside this system and does not read SHADOW:
-//   /v3/events, /world-model/telemetry|observation, /v3/shadow/labels, /v3/devices/*, /v3/channels/* (sync, purge,
-//   configure, air-gap), /v3/precognitive/*, /v3/databank/archive (admin), /v3/world-model/neo4j/sync|query (admin),
+//   /v3/events, /world-model/telemetry|observation, /v3/shadow/labels, /v3/devices/*, /v3/precognitive/*,
+//   /v3/databank/archive (admin; prune is disabled), /v3/world-model/neo4j/sync|query (admin),
 //   /v3/world-model/replay, /mobile/ask, /mobile/usage-report.
+//   /v3/channels/* (sync, purge, configure, air-gap, disconnect) has NO scope check today: not SHADOW-actuating
+//   (sync only reads outbound, purge only drops internal graph entities) but an authz gap, tracked as a follow-up.
+// Other SHADOW readers, not drilled:
+//   shadow-recorder.ts mayActuateAutoExecute (read per call from event/observation ingest). No auto-executor is wired
+//   in outside tests (setAutoExecutor); extend this drill if one ever is.
+//   server.ts ShadowRecorder is built once at attach with SHADOW read at that moment, so proposals recorded after a
+//   runtime flip keep the startup label. Approval still hits the per-request gate above.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
