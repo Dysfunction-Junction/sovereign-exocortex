@@ -23,10 +23,8 @@ function auditFor(item: IngestedDocument | IngestedEntity): { eventId: string; p
       payload: {
         channel: item.channelId,
         item_kind: "document",
-        source_id: item.id,
-        title: item.title,
+        source_id_sha256: sha256(item.id),
         content_sha256: contentHash,
-        channel_tags: item.tags,
         untrusted: item.untrusted,
       },
     };

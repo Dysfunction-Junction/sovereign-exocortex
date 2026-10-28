@@ -21,7 +21,9 @@ describe("channel ingest audit", () => {
       const raw = String(events[0].payload);
       assert.ok(!raw.includes("SECRET BODY TEXT"));
       const payload = JSON.parse(raw) as Record<string, unknown>;
-      assert.equal(payload.title, "Invoice");
+      assert.ok(!raw.includes("Invoice"));
+      assert.ok(!raw.includes("billing"));
+      assert.match(String(payload.source_id_sha256), /^[0-9a-f]{64}$/);
       assert.match(String(payload.content_sha256), /^[0-9a-f]{64}$/);
     } finally {
       db.close();

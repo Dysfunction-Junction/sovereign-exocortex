@@ -30,6 +30,7 @@ export interface ShadowRow {
   label: ShadowLabel | null;
   label_source: LabelSource | null;
   action?: string | null;
+  reason?: string | null;
 }
 
 export interface ShadowMetricsOptions {
@@ -88,6 +89,8 @@ export interface ShadowMetrics {
   /** wanted/not_wanted labels whose source is inferred; excluded from precision. */
   inferredDecided: number;
   precision: number | null;
+  calibrationSurfaced: number;
+  precisionGateOnly: number | null;
   wilsonLower: number | null;
   pessimisticPrecision: number | null;
   coverage: number | null;
@@ -164,6 +167,10 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
 
   const decided = wanted + notWanted;
   const precision = ratio(wanted, decided);
+  const calibrationRows = surfaced.filter((r) => r.reason?.startsWith("calibration:") === true);
+  const gateOnlyRows = surfaced.filter((r) => r.reason?.startsWith("calibration:") !== true);
+  const gateOnlyWanted = gateOnlyRows.filter((r) => r.label === "wanted" && sourceOf(r) === "tap").length;
+  const gateOnlyDecided = gateOnlyWanted + gateOnlyRows.filter((r) => r.label === "not_wanted" && sourceOf(r) === "tap").length;
   const focusRows = surfaced.filter((r) => r.mode === "DEEP_FOCUS");
 
   let baselinePrecision = opts.baselinePrecision;
@@ -203,6 +210,8 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     inferred,
     inferredDecided,
     precision,
+    calibrationSurfaced: calibrationRows.length,
+    precisionGateOnly: ratio(gateOnlyWanted, gateOnlyDecided),
     wilsonLower: wilsonLowerBound(wanted, decided),
     pessimisticPrecision: ratio(wanted, decided + ignored),
     coverage: ratio(decided, surfaced.length),
@@ -235,6 +244,7 @@ interface RawShadowRow {
   gate_ts: number;
   label: ShadowLabel | null;
   actual: string | null;
+  reason: string | null;
 }
 
 function parseSource(actual: string | null): LabelSource | null {
@@ -369,12 +379,12 @@ export function loadShadowRows(db: DatabaseSync, options?: LoadShadowRowsOptions
     const raw = db
       .prepare(
         `WITH ranked AS (
-           SELECT g.proposal_id, g.mode, g.decision, g.ts,
+           SELECT g.proposal_id, g.mode, g.decision, g.reason, g.ts,
                   ROW_NUMBER() OVER (PARTITION BY g.proposal_id ORDER BY g.ts DESC, g.rowid DESC) AS rn
              FROM gate_decisions g
          )
          SELECT r.proposal_id AS proposal_id, p.shadow AS shadow, r.decision AS decision,
-                r.mode AS mode, r.ts AS gate_ts, l.label AS label, l.actual AS actual,
+                r.mode AS mode, r.ts AS gate_ts, r.reason AS reason, l.label AS label, l.actual AS actual,
                 p.action AS action
            FROM ranked r
            JOIN proposals p ON p.proposal_id = r.proposal_id
@@ -413,6 +423,7 @@ export function formatShadowReport(m: ShadowMetrics): string {
     `  Labels:              wanted ${m.wanted}, not_wanted ${m.notWanted}, already_did ${m.alreadyDid}, ignored ${m.ignored}`,
     `  Label sources:       tapped ${m.tapped}, inferred ${m.inferred} (inferred wanted/not_wanted excluded from precision: ${m.inferredDecided})`,
     `  Precision@surface:   ${pct(m.precision)}  (Wilson 95% lower ${pct(m.wilsonLower)}, pessimistic ${pct(m.pessimisticPrecision)})`,
+    `  Calibration:        surfaced ${m.calibrationSurfaced}, precision gate only ${pct(m.precisionGateOnly)}`,
     `  Coverage:            ${pct(m.coverage)}`,
     `  Focus regret:        ${m.focusRegret}  (target 0)`,
     `  Focus outcomes:      already_did ${m.focusOutcomes.alreadyDid}, ignored ${m.focusOutcomes.ignored}, tapped wanted ${m.focusOutcomes.wanted}, tapped not_wanted ${m.focusOutcomes.notWanted}, inferred wanted ${m.focusOutcomes.inferredWanted}, inferred not_wanted ${m.focusOutcomes.inferredNotWanted}, unlabeled ${m.focusOutcomes.unlabeled}`,

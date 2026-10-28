@@ -8,6 +8,8 @@ import {
   defaultAutoExecutor,
   DiagnosticProbeSchema,
   SelfHealRestoreSchema,
+  SCRIPTED_ACTION_TIERS,
+  getScriptedActionTier,
 } from "./scripted-executors.js";
 import type { InferencePolicy, ProposalEnvelope } from "@exocortex/world-model";
 
@@ -245,4 +247,52 @@ test("defaultAutoExecutor: dispatches proposal suggestedAction deterministically
   if (outcome.ok) {
     assert.equal(outcome.command, "diagnostic_probe");
   }
+});
+
+test("self_heal_restore is tier T2 and refused by defaultAutoExecutor (never auto-executed)", () => {
+  assert.equal(SCRIPTED_ACTION_TIERS.diagnostic_probe, 0);
+  assert.equal(SCRIPTED_ACTION_TIERS.self_heal_restore, 2);
+  assert.equal(getScriptedActionTier("diagnostic_probe"), 0);
+  assert.equal(getScriptedActionTier("self_heal_restore"), 2);
+
+  const policy: InferencePolicy = {
+    id: "pol_test_2",
+    type: "PRAGMATIC",
+    title: "Restore Clean Test Suite",
+    description: "Apply self-heal restore",
+    targetEntityId: "project_sovereign_exocortex",
+    invariantId: "inv_clean_test_suite",
+    expectedUtility: 0.9,
+    informationGain: 0.1,
+    expectedFreeEnergyScore: 0.85,
+    estimatedRisk: 0.2,
+    urgency: 0.7,
+    actionPayload: {
+      command: "self_heal_restore",
+      invariantId: "inv_clean_test_suite",
+      targetEntityId: "project_sovereign_exocortex",
+      targetState: true,
+    },
+  };
+
+  const proposal: ProposalEnvelope = {
+    id: "prop_test_2",
+    candidateId: "inv_clean_test_suite",
+    summary: "Restore Clean Test Suite",
+    urgency: 0.7,
+    confidence: 0.9,
+    estimatedRisk: 0.2,
+    category: "PRAGMATIC",
+    suggestedAction: {
+      command: "self_heal_restore",
+      invariantId: "inv_clean_test_suite",
+      targetEntityId: "project_sovereign_exocortex",
+      targetState: true,
+    },
+  };
+
+  const outcome = defaultAutoExecutor(policy, proposal);
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error, /not allowlisted for autonomous execution/i);
+  assert.equal(outcome.command, "self_heal_restore");
 });

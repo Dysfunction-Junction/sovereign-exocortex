@@ -14,6 +14,7 @@ import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, 
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
+import { startCalibrationSampler } from "./calibration-sampler.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
 
@@ -2361,6 +2362,7 @@ if (process.env.NODE_ENV !== "test") {
   }
   // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
   ensureShadowRecorder(true);
+  startCalibrationSampler(getDatabase);
   for (const delayMs of [5_000, 15_000, 45_000]) {
     setTimeout(() => ensureShadowRecorder(true), delayMs).unref();
   }

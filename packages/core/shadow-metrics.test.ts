@@ -57,6 +57,17 @@ describe("computeShadowMetrics", () => {
     expect(m.breakerTripped).toBe(false);
   });
 
+  it("includes calibration labels in the gate precision and reports the gate-only precision", () => {
+    const data = [
+      row({ id: "ordinary", label: "wanted", label_source: "tap" }),
+      row({ id: "calibration", label: "not_wanted", label_source: "tap", reason: "calibration: conservative queued sample" }),
+    ];
+    const m = computeShadowMetrics(data, OPTS);
+    expect(m.precision).toBe(0.5);
+    expect(m.calibrationSurfaced).toBe(1);
+    expect(m.precisionGateOnly).toBe(1);
+  });
+
   it("returns null precision and insufficient_data with no tapped labels", () => {
     const m = computeShadowMetrics(rows({ ignored: 4 }), OPTS);
     expect(m.precision).toBeNull();
@@ -186,7 +197,7 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
       INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
         VALUES ('p1',1,'PRAGMATIC',1,'s','{}',x'01',1,0,0,'SURFACED',1,1,1);
       INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','MAINTENANCE','QUEUE','r',${NOW - 2 * DAY});
-      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','DEEP_FOCUS','SURFACE','r',${NOW - DAY});
+      INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('p1','DEEP_FOCUS','SURFACE','calibration: test sample',${NOW - DAY});
       INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('p1','wanted','{"source":"tap"}',10,${NOW});
     `);
     const loaded = loadShadowRows(raw, { restoreQueryOnly: false });
@@ -197,11 +208,14 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
       mode: "DEEP_FOCUS",
       label: "wanted",
       label_source: "tap",
+      reason: "calibration: test sample",
     });
     expect(() => raw.exec("DELETE FROM proposals")).toThrow();
     const m = computeShadowMetrics(loaded, OPTS);
     const text = formatShadowReport(m);
     expect(text).toContain("Precision@surface");
+    expect(text).toContain("Calibration:");
+    expect(text).toContain("precision gate only n/a");
     expect(text).toContain("insufficient_data");
   });
 
