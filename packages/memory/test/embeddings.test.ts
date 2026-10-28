@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { rm, readFile, appendFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { LocalLTM } from "../local-ltm.js";
-import { OllamaEmbedder, VectorCache, cosine } from "../embeddings.js";
+import { LocalEmbedder, VectorCache, cosine } from "../embeddings.js";
 
 const TEST_FILE = "data/test-embeddings-memories.jsonl";
 const CACHE_FILE = `${TEST_FILE}.vec.jsonl`;
@@ -25,20 +25,31 @@ function fakeVector(text: string): number[] {
   return v;
 }
 
-function makeFetch(counter: { calls: number; inputs: string[] }, fail = false): typeof fetch {
-  return (async (_url: unknown, init?: { body?: unknown }) => {
+// Answers in llama-server's OpenAI shape ({ data: [{ index, embedding }] }), rows
+// deliberately reversed so callers must order by index; `ollama` answers Ollama's shape.
+function makeFetch(
+  counter: { calls: number; inputs: string[]; urls?: string[] },
+  fail = false,
+  ollama = false,
+): typeof fetch {
+  return (async (url: unknown, init?: { body?: unknown }) => {
     counter.calls += 1;
+    counter.urls?.push(String(url));
     if (fail) throw new Error("connect ECONNREFUSED");
     const body = JSON.parse(String(init?.body));
     counter.inputs.push(...body.input);
-    return new Response(JSON.stringify({ embeddings: (body.input as string[]).map(fakeVector) }), { status: 200 });
+    const vecs = (body.input as string[]).map(fakeVector);
+    const payload = ollama
+      ? { embeddings: vecs }
+      : { data: vecs.map((embedding, index) => ({ index, embedding })).reverse() };
+    return new Response(JSON.stringify(payload), { status: 200 });
   }) as unknown as typeof fetch;
 }
 
-test("OllamaEmbedder contract", async (t) => {
+test("LocalEmbedder contract", async (t) => {
   await t.test("applies nomic task prefixes and returns one vector per input", async () => {
     const counter = { calls: 0, inputs: [] as string[] };
-    const e = new OllamaEmbedder({ fetchImpl: makeFetch(counter) });
+    const e = new LocalEmbedder({ fetchImpl: makeFetch(counter) });
     const q = await e.embedQuery("medication");
     const d = await e.embedDocuments(["alpha", "beta"]);
     assert.ok(q && q.length === CONCEPTS.length + 1);
@@ -46,8 +57,8 @@ test("OllamaEmbedder contract", async (t) => {
     assert.deepEqual(counter.inputs, ["search_query: medication", "search_document: alpha", "search_document: beta"]);
   });
 
-  await t.test("returns null (never throws) when Ollama is unreachable", async () => {
-    const e = new OllamaEmbedder({ fetchImpl: makeFetch({ calls: 0, inputs: [] }, true) });
+  await t.test("returns null (never throws) when the embed server is unreachable", async () => {
+    const e = new LocalEmbedder({ fetchImpl: makeFetch({ calls: 0, inputs: [] }, true) });
     assert.equal(await e.embedQuery("x"), null);
     assert.deepEqual(await e.embedDocuments(["a", "b"]), [null, null]);
   });
@@ -55,10 +66,39 @@ test("OllamaEmbedder contract", async (t) => {
   await t.test("returns null on malformed, mismatched, or non-ok responses", async () => {
     const respond = (status: number, payload: unknown) =>
       (async () => new Response(JSON.stringify(payload), { status })) as unknown as typeof fetch;
-    assert.equal(await new OllamaEmbedder({ fetchImpl: respond(500, {}) }).embedQuery("x"), null);
-    assert.equal(await new OllamaEmbedder({ fetchImpl: respond(200, { embeddings: [] }) }).embedQuery("x"), null);
-    assert.equal(await new OllamaEmbedder({ fetchImpl: respond(200, { embeddings: [["a"]] }) }).embedQuery("x"), null);
-    assert.equal(await new OllamaEmbedder({ fetchImpl: respond(200, { embeddings: [[NaN]] }) }).embedQuery("x"), null);
+    assert.equal(await new LocalEmbedder({ fetchImpl: respond(500, {}) }).embedQuery("x"), null);
+    assert.equal(await new LocalEmbedder({ fetchImpl: respond(200, { data: [] }) }).embedQuery("x"), null);
+    assert.equal(await new LocalEmbedder({ fetchImpl: respond(200, { data: [{ index: 0, embedding: ["a"] }] }) }).embedQuery("x"), null);
+    assert.equal(await new LocalEmbedder({ fetchImpl: respond(200, { data: [{ index: 3, embedding: [1] }] }) }).embedQuery("x"), null);
+    assert.equal(await new LocalEmbedder({ fetchImpl: respond(200, { embeddings: [[1]] }) }).embedQuery("x"), null);
+    const ollama = (payload: unknown) => new LocalEmbedder({ backend: "ollama", fetchImpl: respond(200, payload) });
+    assert.equal(await ollama({ embeddings: [] }).embedQuery("x"), null);
+    assert.equal(await ollama({ embeddings: [["a"]] }).embedQuery("x"), null);
+    assert.equal(await ollama({ embeddings: [[NaN]] }).embedQuery("x"), null);
+  });
+
+  await t.test("defaults to llama.cpp /v1/embeddings and orders rows by index", async () => {
+    const counter = { calls: 0, inputs: [] as string[], urls: [] as string[] };
+    const e = new LocalEmbedder({ fetchImpl: makeFetch(counter) });
+    assert.equal(e.backend, "llamacpp");
+    const d = await e.embedDocuments(["medication refill", "pizza dinner"]);
+    assert.equal(counter.urls[0], "http://127.0.0.1:8081/v1/embeddings");
+    assert.deepEqual(d, [fakeVector("search_document: medication refill"), fakeVector("search_document: pizza dinner")]);
+  });
+
+  await t.test("EXOCORTEX_EMBED_BACKEND=ollama keeps the Ollama /api/embed path", async () => {
+    const prev = process.env.EXOCORTEX_EMBED_BACKEND;
+    process.env.EXOCORTEX_EMBED_BACKEND = "ollama";
+    try {
+      const counter = { calls: 0, inputs: [] as string[], urls: [] as string[] };
+      const e = new LocalEmbedder({ fetchImpl: makeFetch(counter, false, true) });
+      assert.equal(e.backend, "ollama");
+      assert.ok(await e.embedQuery("medication"));
+      assert.equal(counter.urls[0], "http://127.0.0.1:11434/api/embed");
+    } finally {
+      if (prev === undefined) delete process.env.EXOCORTEX_EMBED_BACKEND;
+      else process.env.EXOCORTEX_EMBED_BACKEND = prev;
+    }
   });
 
   await t.test("cosine handles zero and mismatched vectors", () => {
@@ -76,7 +116,7 @@ test("LocalLTM hybrid semantic search", async (t) => {
 
   try {
     const counter = { calls: 0, inputs: [] as string[] };
-    const ltm = new LocalLTM(TEST_FILE, { embedder: new OllamaEmbedder({ fetchImpl: makeFetch(counter) }) });
+    const ltm = new LocalLTM(TEST_FILE, { embedder: new LocalEmbedder({ fetchImpl: makeFetch(counter) }) });
     await ltm.addMemory({ title: "Pharmacy refill", body: "Prescription pills ready for pickup.", source: "sms" });
     await ltm.addMemory({ title: "Event ledger", body: "Append-only audit log of everything.", source: "core" });
     await ltm.addMemory({ title: "Dinner plan", body: "Order pizza on Friday.", source: "notes" });
@@ -106,7 +146,7 @@ test("LocalLTM hybrid semantic search", async (t) => {
 
     await t.test("falls back to token-overlap search when Ollama is down", async () => {
       const down = new LocalLTM(TEST_FILE, {
-        embedder: new OllamaEmbedder({ fetchImpl: makeFetch({ calls: 0, inputs: [] }, true) }),
+        embedder: new LocalEmbedder({ fetchImpl: makeFetch({ calls: 0, inputs: [] }, true) }),
       });
       const hits = await down.searchMemoriesHybrid("pizza friday", 5);
       assert.equal(hits[0]?.title, "Dinner plan");

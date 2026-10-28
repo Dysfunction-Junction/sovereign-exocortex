@@ -3,13 +3,18 @@ import { readFile, appendFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
-// Local semantic embeddings via Ollama (nomic-embed-text). Mirrors the mobile
-// textEmbedder contract: every failure path (Ollama down, model missing, bad
-// response, timeout) collapses to `null`, and callers fall back to plain
+// Local semantic embeddings (nomic-embed-text). Default backend is a llama.cpp
+// `llama-server --embeddings` instance on 127.0.0.1:8081; set
+// EXOCORTEX_EMBED_BACKEND=ollama to use Ollama's /api/embed instead. Mirrors the
+// mobile textEmbedder contract: every failure path (server down, model missing,
+// bad response, timeout) collapses to `null`, and callers fall back to plain
 // token-overlap search. Embedding never blocks or breaks memory reads.
 
 export const DEFAULT_EMBED_MODEL = "nomic-embed-text";
+export const DEFAULT_LLAMA_EMBED_URL = "http://127.0.0.1:8081";
 export const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
+
+export type EmbedBackend = "llamacpp" | "ollama";
 
 // nomic-embed-text is trained with task prefixes; omitting them noticeably
 // degrades retrieval quality.
@@ -21,6 +26,7 @@ const MAX_EMBED_CHARS = 6000;
 const BATCH_SIZE = 32;
 
 export interface EmbedderOptions {
+  backend?: EmbedBackend;
   baseUrl?: string;
   model?: string;
   queryTimeoutMs?: number;
@@ -28,15 +34,24 @@ export interface EmbedderOptions {
   fetchImpl?: typeof fetch;
 }
 
-export class OllamaEmbedder {
+function resolveBackend(explicit?: EmbedBackend): EmbedBackend {
+  if (explicit) return explicit;
+  return (process.env.EXOCORTEX_EMBED_BACKEND ?? "").trim().toLowerCase() === "ollama" ? "ollama" : "llamacpp";
+}
+
+export class LocalEmbedder {
   public readonly model: string;
+  public readonly backend: EmbedBackend;
   private readonly baseUrl: string;
   private readonly queryTimeoutMs: number;
   private readonly batchTimeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: EmbedderOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? process.env.OLLAMA_URL ?? DEFAULT_OLLAMA_URL).replace(/\/+$/, "");
+    this.backend = resolveBackend(options.backend);
+    const envUrl = this.backend === "ollama" ? process.env.OLLAMA_URL : process.env.EXOCORTEX_EMBED_URL;
+    const fallback = this.backend === "ollama" ? DEFAULT_OLLAMA_URL : DEFAULT_LLAMA_EMBED_URL;
+    this.baseUrl = (options.baseUrl ?? envUrl ?? fallback).replace(/\/+$/, "");
     this.model = options.model ?? process.env.EXOCORTEX_EMBED_MODEL ?? DEFAULT_EMBED_MODEL;
     this.queryTimeoutMs = options.queryTimeoutMs ?? 5_000;
     this.batchTimeoutMs = options.batchTimeoutMs ?? 60_000;
@@ -60,16 +75,16 @@ export class OllamaEmbedder {
 
   private async request(input: string[], timeoutMs: number): Promise<number[][] | null> {
     try {
-      const res = await this.fetchImpl(`${this.baseUrl}/api/embed`, {
+      const ollama = this.backend === "ollama";
+      const res = await this.fetchImpl(`${this.baseUrl}${ollama ? "/api/embed" : "/v1/embeddings"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, input, truncate: true }),
+        body: JSON.stringify(ollama ? { model: this.model, input, truncate: true } : { model: this.model, input }),
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) return null;
-      const data = (await res.json()) as { embeddings?: unknown };
-      const vecs = data?.embeddings;
-      if (!Array.isArray(vecs) || vecs.length !== input.length) return null;
+      const vecs = ollama ? ollamaVectors(await res.json()) : openAiVectors(await res.json());
+      if (!vecs || vecs.length !== input.length) return null;
       for (const v of vecs) {
         if (!Array.isArray(v) || v.length === 0 || !v.every((n) => typeof n === "number" && Number.isFinite(n))) {
           return null;
@@ -80,6 +95,30 @@ export class OllamaEmbedder {
       return null;
     }
   }
+}
+
+/** Kept for existing imports; the embedder now defaults to llama.cpp. */
+export const OllamaEmbedder = LocalEmbedder;
+export type OllamaEmbedder = LocalEmbedder;
+
+function ollamaVectors(data: unknown): unknown[] | null {
+  const vecs = (data as { embeddings?: unknown } | null)?.embeddings;
+  return Array.isArray(vecs) ? vecs : null;
+}
+
+// OpenAI-compatible shape served by llama-server: { data: [{ index, embedding }] }.
+function openAiVectors(data: unknown): unknown[] | null {
+  const rows = (data as { data?: unknown } | null)?.data;
+  if (!Array.isArray(rows)) return null;
+  const out: unknown[] = new Array(rows.length);
+  for (const row of rows) {
+    const index = (row as { index?: unknown })?.index;
+    if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= rows.length || out[index as number] !== undefined) {
+      return null;
+    }
+    out[index as number] = (row as { embedding?: unknown }).embedding;
+  }
+  return out;
 }
 
 function clip(text: string): string {

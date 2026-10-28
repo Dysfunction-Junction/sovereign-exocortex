@@ -113,7 +113,7 @@ pnpm --filter @exocortex/daemon exec tsx --env-file-if-exists=.env src/mishmash-
 pnpm desktop:build
 ```
 
-Once those sibling checkouts exist, `apps/daemon/ops/supervisor.ts` can start/stop/restart/status-check all 9 services (this daemon plus the 8 above) as a group. `MeshSupervisorStartup` also launches local llama.cpp at boot/logon; `MeshSupervisorWatchdog` checks its health every two minutes and relaunches it if needed. See [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md#6-optional-the-wider-local-mesh).
+Once those sibling checkouts exist, `apps/daemon/ops/supervisor.ts` can start/stop/restart/status-check all 9 services (this daemon plus the 8 above) as a group. `MeshSupervisorStartup` also launches the local llama.cpp servers (triage, embeddings, vision) at boot/logon; `MeshSupervisorWatchdog` checks each one's health every two minutes and relaunches only the one that failed. See [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md#6-optional-the-wider-local-mesh).
 
 The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To exercise the whole approval path on real hardware, follow [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md).
 
@@ -146,7 +146,7 @@ Implemented components and remaining evaluation work:
 
 Alongside these, a **next-action prediction log** records guesses about what you will do next, scores them against the event log (misses keep the real action), and reports log loss, Brier score and calibration against a frequency baseline. See [`docs/superpowers/specs/2026-10-10-next-action-prediction-design.md`](docs/superpowers/specs/2026-10-10-next-action-prediction-design.md).
 
-Local telemetry triage uses a llama.cpp server through its OpenAI-compatible `/v1/chat/completions` endpoint (`LLAMA_CPP_URL`, default `http://127.0.0.1:8080`). Other reasoning paths use subscription CLIs or OpenRouter; the embedded memory gateway defaults to OpenRouter unless configured otherwise. Offline behavior, model availability, and cost depend on configuration. This repository does not establish a universal zero-cloud-cost or VS Code provider guarantee.
+Local models run on llama.cpp, one `llama-server` per role kept alive by `apps/daemon/ops/ensure-llama-server.ps1`: telemetry triage on `:8080` (`LLAMA_CPP_URL`), memory embeddings on `:8081` (`EXOCORTEX_EMBED_URL`; `EXOCORTEX_EMBED_BACKEND=ollama` restores Ollama), and test-screenshot vision on `:8082` (`EXOCORTEX_VISION_URL`). `apps/daemon/ops/export-ollama-models.ps1` copies already-pulled Ollama models into `%LOCALAPPDATA%\llama.cpp\models`. Other reasoning paths use subscription CLIs or OpenRouter; the embedded memory gateway defaults to OpenRouter unless configured otherwise. Offline behavior, model availability, and cost depend on configuration. This repository does not establish a universal zero-cloud-cost or VS Code provider guarantee.
 
 Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md).
 
