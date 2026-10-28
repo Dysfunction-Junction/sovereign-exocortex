@@ -41,6 +41,7 @@ import { mayActuateAutoExecute, type ShadowRecorder } from "./shadow-recorder.js
 import { getDatabase, hasDatabase } from "./db-host.js";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import { loadProposalPreferences, type PreferenceMetrics } from "./proposal-preferences.js";
+import { defaultAutoExecutor } from "./scripted-executors.js";
 
 const MAX_RECORDER_FAILURES = 5;
 
@@ -139,6 +140,12 @@ export class WorldModelHost {
     this.cognitiveGate = new CognitiveModeGate();
     this.activeInference = new ActiveInferenceEngine(this.lifeGraph);
     this.learnedEngine = new LearnedActiveInferenceEngine();
+    this.autoExecutor = (policy, proposal) => {
+      defaultAutoExecutor(policy, proposal, {
+        lifeGraph: this.lifeGraph,
+        db: this.preferenceDb ?? (hasDatabase() ? getDatabase() : null),
+      });
+    };
 
     if (hasDatabase()) {
       try {
