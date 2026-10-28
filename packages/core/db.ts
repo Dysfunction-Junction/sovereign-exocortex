@@ -309,6 +309,10 @@ export class ExocortexDatabase {
       ciphertext BLOB NOT NULL,
       created_at INTEGER NOT NULL
     ) STRICT`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS consumer_cursors (
+      name TEXT PRIMARY KEY,
+      seq INTEGER NOT NULL
+    ) STRICT`);
   }
 
   public get raw(): DatabaseSync {
@@ -1039,6 +1043,24 @@ export class ExocortexDatabase {
       prev_hash_b64: Buffer.from(e.prev_hash).toString("base64"),
       hash_b64: Buffer.from(e.hash).toString("base64"),
     };
+  }
+
+  public getConsumerCursor(name: string): number {
+    const row = this.db.prepare("SELECT seq FROM consumer_cursors WHERE name = ?").get(name) as { seq: number } | undefined;
+    return row ? Number(row.seq) : 0;
+  }
+
+  public setConsumerCursor(name: string, seq: number): void {
+    if (!name || !Number.isSafeInteger(seq) || seq < 0) throw new TypeError("invalid consumer cursor");
+    this.db.prepare(`
+      INSERT INTO consumer_cursors (name, seq)
+      VALUES (?, ?)
+      ON CONFLICT(name) DO UPDATE SET seq = MAX(consumer_cursors.seq, excluded.seq)
+    `).run(name, seq);
+  }
+
+  public resetConsumerCursor(name: string): void {
+    this.db.prepare("DELETE FROM consumer_cursors WHERE name = ?").run(name);
   }
 
   public static deviceToJson(d: DeviceRecord): {

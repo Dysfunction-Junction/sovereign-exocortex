@@ -18,8 +18,10 @@ import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
 import type { ChannelAdapter, ChannelId, ChannelStatus, SyncResult, IngestedDocument, IngestedEntity } from "./types.js";
 import type { WorldModelHost } from "../world-model-host.js";
+import type { EventRecord } from "@exocortex/core";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import { getDatabase, hasDatabase } from "../db-host.js";
+import { scheduleIngestProcessing } from "../ingest-scheduler.js";
 import { ChannelVault } from "./channel-vault.js";
 import {
   buildDocumentUpserted,
@@ -130,6 +132,14 @@ export class ChannelManager {
     return null;
   }
 
+  getChannelKey(id: ChannelId): Uint8Array | null {
+    return this.getVault()?.getChannelKey(id) ?? null;
+  }
+
+  getChannelVault(): ChannelVault | null {
+    return this.getVault();
+  }
+
   getAdapter(id: ChannelId): ChannelAdapter | undefined {
     return this.adapters.get(id);
   }
@@ -141,6 +151,12 @@ export class ChannelManager {
 
   attachToWorldModel(worldModelHost: WorldModelHost): void {
     this.worldModelHost = worldModelHost;
+  }
+
+  private processInsertedEvent(event: EventRecord | null, db: ExocortexDatabase): void {
+    if (!event) return;
+    if (scheduleIngestProcessing(db)) return;
+    this.worldModelHost?.onEventsAppended([event], db);
   }
 
   private handleDocumentIngested(doc: IngestedDocument): void {
@@ -173,9 +189,7 @@ export class ChannelManager {
       observedAt: doc.createdAt || Date.now(),
     });
     const insertedDoc = appendChannelEvent(db, docEvent);
-    if (insertedDoc && this.worldModelHost) {
-      this.worldModelHost.onEventsAppended([insertedDoc], db);
-    }
+    this.processInsertedEvent(insertedDoc, db);
 
     // 3. Append channel.link.upserted events for outgoing wikilinks
     if (Array.isArray(doc.wikilinks)) {
@@ -192,9 +206,7 @@ export class ChannelManager {
           observedAt: doc.updatedAt || Date.now(),
         });
         const insertedLink = appendChannelEvent(db, linkEvent);
-        if (insertedLink && this.worldModelHost) {
-          this.worldModelHost.onEventsAppended([insertedLink], db);
-        }
+        this.processInsertedEvent(insertedLink, db);
       }
     }
   }
@@ -236,9 +248,7 @@ export class ChannelManager {
       observedAt: Date.now(),
     });
     const insertedEntity = appendChannelEvent(db, entityEvent);
-    if (insertedEntity && this.worldModelHost) {
-      this.worldModelHost.onEventsAppended([insertedEntity], db);
-    }
+    this.processInsertedEvent(insertedEntity, db);
   }
 
   async getChannels(): Promise<ChannelStatus[]> {
@@ -341,9 +351,7 @@ export class ChannelManager {
     const db = this.getDb();
     if (db) {
       const insertedDisc = appendChannelEvent(db, buildChannelDisconnected(id));
-      if (insertedDisc && this.worldModelHost) {
-        this.worldModelHost.onEventsAppended([insertedDisc], db);
-      }
+      this.processInsertedEvent(insertedDisc, db);
     }
   }
 

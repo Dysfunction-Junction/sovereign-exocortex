@@ -113,6 +113,20 @@ describe("TriageHost", () => {
     assert.throws(() => db.raw.prepare("DELETE FROM triage_results").run(), /append-only/);
   });
 
+  it("does not queue the same event twice", async () => {
+    let calls = 0;
+    const h = new TriageHost({ fetchImpl: (async () => {
+      calls++;
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ category: "routine", reason: "test" }) } }] }), { status: 200 });
+    }) as unknown as typeof fetch });
+    const events = ingest([telemetry("water bill due")]).events;
+    assert.equal(h.onEventsAppended(events, db).queued, 1);
+    await h.idle();
+    assert.equal(h.onEventsAppended(events, db).queued, 0);
+    await h.idle();
+    assert.equal(calls, 1);
+  });
+
   it("skips messages you sent yourself", () => {
     const mk = (t: string) => ({ kind: "telemetry", payload: JSON.stringify({ type: "system_telemetry", telemetry: t, app_label: "Messages" }) }) as never;
     assert.equal(triageTextOf(mk("SMS outbound Mom Hello there")), null);

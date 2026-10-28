@@ -100,6 +100,7 @@ export class PreCognitiveHost {
   private readonly futureSkewDropsByDevice = new Map<string, number>();
   private readonly processedDecisionEventIds = new Set<string>();
   private readonly processedPreWarmEventIds = new Set<string>();
+  private processedSeqByDb = new WeakMap<object, number>();
   private readonly appMarkovByDevice = new Map<string, AppTransitionMarkov>();
   private readonly preWarmedProposals = new Map<string, PreWarmedAction & { preWarmedAt: number }>();
 
@@ -126,6 +127,7 @@ export class PreCognitiveHost {
     this.futureSkewDropsByDevice.clear();
     this.processedDecisionEventIds.clear();
     this.processedPreWarmEventIds.clear();
+    this.processedSeqByDb = new WeakMap();
     this.appMarkovByDevice.clear();
     this.preWarmedProposals.clear();
   }
@@ -282,8 +284,11 @@ export class PreCognitiveHost {
    * Batch ingest hook called when new events are appended to the event store.
    * Correctly isolates engine state per device and gates live readiness on recency.
    */
-  public onEventsAppended(events: EventRecord[], _db?: ExocortexDatabase): void {
+  public onEventsAppended(events: EventRecord[], db?: ExocortexDatabase): void {
     const now = this.nowProvider();
+    const lastSeq = db ? (this.processedSeqByDb.get(db) ?? 0) : 0;
+    events = events.filter((ev) => ev.seq > lastSeq);
+    if (events.length === 0) return;
     // Fast path: filter by recency (server + device clocks) and relevant kind before grouping/parsing
     const byDevice = new Map<string, EventRecord[]>();
     for (const ev of events) {
@@ -438,6 +443,7 @@ export class PreCognitiveHost {
         }
       }
     }
+    if (db) this.processedSeqByDb.set(db, Math.max(...events.map((ev) => ev.seq)));
   }
 
   private preStage(
