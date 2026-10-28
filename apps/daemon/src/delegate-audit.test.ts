@@ -57,3 +57,16 @@ test("burst then slow refill; dropped denials are counted in the next record", (
   assert.equal(deny("dev_a", "a", "b"), true);
   assert.equal(events().filter((e) => e.denied_device === "dev_a").at(-1)!.suppressed_before, undefined);
 });
+
+test("prototype keys are not stored; hermes-api and memory denials are recorded as real attempts", () => {
+  const { deny, events } = setup(20);
+  deny("dev_a", "__proto__", "constructor");
+  deny("dev_a", "pieces-for-all", "toString");
+  deny("dev_a", "hermes-api", "tap", "shadow");
+  deny("dev_a", "pieces-for-all", "memory", "scope");
+  const logged = events();
+  assert.deepEqual([logged[0]!.delegate_to, logged[0]!.delegate_action, logged[0]!.unrecognized], [null, null, true]);
+  assert.deepEqual([logged[1]!.delegate_to, logged[1]!.delegate_action, logged[1]!.unrecognized], ["pieces-for-all", null, true]);
+  assert.deepEqual([logged[2]!.delegate_to, logged[2]!.delegate_action, logged[2]!.unrecognized], ["hermes-api", null, undefined]);
+  assert.deepEqual([logged[3]!.delegate_to, logged[3]!.delegate_action, logged[3]!.unrecognized], ["pieces-for-all", "memory", undefined]);
+});

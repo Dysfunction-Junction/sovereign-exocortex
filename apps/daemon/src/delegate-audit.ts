@@ -41,8 +41,13 @@ const defaultLimiter = new DenialLimiter(new TokenBucket(10, 1 / 60_000));
 
 const knownNode = (v: unknown): string | null =>
   typeof v === "string" && (v === "hermes-api" || Object.prototype.hasOwnProperty.call(DELEGATE_MAP, v)) ? v : null;
-const knownAction = (node: string | null, v: unknown): string | null =>
-  node !== null && typeof v === "string" && Object.prototype.hasOwnProperty.call(DELEGATE_MAP[node] ?? {}, v) ? v : null;
+// Two kinds of action are resolved outside the static table: every hermes-api action (names are client-chosen, so never
+// stored, but not "unrecognized" either) and pieces-for-all `memory` (payload-dependent).
+const knownAction = (node: string | null, v: unknown): string | null => {
+  if (node === null || typeof v !== "string") return null;
+  if (node === "pieces-for-all" && v === "memory") return v;
+  return Object.prototype.hasOwnProperty.call(DELEGATE_MAP[node] ?? {}, v) ? v : null;
+};
 
 /** Never throws into the request path. Returns true when an event was appended. */
 export function recordDelegateDenial(
@@ -58,7 +63,7 @@ export function recordDelegateDenial(
     const ts = now();
     const to = knownNode(info.to);
     const action = knownAction(to, info.action);
-    const unrecognized = (info.to !== undefined && to === null) || (info.action !== undefined && action === null);
+    const unrecognized = (info.to !== undefined && to === null) || (info.action !== undefined && action === null && to !== "hermes-api");
     const { status } = db.ingestEvent(HOST_DEVICE_ID, {
       event_id: `delegate-denied:${ts}:${randomUUID()}`,
       kind: DELEGATE_DENIED_KIND,

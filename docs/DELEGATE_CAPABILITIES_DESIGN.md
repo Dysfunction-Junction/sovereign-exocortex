@@ -81,7 +81,7 @@ Follow-ups not done: require a `delegate:actuate` scope before SHADOW=0 is ever 
 
 ## Row 2.1c (follow-ups applied)
 - New scope `delegate:actuate`, granted to no device by default. T3 and T4 need BOTH `admin:write` and `delegate:actuate`.
-- Every denied delegation (403 or 423) appends one `delegate_denied` event with device id, to, action, reason (`unmapped`, `scope`, `shadow`, `approval_action`) and timestamp; never the payload. Denials before the body is read (no delegate scope at all) log `to` and `action` as null. `kind` is a free-text column (as for `channel_ingest`), so there is no schema change. At most 60 denial events per device per minute are written, because the log is append-only.
+- Every denied delegation (403 or 423) appends one `delegate_denied` event with device id, to, action, reason (`unmapped`, `scope`, `shadow`, `approval_action`) and timestamp; never the payload. Denials before the body is read (no delegate scope at all) log `to` and `action` as null. `kind` is a free-text column (as for `channel_ingest`), so there is no schema change. At most a burst of 10, then 1 per minute per device, are written (the next record carries `suppressed_before`), because the log is append-only.
 - `autonomous-triad` `classify`: in-memory token bucket, 30 per minute per device, 429 with Retry-After beyond that.
 - The 423 body now names the blocked `to.action`.
 
