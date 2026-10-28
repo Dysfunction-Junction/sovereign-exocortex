@@ -188,6 +188,9 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.ws = Path(self._td.name).resolve()
+        # mkdtemp creates 0700 owned by the host user; the container runs as uid 65534 and could neither list
+        # nor write /work. The directory is a throwaway that holds no host data.
+        os.chmod(self.ws, 0o777)
 
     def _run(self, code, timeout=60, **kw):
         runner = DockerRunner({"t": ["python", "-c", code]}, **kw)

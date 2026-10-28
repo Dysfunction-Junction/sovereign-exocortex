@@ -11,6 +11,10 @@ export interface IncomingProposal {
   expiresAt: number;
   actionPayload?: Record<string, unknown>;
   shadow?: boolean;
+  serverState?: string;
+  tier?: number;
+  efe?: number;
+  updatedAt?: number;
 }
 
 export type ProposalState = "pending" | "in_flight" | "approved" | "rejected" | "expired" | "consumed";
@@ -77,7 +81,13 @@ class ProposalManager {
     return null;
   }
 
-  public async labelWanted(proposalId: string): Promise<ProposalApprovalResult> {
+  private async submitDirectLabel(
+    proposalId: string,
+    label: "wanted" | "not_wanted" | "already_did" | "ignored",
+    terminalState: ProposalState,
+    okStatus: "approved" | "rejected",
+    actual?: Record<string, unknown>,
+  ): Promise<ProposalApprovalResult> {
     this.cleanExpired();
     const item = this.proposals.get(proposalId);
     if (!item) {
@@ -91,7 +101,7 @@ class ProposalManager {
 
     let labelAttestation: LabelAttestation | undefined;
     try {
-      labelAttestation = await signLabel({ proposalId: item.proposalId, label: "wanted" });
+      labelAttestation = await signLabel({ proposalId: item.proposalId, label });
     } catch (err) {
       if (err instanceof ApprovalUnavailableError && err.code === "CANCELLED") {
         item.state = "pending";
@@ -110,10 +120,11 @@ class ProposalManager {
     const latencyMs = Math.max(0, Date.now() - item.receivedAt);
     let result: { ok: boolean; error?: string };
     try {
-      result = await submitShadowLabel(item.proposalId, "wanted", {
+      result = await submitShadowLabel(item.proposalId, label, {
         source: labelAttestation ? "tap" : "inferred",
         attestation: labelAttestation,
         latencyMs,
+        actual,
       });
     } catch (err) {
       item.state = "pending";
@@ -122,10 +133,10 @@ class ProposalManager {
     }
 
     if (result.ok) {
-      item.state = "approved";
+      item.state = terminalState;
       item.consumedAt = Date.now();
       this.notify();
-      return { ok: true, status: "approved" };
+      return { ok: true, status: okStatus };
     } else {
       item.state = "pending";
       this.notify();
@@ -133,55 +144,20 @@ class ProposalManager {
     }
   }
 
+  public async labelWanted(proposalId: string): Promise<ProposalApprovalResult> {
+    return this.submitDirectLabel(proposalId, "wanted", "approved", "approved");
+  }
+
   public async labelNotWanted(proposalId: string, reason?: string): Promise<ProposalApprovalResult> {
-    this.cleanExpired();
-    const item = this.proposals.get(proposalId);
-    if (!item) {
-      return { ok: false, status: "not_found", error: "This request is no longer available." };
-    }
-    const guard = this.checkReplayOrExpiry(item);
-    if (guard) return guard;
+    return this.submitDirectLabel(proposalId, "not_wanted", "rejected", "rejected", reason ? { reason } : undefined);
+  }
 
-    item.state = "in_flight";
-    this.notify();
+  public async labelAlreadyDid(proposalId: string): Promise<ProposalApprovalResult> {
+    return this.submitDirectLabel(proposalId, "already_did", "consumed", "approved");
+  }
 
-    let labelAttestation: LabelAttestation | undefined;
-    try {
-      labelAttestation = await signLabel({ proposalId: item.proposalId, label: "not_wanted" });
-    } catch (err) {
-      if (err instanceof ApprovalUnavailableError && err.code === "CANCELLED") {
-        item.state = "pending";
-        this.notify();
-        return { ok: false, status: "cancelled", error: "You cancelled the fingerprint or face check, so nothing was done." };
-      }
-      labelAttestation = undefined;
-    }
-
-    const latencyMs = Math.max(0, Date.now() - item.receivedAt);
-    let result: { ok: boolean; error?: string };
-    try {
-      result = await submitShadowLabel(item.proposalId, "not_wanted", {
-        source: labelAttestation ? "tap" : "inferred",
-        attestation: labelAttestation,
-        latencyMs,
-        actual: reason ? { reason } : undefined,
-      });
-    } catch (err) {
-      item.state = "pending";
-      this.notify();
-      throw err;
-    }
-
-    if (result.ok) {
-      item.state = "rejected";
-      item.consumedAt = Date.now();
-      this.notify();
-      return { ok: true, status: "rejected" };
-    } else {
-      item.state = "pending";
-      this.notify();
-      return { ok: false, status: "error", error: result.error || "Could not save your answer. Please try again." };
-    }
+  public async labelIgnored(proposalId: string): Promise<ProposalApprovalResult> {
+    return this.submitDirectLabel(proposalId, "ignored", "consumed", "rejected");
   }
 
   public async approve(

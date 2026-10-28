@@ -21,6 +21,7 @@ vi.mock("react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("../lib/api", () => ({
   getStatus: vi.fn().mockResolvedValue({ health: "ok", version: "1" }),
   getCachedStatus: vi.fn().mockResolvedValue(null),
+  getPendingShadowProposals: vi.fn().mockResolvedValue([]),
   getPrecognitiveStatus: vi.fn().mockResolvedValue({
     deviceId: "mock-phone",
     wakeThresholdMs: 400,

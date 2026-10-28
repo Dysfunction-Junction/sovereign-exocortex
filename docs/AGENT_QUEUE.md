@@ -28,8 +28,8 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 0.3 | Raise root `engines` to Node >= 24 (PR #23) | agy | Done |
 | 0.5 | `checkout_argv` works on Git < 2.44 (PR #24) | agy | Done |
 | 0.6 | Tag `person:` entities with source channel; purge by tag on Gmail disconnect (PR #25) | agy | Done |
-| 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) | agy | In review |
-| 4.0 | Daily review screen in the phone app for one-tap shadow labels | agy | Ready |
+| 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) (PR #28) | agy | Done |
+| 4.0 | Daily review screen in the phone app for one-tap shadow labels (PR #29) | agy | Done |
 | 3.3 | Inference broker (queue, priority triage > embed > vision) (PR #26) | Claude Code | Done |
 | 2.1-2.2 | Delegate capability map, route /network/delegate through it | Claude Code | Needs Opus review |
 | 1.1 | Channel event schema and email-body decision | Opus | Needs design |
