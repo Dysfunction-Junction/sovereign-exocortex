@@ -1,3 +1,4 @@
+import type { EventRecord } from "@exocortex/core";
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import { ShadowRecorder } from "../shadow-recorder.js";
@@ -125,15 +126,15 @@ export function buildChannelDisconnected(channel: ChannelId, observedAt = Date.n
   return event("channel.disconnected", { channel, observed_at: observedAt });
 }
 
-export function appendChannelEvent(db: ExocortexDatabase, channelEvent: ChannelEvent): boolean {
+export function appendChannelEvent(db: ExocortexDatabase, channelEvent: ChannelEvent): EventRecord | null {
   validateChannelEventPayload(channelEvent.kind, channelEvent.payload);
   new ShadowRecorder(db, { shadow: true }).ensureHostDevice();
-  const { status } = db.ingestEvent(HOST_DEVICE_ID, {
+  const { status, event } = db.ingestEvent(HOST_DEVICE_ID, {
     event_id: `channel-event:${randomUUID()}`,
     kind: channelEvent.kind,
     ts_device: channelEvent.payload.observed_at as number,
     schema_ver: 1,
     payload: channelEvent.payload,
   });
-  return status === "inserted";
+  return status === "inserted" ? (event ?? null) : null;
 }
