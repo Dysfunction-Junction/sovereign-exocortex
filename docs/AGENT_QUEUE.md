@@ -41,6 +41,6 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | Ready |
 | 2.3 | Scripted executors for every T0/T1 action (no LLM in the execute step) | agy | Ready |
 | 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) | Claude Code | Ready |
-| 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Ready (Opus review before merge) |
+| 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | In review (PR open, Opus review before merge) |
 | 1.2-1.6 | Ingestion build | agy | Blocked on 1.1 |
 | - | Move home proxy `/mobile/ask` off Ollama (other repo: pieces-android-shizuku-monitor) | Claude Code | Blocked (separate repo) |
