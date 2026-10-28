@@ -214,7 +214,7 @@ test("WorldModelHost: verified preferences are immediate, replaceable, restart-s
     const afterRestart = restarted.ingestObservation(observation);
     assert.equal(afterRestart.proposals[0].category, "EPISTEMIC");
     assert.equal(eventRanking(afterRestart.proposals[0].id).wantedProbability, 0.5);
-    assert.equal(afterRestart.proposals.find((p) => p.category === "PRAGMATIC")!.estimatedRisk, 0.05);
+    assert.equal(afterRestart.proposals.find((p) => p.category === "PRAGMATIC")!.estimatedRisk, 0.20);
     const legacy = host.activeInference.generatePolicies([host.activeInference.evaluateObservation(observation)])[0];
     for (const [suffix, ranking] of [
       ["missing", undefined],
@@ -420,6 +420,57 @@ test("WorldModelHost: cold start hydrates learned params when the recorder attac
     assert.notEqual(before, key(seeded), "fixture must differ from a fresh engine");
     cold.setShadowRecorder(new ShadowRecorder(db, { cooldownMs: 0 }));
     assert.equal(key(cold), key(seeded), "learned state restored on attach");
+  } finally {
+    db.close();
+  }
+});
+
+test("WorldModelHost: self_heal_restore is tier T2 while diagnostic_probe is T0 (spec R10 / row 2.3a)", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const host = WorldModelHost.createIsolatedForTest();
+    const recorder = new ShadowRecorder(db, { cooldownMs: 0 });
+    recorder.ensureHostDevice();
+    host.setShadowRecorder(recorder);
+
+    const executedActions: string[] = [];
+    host.setAutoExecutor((_policy, proposal) => {
+      executedActions.push(String((proposal.suggestedAction as any)?.command));
+    });
+
+    const res = host.ingestObservation({
+      invariantId: "inv_clean_test_suite",
+      observedState: false,
+      observedAt: Date.now(),
+      confidence: 1.0,
+    });
+
+    assert.equal(res.generatedPoliciesCount, 2);
+
+    const rows = db.raw.prepare("SELECT proposal_id, tier, risk_term, action FROM proposals").all() as Array<{
+      proposal_id: string;
+      tier: number;
+      risk_term: number;
+      action: string;
+    }>;
+
+    assert.equal(rows.length, 2, "must persist 2 proposals in shadow store");
+
+    const selfHealRow = rows.find((r) => r.action.includes("self_heal_restore"));
+    const diagRow = rows.find((r) => r.action.includes("diagnostic_probe"));
+
+    assert.ok(selfHealRow, "must find self_heal_restore proposal");
+    assert.ok(diagRow, "must find diagnostic_probe proposal");
+
+    // Tier assertions: self_heal_restore is T2 (writes local graph state), diagnostic_probe is T0 (read-only inspection)
+    assert.equal(selfHealRow.tier, 2, "self_heal_restore proposal must be tier T2");
+    assert.equal(selfHealRow.risk_term, 0.2, "self_heal_restore estimatedRisk must be 0.20");
+
+    assert.equal(diagRow.tier, 0, "diagnostic_probe proposal must be tier T0");
+    assert.equal(diagRow.risk_term, 0.0, "diagnostic_probe estimatedRisk must be 0.0");
+
+    // Assert self_heal_restore is never auto-executed even if SHADOW mode was cleared
+    assert.ok(!executedActions.includes("self_heal_restore"), "self_heal_restore must never be auto-executed");
   } finally {
     db.close();
   }

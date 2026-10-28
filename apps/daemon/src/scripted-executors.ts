@@ -10,7 +10,7 @@
 import { z } from "zod";
 import type { LivingLifeGraph } from "@exocortex/world-model";
 import type { ExocortexDatabase } from "@exocortex/core/db";
-import type { InferencePolicy, ProposalEnvelope } from "@exocortex/world-model";
+import { isAutoExecuteAllowlisted, type InferencePolicy, type ProposalEnvelope } from "@exocortex/world-model";
 
 // Strict schemas for T0/T1 action commands.
 // .strict() ensures any unexpected/extra properties are refused.
@@ -56,6 +56,22 @@ export const SelfHealRestoreSchema = z
   .strict();
 
 export type SelfHealRestoreInput = z.infer<typeof SelfHealRestoreSchema>;
+
+/**
+ * Canonical risk tiers for scripted actions.
+ * T0: read-only inspection (diagnostic_probe).
+ * T2: writes local state/graph homeostasis (self_heal_restore).
+ */
+export const SCRIPTED_ACTION_TIERS = {
+  diagnostic_probe: 0,
+  self_heal_restore: 2,
+} as const;
+
+export type ScriptedActionCommand = keyof typeof SCRIPTED_ACTION_TIERS;
+
+export function getScriptedActionTier(command: string): number | undefined {
+  return SCRIPTED_ACTION_TIERS[command as ScriptedActionCommand];
+}
 
 export interface ScriptedExecutorContext {
   lifeGraph?: LivingLifeGraph | null;
@@ -153,7 +169,7 @@ export function handleDiagnosticProbe(
 }
 
 /**
- * Deterministic scripted executor for `self_heal_restore` (Tier T0 for CODE_HEALTH).
+ * Deterministic scripted executor for `self_heal_restore` (Tier T2: writes local graph state).
  * Performs typed code-health restoration check without calling any model.
  */
 export function handleSelfHealRestore(
@@ -239,5 +255,13 @@ export function defaultAutoExecutor(
   proposal: ProposalEnvelope,
   context: ScriptedExecutorContext = {},
 ): ScriptedExecutionOutcome {
+  if (!isAutoExecuteAllowlisted(proposal)) {
+    const cmd = (proposal.suggestedAction as Record<string, unknown> | null | undefined)?.command;
+    return {
+      ok: false,
+      error: `Refused: action '${String(cmd)}' is not allowlisted for autonomous execution`,
+      command: typeof cmd === 'string' ? cmd : undefined,
+    };
+  }
   return executeScriptedAction(proposal.suggestedAction, context);
 }
