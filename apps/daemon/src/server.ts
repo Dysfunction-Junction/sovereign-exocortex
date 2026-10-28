@@ -2310,6 +2310,8 @@ if (process.env.NODE_ENV !== "test") {
     // Retries and logs internally; the .catch is a backstop so a future edit can't crash startup.
     warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
+  // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
+  ensureShadowRecorder();
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
   if (process.env.EXOCORTEX_PHONE_WATCH !== "0") {
