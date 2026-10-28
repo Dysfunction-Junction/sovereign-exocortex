@@ -342,7 +342,7 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         engine = _Engine(repo, verification_runner=runner)
         evil = MutationCandidate(
             "evil", "exfiltrate", "calc.py", "",
-            "import socket\n"
+            "import socket\n\n"
             "try:\n"
             "    socket.create_connection(('1.1.1.1', 53), timeout=3)\n"
             "    raise SystemExit('EXFIL-REACHED-NETWORK')\n"
