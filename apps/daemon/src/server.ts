@@ -1324,6 +1324,16 @@ export const server = createServer(async (req, res) => {
 
   // --- Integration Channels & Air-Gap API (/v3/channels) ---
 
+  if (url.pathname === "/v3/channels" || url.pathname.startsWith("/v3/channels/")) {
+    const allowed = method === "GET"
+      ? deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:read", "admin:write")
+      : deviceHasScope(getDatabase(), auth.deviceId, "admin:write");
+    if (!allowed) {
+      sendJson(res, 403, { error: method === "GET" ? "forbidden: requires admin, admin:read, or admin:write" : "forbidden: requires admin:write" });
+      return;
+    }
+  }
+
   if (method === "GET" && url.pathname === "/v3/channels") {
     try {
       const channels = await defaultChannelManager.getChannels();
