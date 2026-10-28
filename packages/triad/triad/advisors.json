@@ -101,20 +101,26 @@
     },
     {
       "name": "ollama",
-      "display_name": "Ollama Local Advisor (qwen3:1.7b)",
-      "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
-      "fallback_binary": "ollama",
+      "display_name": "Local Advisor (llama.cpp, qwen3:1.7b)",
+      "transport": "openai_http",
+      "model": "qwen3:1.7b",
       "priority": 4,
-      "execution_flags": [
-        "run",
-        "qwen3:1.7b",
-        "--think=false"
-      ],
-      "input_mode": "stdin",
-      "output_mode": "stdout",
-      "readiness_port": "{port_ollama}",
-      "env": {
-        "PYTHONIOENCODING": "utf-8"
+      "readiness_port": "{port_local_llm}",
+      "ollama_override": {
+        "display_name": "Ollama Local Advisor (qwen3:1.7b)",
+        "binary_path": "{localappdata}/Programs/Ollama/ollama.exe",
+        "fallback_binary": "ollama",
+        "execution_flags": [
+          "run",
+          "qwen3:1.7b",
+          "--think=false"
+        ],
+        "input_mode": "stdin",
+        "output_mode": "stdout",
+        "readiness_port": "{port_ollama}",
+        "env": {
+          "PYTHONIOENCODING": "utf-8"
+        }
       },
       "enabled": true
     },
