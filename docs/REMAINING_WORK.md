@@ -65,7 +65,7 @@ None. #47, #49 and #51 are merged. R2 (2.3) is **Done**: skip it.
   6. If more than 8 actions need handlers, do 8 and add a row `2.3b` with the rest to `AGENT_QUEUE.md`.
 - **Done when:** the inventory table is in the PR, every T0/T1 action has a handler and a test, and CI is green.
 
-### R3 (2.4b): static and security scan gate for the morphogenetic engine. Codex. AUTO.
+### R3 (2.4b): static and security scan gate for the morphogenetic engine. agy. AUTO. ∥ with R1
 - **Depends on:** nothing.
 - **Branch:** `feat/2.4b-scan-gate`
 - **File:** `packages/triad/triad/morphogenetic.py` and its tests.
@@ -169,7 +169,7 @@ None. #47, #49 and #51 are merged. R2 (2.3) is **Done**: skip it.
   3. Add tests for the request shape and the fallback.
 - **After merge (owner):** stop Ollama, remove it from startup, and confirm triage, embeddings, vision, triad and `/mobile/ask` all still answer.
 
-### R10 (2.3a): re-tier `self_heal_restore`. Codex. REVIEW.
+### R10 (2.3a): re-tier `self_heal_restore`. agy. REVIEW.
 - **Why:** 2.3 (#47) lists `self_heal_restore` as T0, but it writes local graph state (`targetState`). By the plan's tiers that is **T2** (writes local state). T0 is read-only.
 - **Depends on:** nothing.
 - **Branch:** `fix/2.3a-self-heal-tier`
