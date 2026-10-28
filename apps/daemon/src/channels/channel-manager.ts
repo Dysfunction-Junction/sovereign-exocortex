@@ -172,7 +172,10 @@ export class ChannelManager {
       ref,
       observedAt: doc.createdAt || Date.now(),
     });
-    appendChannelEvent(db, docEvent);
+    const insertedDoc = appendChannelEvent(db, docEvent);
+    if (insertedDoc && this.worldModelHost) {
+      this.worldModelHost.onEventsAppended([insertedDoc], db);
+    }
 
     // 3. Append channel.link.upserted events for outgoing wikilinks
     if (Array.isArray(doc.wikilinks)) {
@@ -188,7 +191,10 @@ export class ChannelManager {
           rel: "links_to",
           observedAt: doc.updatedAt || Date.now(),
         });
-        appendChannelEvent(db, linkEvent);
+        const insertedLink = appendChannelEvent(db, linkEvent);
+        if (insertedLink && this.worldModelHost) {
+          this.worldModelHost.onEventsAppended([insertedLink], db);
+        }
       }
     }
   }
@@ -229,7 +235,10 @@ export class ChannelManager {
       ref,
       observedAt: Date.now(),
     });
-    appendChannelEvent(db, entityEvent);
+    const insertedEntity = appendChannelEvent(db, entityEvent);
+    if (insertedEntity && this.worldModelHost) {
+      this.worldModelHost.onEventsAppended([insertedEntity], db);
+    }
   }
 
   async getChannels(): Promise<ChannelStatus[]> {
@@ -299,23 +308,7 @@ export class ChannelManager {
       removed += vault.purgeChannel(id);
     }
     if (this.worldModelHost) {
-      const graph = this.worldModelHost.lifeGraph;
-      for (const prefix of CHANNEL_ENTITY_PREFIXES[id]) {
-        removed += graph.removeEntitiesByPrefix(prefix);
-      }
-      for (const entity of graph.snapshot().entities) {
-        const props = entity.properties as Record<string, unknown> | undefined;
-        if (!props) continue;
-        const isTagged =
-          props.sourceChannel === id ||
-          props.channelId === id ||
-          (Array.isArray(props.tags) && (props.tags.includes(`source:${id}`) || props.tags.includes(id)));
-        if (isTagged) {
-          if (graph.removeEntity(entity.id)) {
-            removed++;
-          }
-        }
-      }
+      removed += this.worldModelHost.purgeChannelEntities(id);
     }
     return removed;
   }
@@ -347,7 +340,10 @@ export class ChannelManager {
     this.purgeChannel(id);
     const db = this.getDb();
     if (db) {
-      appendChannelEvent(db, buildChannelDisconnected(id));
+      const insertedDisc = appendChannelEvent(db, buildChannelDisconnected(id));
+      if (insertedDisc && this.worldModelHost) {
+        this.worldModelHost.onEventsAppended([insertedDisc], db);
+      }
     }
   }
 
