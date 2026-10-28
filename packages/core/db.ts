@@ -303,6 +303,12 @@ export class ExocortexDatabase {
     if (proposalColumns.length > 0 && !proposalColumns.some((column) => column.name === "notified_at")) {
       this.db.exec("ALTER TABLE proposals ADD COLUMN notified_at INTEGER");
     }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS channel_vault (
+      ref TEXT PRIMARY KEY,
+      channel TEXT NOT NULL,
+      ciphertext BLOB NOT NULL,
+      created_at INTEGER NOT NULL
+    ) STRICT`);
   }
 
   public get raw(): DatabaseSync {
