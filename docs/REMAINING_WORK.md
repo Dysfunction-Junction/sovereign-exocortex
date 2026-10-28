@@ -29,15 +29,11 @@ If this file and the code disagree, the code wins: fix this file in the same PR.
 
 ## 1. Where things stand (merged on `main`)
 
-Phase 0 (0.1-0.8), 2.1-2.2 + 2.1b, 2.4 (engine off by default, diff cap, reproduction gate), 2.4a, 3.1-3.3a, 4.0, N.1, Living Brain sizing + usability (#46, #48), triad off Ollama (#22). CI runs on every PR (`check` blocking, `docker-isolation` too).
+Phase 0 (0.1-0.8), 2.1-2.2 + 2.1b + 2.1c (#49), 2.3 scripted executors (#47), 2.5 kill-switch drill (#51), 2.4 (engine off by default, diff cap, reproduction gate), 2.4a, 3.1-3.3a, 4.0, N.1, Living Brain sizing + usability (#46, #48), triad off Ollama (#22). CI runs on every PR (`check` blocking, `docker-isolation` too).
 
-## 2. Open PRs to land first (owner clicks)
+## 2. Open PRs to land first
 
-| PR | What | State | Action |
-| --- | --- | --- | --- |
-| #49 | 2.1c: `delegate:actuate` for T3/T4, denial audit events, `classify` rate limit | Reviewed and approved (Opus) | Owner merges |
-| #51 | 2.5: kill-switch drill | Reviewed and approved (Opus); main merged in | Owner merges when CI is green |
-| #47 | 2.3: empty claim PR (no code yet) | agy continues it as R2 | none |
+None. #47, #49 and #51 are merged. R2 (2.3) is **Done**: skip it.
 
 ## 3. Tasks
 
@@ -172,6 +168,18 @@ Phase 0 (0.1-0.8), 2.1-2.2 + 2.1b, 2.4 (engine off by default, diff cap, reprodu
   2. Keep the timeout (`OLLAMA_TIMEOUT_MS`, 90000) under a neutral name with the old one as an alias.
   3. Add tests for the request shape and the fallback.
 - **After merge (owner):** stop Ollama, remove it from startup, and confirm triage, embeddings, vision, triad and `/mobile/ask` all still answer.
+
+### R10 (2.3a): re-tier `self_heal_restore`. Codex. REVIEW.
+- **Why:** 2.3 (#47) lists `self_heal_restore` as T0, but it writes local graph state (`targetState`). By the plan's tiers that is **T2** (writes local state). T0 is read-only.
+- **Depends on:** nothing.
+- **Branch:** `fix/2.3a-self-heal-tier`
+- **Steps:**
+  1. Find where `self_heal_restore` gets its tier (`world-model-host.ts`, `scripted-executors.ts`, the auto-execute allowlist in `@exocortex/world-model`).
+  2. Make it T2.
+  3. Confirm it is **not** auto-execute allowlisted. If it is, remove it from the list.
+  4. `diagnostic_probe` stays T0 only if it writes nothing. Verify that, and say so in the PR.
+- **Tests:** the tier assertion; `self_heal_restore` is never auto-executed; the existing scripted-executor tests still pass.
+- **Done when:** the tests pass, CI is green, and the review approves.
 
 ## 4. Review prompt (replaces Opus; the other builder runs it)
 

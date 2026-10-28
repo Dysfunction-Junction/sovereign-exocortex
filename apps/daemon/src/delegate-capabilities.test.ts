@@ -85,7 +85,10 @@ test("admin gets no exemption from default deny, only from the scope check", () 
   assert.equal(resolveDelegate("registry-app", "release", {}), null);
   const sensitive = resolveDelegate("agent-mesh-mcp", "dispatch", {})!;
   assert.equal(scopesSatisfy(["admin"], sensitive), false, "T3 needs admin:write; admin alone is not enough");
-  assert.equal(scopesSatisfy(["admin:write"], sensitive), true);
+  assert.equal(scopesSatisfy(["admin:write"], sensitive), false, "T3 needs delegate:actuate as well");
+  assert.equal(scopesSatisfy(["delegate:actuate"], sensitive), false, "delegate:actuate alone is not enough");
+  assert.equal(scopesSatisfy(["admin", "delegate:actuate"], sensitive), false);
+  assert.equal(scopesSatisfy(["admin:write", "delegate:actuate"], sensitive), true);
   assert.equal(scopesSatisfy(["admin"], resolveDelegate("hermes-api", "tap", {})!), false);
   assert.equal(scopesSatisfy(["admin"], resolveDelegate("pieces-for-all", "memory", { action: "add" })!), true);
   assert.equal(scopesSatisfy(["delegate:read", "delegate:write", "delegate:memory-read"], sensitive), false);
@@ -144,7 +147,8 @@ test("route: scoped devices reach only what the map allows, and the caller is st
   db.registerDevice(deviceRow("dev_read", ["delegate:read"]));
   db.registerDevice(deviceRow("dev_mem", ["delegate:memory-read"]));
   db.registerDevice(deviceRow("dev_write", ["delegate:write"]));
-  db.registerDevice(deviceRow("dev_admin", ["admin:write"]));
+  db.registerDevice(deviceRow("dev_admin", ["admin:write", "delegate:actuate"]));
+  db.registerDevice(deviceRow("dev_admin_noact", ["admin:write"]));
   db.registerDevice(deviceRow("dev_admin_plain", ["admin"]));
   db.registerDevice(deviceRow("dev_none", ["telemetry:write"]));
   setDatabase(db);
@@ -184,6 +188,11 @@ test("route: scoped devices reach only what the map allows, and the caller is st
     assert.equal(await post("dev_admin", envelope("agent-mesh-mcp", "dispatch")), 423);
     assert.equal(await post("dev_admin", envelope("hermes-api", "tap")), 423);
 
+    // admin:write without delegate:actuate is refused for T3/T4 too (403, not 423).
+    assert.equal(await post("dev_admin_noact", envelope("agent-mesh-mcp", "dispatch")), 403);
+    assert.equal(await post("dev_admin_noact", envelope("hermes-api", "tap")), 403);
+    assert.equal(await post("dev_admin_noact", envelope("pieces-for-all", "ping")), 200);
+
     // Plain `admin` (no admin:write) is refused for T3/T4 but reaches T0-T2.
     assert.equal(await post("dev_admin_plain", envelope("agent-mesh-mcp", "dispatch")), 403);
     assert.equal(await post("dev_admin_plain", envelope("hermes-api", "tap")), 403);
@@ -201,6 +210,89 @@ test("route: scoped devices reach only what the map allows, and the caller is st
   } finally {
     if (prevShadow === undefined) delete process.env.SHADOW; else process.env.SHADOW = prevShadow;
     if (prevUp === undefined) delete process.env[memEnvKey]; else process.env[memEnvKey] = prevUp;
+    server.close();
+    upstream.close();
+    setDatabase(null);
+  }
+});
+
+// ---------- audit, rate limit, 423 text ----------
+
+test("route: every denial writes one metadata-only audit event, classify is rate limited, 423 names the action", async () => {
+  const prevShadow = process.env.SHADOW;
+  delete process.env.SHADOW;
+  const upstream = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  const upPort = await listen(upstream);
+  const triadEnvKey = MISHMASH_LAUNCH.find((s) => s.id === "autonomous-triad")!.envKey;
+  const prevUp = process.env[triadEnvKey];
+  process.env[triadEnvKey] = `http://127.0.0.1:${upPort}`;
+
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice(deviceRow("dev_a", ["delegate:read"]));
+  db.registerDevice(deviceRow("dev_b", ["delegate:read"]));
+  db.registerDevice(deviceRow("dev_act", ["admin:write", "delegate:actuate"]));
+  db.registerDevice(deviceRow("dev_none", ["telemetry:write"]));
+  db.registerDevice(deviceRow("dev_actonly", ["delegate:actuate"]));
+  db.registerDevice({ ...deviceRow("dev_revoked", ["admin:write", "delegate:actuate"]), revoked_at: Date.now() - 1000 });
+  setDatabase(db);
+  const port = await listen(server);
+  const call = async (device: string, body: string) => {
+    const res = await fetch(`http://127.0.0.1:${port}/network/delegate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${issueToken(device, TEST_SECRET)}` },
+      body,
+    });
+    return { status: res.status, json: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const denials = () => db.listEvents({ kind: "delegate_denied" }).map((e) => JSON.parse(String(e.payload)) as Record<string, unknown>);
+  try {
+    const secret = "SECRET-PAYLOAD-VALUE";
+    assert.equal((await call("dev_none", envelope("pieces-for-all", "ping", { q: secret }))).status, 403); // scope (pre-check)
+    assert.equal((await call("dev_a", envelope("pieces-for-all", "nope", { q: secret }))).status, 403); // unmapped
+    assert.equal((await call("dev_a", envelope("autonomous-triad", "approve", { q: secret }))).status, 403); // approval_action
+    assert.equal((await call("dev_a", envelope("pieces-for-all", "memory", { action: "add", q: secret }))).status, 403); // scope
+    const shadow = await call("dev_act", envelope("agent-mesh-mcp", "dispatch", { q: secret }));
+    assert.equal(shadow.status, 423); // shadow
+    assert.match(String(shadow.json.error), /agent-mesh-mcp\.dispatch/);
+    assert.doesNotMatch(String(shadow.json.error), /hermes-api/);
+
+    const logged = denials();
+    assert.deepEqual(logged.map((d) => d.reason), ["scope", "unmapped", "approval_action", "scope", "shadow"]);
+    assert.equal(logged[0]!.denied_device, "dev_none");
+    assert.equal(logged[0]!.delegate_to, null, "pre-check denials happen before the body is read");
+    assert.equal(logged[1]!.delegate_to, "pieces-for-all");
+    assert.equal(logged[1]!.delegate_action, null, "an unknown action name is not stored");
+    assert.equal(logged[1]!.unrecognized, true);
+    assert.equal(logged[4]!.denied_device, "dev_act");
+    assert.doesNotMatch(JSON.stringify(logged), new RegExp(secret), "the payload is never logged");
+
+    // A successful call writes no denial event.
+    assert.equal((await call("dev_a", envelope("autonomous-triad", "ping"))).status, 200);
+    assert.equal(denials().length, 5);
+
+    // delegate:actuate alone does not pass the pre-check (403 before the body is read, even for a bad body).
+    assert.equal((await call("dev_actonly", "not json")).status, 403);
+    // A revoked device holding both scopes is stopped at authentication (401): never forwarded, never audited.
+    assert.equal((await call("dev_revoked", envelope("agent-mesh-mcp", "dispatch"))).status, 401);
+    assert.equal(denials().length, 6);
+    assert.equal(db.verifyEventChain().valid, true);
+
+    // classify: 30 per minute per device, then 429; another device is unaffected.
+    const statuses: number[] = [];
+    for (let i = 0; i < 32; i++) statuses.push((await call("dev_a", envelope("autonomous-triad", "classify", { text: "hi" }))).status);
+    assert.equal(statuses.filter((s) => s === 200).length, 30);
+    assert.deepEqual(statuses.slice(30), [429, 429]);
+    assert.equal((await call("dev_b", envelope("autonomous-triad", "classify", { text: "hi" }))).status, 200);
+    assert.equal(denials().length, 6, "429s write no audit events");
+  } finally {
+    if (prevShadow === undefined) delete process.env.SHADOW; else process.env.SHADOW = prevShadow;
+    if (prevUp === undefined) delete process.env[triadEnvKey]; else process.env[triadEnvKey] = prevUp;
     server.close();
     upstream.close();
     setDatabase(null);

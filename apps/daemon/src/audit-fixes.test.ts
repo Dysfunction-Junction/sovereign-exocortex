@@ -118,7 +118,7 @@ test("shadow mode blocks /network/approve and delegation to hermes-api", async (
   const prev = process.env.SHADOW;
   delete process.env.SHADOW; // default: shadow on
   const db = new ExocortexDatabase({ path: ":memory:" });
-  db.registerDevice(deviceRow("dev_shadow", ["approval:write", "admin:write"]));
+  db.registerDevice(deviceRow("dev_shadow", ["approval:write", "admin:write", "delegate:actuate"]));
   setDatabase(db);
   const port = await listen();
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_shadow", TEST_SECRET)}` };
@@ -277,7 +277,7 @@ test("shadow mode blocks mutating mesh delegations even for an admin:write devic
   const prev = process.env.SHADOW;
   delete process.env.SHADOW; // default: shadow on
   const db = new ExocortexDatabase({ path: ":memory:" });
-  db.registerDevice(deviceRow("dev_admin_shadow", ["admin:write"]));
+  db.registerDevice(deviceRow("dev_admin_shadow", ["admin:write", "delegate:actuate"]));
   setDatabase(db);
   const port = await listen();
   const headers = { "Content-Type": "application/json", Authorization: `Bearer ${issueToken("dev_admin_shadow", TEST_SECRET)}` };

@@ -41,11 +41,12 @@ Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md
 | 1.1 | Channel event schema and private content vault (spec R5) | Codex | Ready (review) |
 | N.1 | "Why" line on review cards (PR #41) | agy | Done |
 | 2.1b | Tighten map: T3/T4 need `admin:write`, non-string memory sub-action denied (PR #40, Opus-approved) | Claude Code | Done |
-| 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | Ready |
-| 2.3 | Scripted executors for every T0/T1 action (spec R2, PR #47) | agy | Ready |
-| 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) (flag default off, diff-size cap and reproduction gate in the 2.4 PR) | Claude Code | In review |
+| 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | Done |
+| 2.3 | Scripted executors for every T0/T1 action (no LLM in the execute step) (PR #47) | agy | Done |
+| 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) (flag default off, diff-size cap and reproduction gate in the 2.4 PR) | Claude Code | Done |
 | 2.4b | Morphogenetic static and security scan gate (spec R3) | Codex | Ready |
-| 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Ready (Opus review before merge) |
+| 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Done |
 | 2.6 | Scope check on /v3/channels/* (spec R1) | Codex | Ready (review, first) |
+| 2.3a | Re-tier `self_heal_restore`: it writes local graph state, so it is T2, not T0 (spec R10) | Codex | Ready (review) |
 | 1.2-1.6 | Ingestion build: adapters emit events (R6, agy), projection (R7, Codex), async consumer, replay test, resync (R8, Codex) | agy / Codex | Blocked on 1.1 |
 | - | Home proxy `/mobile/ask` off Ollama, then retire Ollama (spec R9, other repo) | Codex | Ready (review) |
