@@ -78,3 +78,9 @@ Follow-ups not done: require a `delegate:actuate` scope before SHADOW=0 is ever 
 - Q2: `admin` and `admin:write` satisfy T0-T2; T3 and T4 require `admin:write`. Plain `admin` is not enough.
 - Q3: no `payload.action` on `memory` means search; a present non-string or unknown sub-action is denied (the memory node itself would treat a non-string as search, so this is stricter).
 - Q5: `to` and `action` must already be canonical, nothing is normalized, and the same parsed envelope object is both resolved and forwarded. The mesh `payload.skillId || payload.action` fallback is reachable only through `dispatch`, which is T3 (`admin:write`) and shadow-blocked; it is not mapped per skill.
+
+## Row 2.1c (follow-ups applied)
+- New scope `delegate:actuate`, granted to no device by default. T3 and T4 need BOTH `admin:write` and `delegate:actuate`.
+- Every denied delegation (403 or 423) appends one `delegate_denied` event with device id, to, action, reason (`unmapped`, `scope`, `shadow`, `approval_action`) and timestamp; never the payload. Denials before the body is read (no delegate scope at all) log `to` and `action` as null. `kind` is a free-text column (as for `channel_ingest`), so there is no schema change. At most 60 denial events per device per minute are written, because the log is append-only.
+- `autonomous-triad` `classify`: in-memory token bucket, 30 per minute per device, 429 with Retry-After beyond that.
+- The 423 body now names the blocked `to.action`.

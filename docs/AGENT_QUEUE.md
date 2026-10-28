@@ -38,7 +38,7 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 1.1 | Channel event schema and email-body decision | Opus | Needs design |
 | N.1 | "Why" line on review cards (PR #41) | agy | Done |
 | 2.1b | Tighten map: T3/T4 need `admin:write`, non-string memory sub-action denied (PR #40, Opus-approved) | Claude Code | Done |
-| 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | Ready |
+| 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | In review (PR for 2.1c, needs Opus review) |
 | 2.3 | Scripted executors for every T0/T1 action (no LLM in the execute step) | agy | Ready |
 | 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) | Claude Code | Ready |
 | 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Ready (Opus review before merge) |
