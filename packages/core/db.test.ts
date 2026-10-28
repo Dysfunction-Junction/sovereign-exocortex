@@ -38,6 +38,16 @@ describe("ExocortexDatabase (v3 SQLite Event Store Driver)", () => {
     expect(list[0].device_id).toBe("dev_phone_galaxy");
   });
 
+  it("persists consumer cursors monotonically outside the event log", () => {
+    expect(db.getConsumerCursor("world-model")).toBe(0);
+    db.setConsumerCursor("world-model", 12);
+    db.setConsumerCursor("world-model", 8);
+    expect(db.getConsumerCursor("world-model")).toBe(12);
+    expect(db.listEvents()).toHaveLength(0);
+    expect(() => db.setConsumerCursor("", 1)).toThrow("invalid consumer cursor");
+    expect(() => db.setConsumerCursor("world-model", -1)).toThrow("invalid consumer cursor");
+  });
+
   it("revokes devices and rejects subsequent event ingest", () => {
     db.revokeDevice("dev_phone_galaxy");
     const dev = db.getDevice("dev_phone_galaxy");

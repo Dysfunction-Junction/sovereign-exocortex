@@ -112,6 +112,7 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
 }
 
 export class WorldModelHost {
+  private readonly processedEventSeqByDb = new WeakMap<ExocortexDatabase, number>();
   private static instance: WorldModelHost | null = null;
 
   public readonly lifeGraph: LivingLifeGraph;
@@ -725,13 +726,17 @@ export class WorldModelHost {
   public onEventsAppended(events: EventRecord[], db?: ExocortexDatabase): BeliefSnapshotRecord | null {
     const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
     if (targetDb) this.preferenceDb = targetDb;
+    const lastProcessed = targetDb ? (this.processedEventSeqByDb.get(targetDb) ?? 0) : 0;
+    const pendingEvents = [...events].sort((a, b) => a.seq - b.seq).filter((ev) => ev.seq > lastProcessed);
+    if (pendingEvents.length === 0) return null;
     const touchedFactors = new Set<string>();
     const batchSnapshots: BeliefSnapshotRecord[] = [];
     let lastObsSeq: number | null = null;
 
-    for (const ev of events) {
+    for (const ev of pendingEvents) {
       if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
         this.projectChannelEvent(ev, targetDb);
+        if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
         continue;
       }
       try {
@@ -784,6 +789,7 @@ export class WorldModelHost {
       } catch (err) {
         console.warn(`[world-model-host] observation extraction error for seq ${ev.seq}:`, err);
       }
+      if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
     }
 
     if (lastObsSeq !== null && targetDb && batchSnapshots.length > 0) {

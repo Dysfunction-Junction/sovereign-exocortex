@@ -17,6 +17,8 @@ import { ShadowRecorder } from "./shadow-recorder.js";
 import { startCalibrationSampler } from "./calibration-sampler.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
+import { IngestConsumer } from "./ingest-consumer.js";
+import { registerIngestWakeHandler } from "./ingest-scheduler.js";
 
 // Wire local LLM triage category stream into next-action prediction context
 defaultTriageHost.onVerdictStored = (deviceId, verdict) => {
@@ -44,7 +46,55 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+import { isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+
+const ingestConsumers = new WeakMap<ExocortexDatabase, IngestConsumer>();
+
+export function ingestConsumerForDatabase(db: ExocortexDatabase): IngestConsumer {
+  let consumer = ingestConsumers.get(db);
+  if (consumer) return consumer;
+  const hooks = [
+    { name: "world-model", apply: async (events: EventRecord[], target: ExocortexDatabase) => {
+      ensureShadowRecorder();
+      await defaultWorldModelHost.onEventsAppended(events, target);
+    } },
+    { name: "precognitive", apply: (events: EventRecord[], target: ExocortexDatabase) => defaultPreCognitiveHost.onEventsAppended(events, target) },
+    { name: "prediction", apply: (events: EventRecord[], target: ExocortexDatabase) => {
+      if (process.env.EXOCORTEX_PREDICTIONS !== "0") defaultPredictionHost.onEventsAppended(events, target);
+    } },
+    { name: "triage", apply: async (events: EventRecord[], target: ExocortexDatabase) => {
+      defaultTriageHost.onEventsAppended(events, target);
+      await defaultTriageHost.idle();
+    } },
+    { name: "shadow-labels", apply: (events: EventRecord[], target: ExocortexDatabase) => {
+      for (const ev of events) {
+        if (ev.kind !== "label") continue;
+        try {
+          const payload = JSON.parse(ev.payload);
+          if (payload?.proposal_id && isShadowLabel(payload?.label)) {
+            const source = payload?.source === "inferred"
+              ? "inferred"
+              : labelSource(target, ev.device_id, String(payload.proposal_id), payload.label, payload.attestation);
+            applyShadowLabel(target, ev.device_id, {
+              proposalId: String(payload.proposal_id),
+              label: payload.label,
+              source,
+              actual: payload.actual,
+              latencyMs: payload.latency_ms,
+              emitEvent: false,
+            });
+          }
+        } catch {
+          // Invalid legacy labels are ignored, as they were on the synchronous path.
+        }
+      }
+    } },
+  ];
+  consumer = new IngestConsumer({ db, hooks });
+  ingestConsumers.set(db, consumer);
+  registerIngestWakeHandler(db, () => consumer?.wake());
+  return consumer;
+}
 
 
 
@@ -122,6 +172,8 @@ if (process.env.NODE_ENV !== "test") {
     console.error("HOME_PROXY_TOKEN is not set (the Plan A proxy's bearer token).");
     process.exit(1);
   }
+
+  ingestConsumerForDatabase(getDatabase()).start();
 
   // Attach automated Neo4j Living Brain real-time sync
   defaultNeo4jSyncService.attachToHost(defaultWorldModelHost);
@@ -764,61 +816,7 @@ export const server = createServer(async (req, res) => {
           : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"], insertedEvents: [] as ReturnType<typeof db.ingestBatch>["events"] };
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.insertedEvents.length > 0) {
-        try {
-          // Attach the shadow recorder to the normal append-only event pipeline. The host
-          // maps only explicitly supported observation signals into shadow proposals.
-          ensureShadowRecorder();
-          defaultWorldModelHost.onEventsAppended(result.insertedEvents, db);
-        } catch (wmErr) {
-          console.error("[world-model-host] event batch ingest hook error:", wmErr);
-        }
-
-        // Frontier 1: PreCognitive neuromotor readiness & dynamic wake threshold tracking
-        try {
-          defaultPreCognitiveHost.onEventsAppended(result.insertedEvents, db);
-        } catch (precogErr) {
-          console.error("[precognitive-host] event batch hook error:", precogErr instanceof Error ? precogErr.message : precogErr);
-        }
-
-        // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
-        if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
-          try {
-            defaultPredictionHost.onEventsAppended(result.insertedEvents, db);
-          } catch (predErr) {
-            console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
-          }
-        }
-
-        // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
-        try {
-          defaultTriageHost.onEventsAppended(result.insertedEvents, db);
-        } catch (triageErr) {
-          console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
-        }
-
-        // Synchronize any shadow label events into shadow_labels table
-        for (const ev of result.insertedEvents) {
-          if (ev.kind === "label") {
-            try {
-              const payload = JSON.parse(ev.payload);
-              if (payload?.proposal_id && isShadowLabel(payload?.label)) {
-                const source = payload?.source === "inferred"
-                  ? "inferred"
-                  : labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation);
-                applyShadowLabel(db, auth.deviceId, {
-                  proposalId: String(payload.proposal_id),
-                  label: payload.label,
-                  source,
-                  actual: payload.actual,
-                  latencyMs: payload.latency_ms,
-                  emitEvent: false,
-                });
-              }
-            } catch {
-              // Non-fatal label sync
-            }
-          }
-        }
+        res.once("finish", () => ingestConsumerForDatabase(db).wake());
       }
       sendJson(res, 200, {
         ok: true,

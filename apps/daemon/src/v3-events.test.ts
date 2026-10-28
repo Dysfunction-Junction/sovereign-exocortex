@@ -14,7 +14,7 @@ process.env.DEVICE_REGISTRY_PATH = "none";
 process.env.NODE_ENV = "test";
 
 // Dynamically import server after env vars are set
-const { server } = await import("./server.js");
+const { server, ingestConsumerForDatabase } = await import("./server.js");
 
 test("v3 event store endpoints integration test", async () => {
   // Use in-memory SQLite for testing
@@ -169,6 +169,7 @@ test("v3 event store endpoints integration test", async () => {
     assert.equal(ingestData.result.duplicateCount, 0);
     assert.equal(typeof ingestData.result.events[0].prev_hash_b64, "string");
     assert.equal(typeof ingestData.result.events[0].hash_b64, "string");
+    await ingestConsumerForDatabase(memoryDb).idle();
 
     // 8. Idempotent re-ingestion
     const replayRes = await fetch(`${baseUrl}/v3/events`, {
@@ -311,6 +312,7 @@ test("retrying an ingested event does not re-run projection hooks", async () => 
       const res = await fetch(`${baseUrl}/v3/events`, { method: "POST", headers, body });
       assert.equal(res.status, 200);
     }
+    await ingestConsumerForDatabase(memoryDb).idle();
     assert.equal(seen.length, 1, "hooks must see the event once, not again on the retry");
   } finally {
     defaultPredictionHost.onEventsAppended = original;
