@@ -2,7 +2,7 @@
 
 A local-first personal assistant and automation research project. It watches signals from your phone and PC, predicts useful next actions, and stages proposals. Verified human approval is the intended boundary for execution; the implementation gaps below mean this is not yet a system-wide guarantee.
 
-> **Status: experimental; shadow mode by default.** `SHADOW=1` blocks the primary approval path, but generic delegation can bypass gateway approval checks. Keep deployment restricted to trusted devices and networks and address these gaps before enabling live actuation. Live Precision@surface results were not verified during the source audit.
+> **Status: experimental; shadow mode by default.** `SHADOW=1` blocks the approval path and mutating delegations. Keep deployment restricted to trusted devices and networks and address these gaps before enabling live actuation. Live Precision@surface results were not verified during the source audit.
 
 ## Design intent
 
@@ -62,7 +62,7 @@ Verified `wanted`/`not_wanted` tap labels teach proposal preferences, not action
 
 Full detail: [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md).
 
-The daemon also includes Obsidian, Notion, and Gmail channel adapters and Neo4j synchronization. Channel ingestion currently writes directly to the in-memory graph rather than the event log, so it is not yet a fully replayable projection.
+The daemon also includes Obsidian, Notion, and Gmail channel adapters and Neo4j synchronization. Channel ingestion records a metadata-and-hash audit event in the event log, but entity content is still written directly to the in-memory graph, so replaying the log does not rebuild channel entities.
 
 ## Quick start
 Install Node 24+ and pnpm. Python tests require an activated virtual environment with `packages/triad` and its development dependencies installed. Desktop builds additionally require Rust and the Tauri prerequisites; Android builds require the Android toolchain.
@@ -121,10 +121,9 @@ The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To ex
 
 - Earlier documentation reports Galaxy S26 Ultra approval/dismiss testing limited to the read-only `diagnostic_probe`. Hardware operation and current collection progress were not revalidated in this source audit.
 - Firebase/FCM credentials are gitignored and must be supplied locally.
-- Generic `/network/delegate` can forward triad approvals without the shadow, circuit-breaker, biometric, and scope checks used by `/network/approve`. A mocked test reproduced gateway forwarding, not downstream execution.
+- Generic `/network/delegate` is admin-scoped, refuses `approve`/`reject` (403), and in shadow mode refuses `hermes-api` and mutating `agent-mesh-mcp` actions (423). There is still no per-action capability map for the other nodes.
 - Cold-start model hydration is conditional on an already-open database; normal imports construct the world-model host before database initialization.
-- Memory capture writes `loggedAt`, but archival filters on `createdAt`, silently retaining captured entries instead of archiving them.
-- Gmail/Notion entity IDs do not match the channel purge prefix, so disconnect/resync leaves stale graph entities.
+- Gmail disconnect purges `gmail:` entities but leaves the `person:<email>` sender entities the adapter also creates.
 - Morphogenetic trials isolate files in worktrees, not execution privileges or networking. The architecture's full sandbox, reproduction-test, diff-size, and static/security gates are not all implemented.
 
 ### Validation snapshot (2026-10-22)

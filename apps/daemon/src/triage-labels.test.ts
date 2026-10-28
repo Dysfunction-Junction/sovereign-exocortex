@@ -20,7 +20,7 @@ function fakeFetch(calls: string[] = []): typeof fetch {
     let category = "noise";
     if (/bank/i.test(text)) category = "urgent";
     else if (/water/i.test(text) && body.model === B) category = "routine";
-    return new Response(JSON.stringify({ message: { content: JSON.stringify({ category, reason: "x" }) } }), { status: 200 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ category, reason: "x" }) } }] }), { status: 200 });
   }) as unknown as typeof fetch;
 }
 
