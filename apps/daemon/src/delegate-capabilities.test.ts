@@ -145,6 +145,7 @@ test("route: scoped devices reach only what the map allows, and the caller is st
   db.registerDevice(deviceRow("dev_mem", ["delegate:memory-read"]));
   db.registerDevice(deviceRow("dev_write", ["delegate:write"]));
   db.registerDevice(deviceRow("dev_admin", ["admin:write"]));
+  db.registerDevice(deviceRow("dev_admin_plain", ["admin"]));
   db.registerDevice(deviceRow("dev_none", ["telemetry:write"]));
   setDatabase(db);
   const port = await listen(server);
@@ -182,6 +183,12 @@ test("route: scoped devices reach only what the map allows, and the caller is st
     assert.equal(await post("dev_admin", envelope("no-such-node", "ping")), 403);
     assert.equal(await post("dev_admin", envelope("agent-mesh-mcp", "dispatch")), 423);
     assert.equal(await post("dev_admin", envelope("hermes-api", "tap")), 423);
+
+    // Plain `admin` (no admin:write) is refused for T3/T4 but reaches T0-T2.
+    assert.equal(await post("dev_admin_plain", envelope("agent-mesh-mcp", "dispatch")), 403);
+    assert.equal(await post("dev_admin_plain", envelope("hermes-api", "tap")), 403);
+    assert.equal(await post("dev_admin_plain", envelope("pieces-for-all", "ping")), 200);
+    assert.equal(await post("dev_admin_plain", envelope("pieces-for-all", "memory", { action: "add", title: "t", body: "b" })), 423);
 
     // SHADOW=0 lifts shadow only for entries the device is scoped for.
     process.env.SHADOW = "0";
