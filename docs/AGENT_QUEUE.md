@@ -37,7 +37,7 @@ Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md
 | 2.1-2.2 | Delegate capability map, /network/delegate routed through it (PR #34, Opus-reviewed design) | Claude Code | Done |
 | 3.3a | OS priority for llama-server roles (PR #36). Triage p95 1.30 s quiet, 1.49 s under embed backfill (+14.5%); broker proxy not needed | agy | Done |
 | 2.4a | Verification containers run as the invoking uid:gid on Linux, root refused; works on 0700 workspaces (PR #39). No profile runs git in the container | Claude Code | Done |
-| 4.0a | Calibration surfacing in shadow mode (spec R4) | Codex | Ready (review) |
+| 4.0a | Calibration surfacing in shadow mode (spec R4) | Codex | Done |
 | 1.1 | Channel event schema and private content vault (spec R5) | Codex | Ready (review) |
 | N.1 | "Why" line on review cards (PR #41) | agy | Done |
 | 2.1b | Tighten map: T3/T4 need `admin:write`, non-string memory sub-action denied (PR #40, Opus-approved) | Claude Code | Done |
