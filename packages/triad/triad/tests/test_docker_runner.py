@@ -173,6 +173,8 @@ def _daemon_up():
     return ok
 
 
+# CI sets TRIAD_SKIP_REAL_DOCKER=1 for the blocking job and runs this class in its own informational job.
+@unittest.skipIf(os.environ.get("TRIAD_SKIP_REAL_DOCKER") == "1", "real-Docker isolation runs in its own CI job")
 @unittest.skipUnless(_daemon_up(), "no reachable Docker daemon")
 class TestDockerRunnerRealIsolation(unittest.TestCase):
     """Runs real containers. Each case executes hostile-looking code and asserts it is contained."""
