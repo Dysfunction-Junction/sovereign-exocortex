@@ -97,7 +97,8 @@ export function delegateUpstream(nodeId: string, env: NodeJS.ProcessEnv = proces
 // biometric attestation, scope, breaker). The generic delegate path must never relay them.
 export function isApprovalAction(action: string): boolean {
   const a = action.trim().toLowerCase();
-  return a === "approve" || a === "reject";
+  // `release` consumes a registry approval nonce without attestation, so it is held to the same rule.
+  return a === "approve" || a === "reject" || a === "release";
 }
 
 export async function forwardDelegate(

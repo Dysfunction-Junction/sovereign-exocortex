@@ -140,7 +140,7 @@ test("shadow mode blocks /network/approve and delegation to hermes-api", async (
       method: "POST", headers,
       body: JSON.stringify({ v: 1, id: "env-12345678", from: "dev_shadow", to: "no-such-node", capability: "intent", action: "review", payload: {} }),
     });
-    assert.equal(other.status, 404);
+    assert.equal(other.status, 403); // unmapped nodes are denied (default deny)
 
     // approve/reject must not be relayable through the generic delegate path
     for (const action of ["approve", "reject", " Approve "]) {

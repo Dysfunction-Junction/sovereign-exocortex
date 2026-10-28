@@ -1,6 +1,6 @@
 # Delegate capability map (rows 2.1-2.2): design for Opus review
 
-Status: DRAFT, no code written. Row 2.1-2.2 in `docs/AGENT_QUEUE.md` is blocked on this review.
+Status: APPROVED WITH CHANGES by Opus review (2026-10-28); changes below are applied in the implementation.
 
 ## Problem
 `POST /network/delegate` (`apps/daemon/src/server.ts` ~2022) relays any envelope to any of 8 local nodes. The only gate is an admin-only stopgap: `deviceHasScope(admin | admin:write)`. Consequences: (a) a phone that is merely scoped to read cannot ping or search memory; (b) the only way to allow it is to hand it admin, which would also let it dispatch to the mesh; (c) there is no record of which action is safe. Row 2.1 asks for an explicit map, default deny; row 2.2 routes the endpoint through it and drops the admin-only stopgap.
@@ -63,3 +63,13 @@ Order in the handler: parse body -> parse envelope -> `isApprovalAction` 403 -> 
 3. `memory.add` is gated by sub-action in the payload. Is parsing payload inside the capability resolver acceptable, or should sub-actions be separate top-level actions (a protocol change in the memory node)?
 4. Are the three non-implemented nodes (registry-app, gut-instinct, tool-registry-heartbeat) correctly ping-only?
 5. Anything that lets a scoped device reach a T2+ action through a differently-cased or padded action, a payload field named `action`, or the mesh `skillId` fallback (`payload.skillId || payload.action`)?
+
+## Opus review outcome (changes applied)
+1. The resolver never normalizes: `to` and `action` must already match `/^[a-z][a-z0-9_-]*$/` or are denied, so the authorized string is the forwarded string. (The doc's earlier claim that `parseDelegateEnvelope` normalizes was wrong.)
+2. The daemon overwrites `envelope.from` with `GATEWAY_NODE` before forwarding; `memory.add` authorizes on `from`.
+3. registry-app (stage, speculate, release, pending_proposals, cache_status, reject), gut-instinct (contract) and tool-registry-heartbeat (inventory) are implemented upstream. Only `ping` is mapped; tests assert the rest is denied, admin included.
+4. memory search uses its own scope `delegate:memory-read` (it fans out to LTM, archive, graph and Mem0); `delegate:read` covers ping/status-type calls only.
+5. `release` consumes a registry approval nonce with no attestation. It is unmapped and `isApprovalAction` refuses it, so the denial does not rest on the map alone.
+6. A scope pre-check (admin, admin:write, delegate:read, delegate:memory-read, delegate:write) runs before the body is read. "Unmapped", "missing scope" and "approval action" return the same 403 body.
+7. Unknown nodes now return 403 (was 404 for admin); `audit-fixes.test.ts` updated. Shadow table reproduces the old rule (all of hermes-api incl. ping; mesh demote/synthesize/dispatch/playbook) and adds blocks on memory.add and pattern feedback.
+Follow-ups not done: require a `delegate:actuate` scope before SHADOW=0 is ever used; log denied delegations to the event log; rate-limit `classify`. `pc:dashboard` gets `admin:write` automatically, so it is an admin device.
