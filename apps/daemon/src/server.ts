@@ -195,7 +195,7 @@ function deviceHasScope(db: ExocortexDatabase, deviceId: string, ...allowedScope
  * Lazily attach the shadow recorder on first event or observation (no DB side effects at import time).
  * Env is read once at attach; changing SHADOW or EXOCORTEX_SHADOW_RECORD needs a restart.
  */
-function ensureShadowRecorder(): void {
+function ensureShadowRecorder(atStartup = false): void {
   if (process.env.EXOCORTEX_SHADOW_RECORD === "0" || defaultWorldModelHost.shadowRecordingSettled) return;
   try {
     defaultWorldModelHost.setShadowRecorder(
@@ -206,6 +206,12 @@ function ensureShadowRecorder(): void {
     const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
     if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.projects} projects, ${seeded.edges} edges`);
   } catch (err) {
+    // At startup the database may still be locked by the process being replaced. Leave recording enabled so the
+    // retry (or the first event) attaches it, instead of disabling it for the life of this daemon.
+    if (atStartup) {
+      console.error("[shadow-recorder] startup attach failed, will retry:", err instanceof Error ? err.message : err);
+      return;
+    }
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();
   }
@@ -2321,7 +2327,10 @@ if (process.env.NODE_ENV !== "test") {
     warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
   // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
-  ensureShadowRecorder();
+  ensureShadowRecorder(true);
+  for (const delayMs of [5_000, 15_000, 45_000]) {
+    setTimeout(() => ensureShadowRecorder(true), delayMs).unref();
+  }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
   if (process.env.EXOCORTEX_PHONE_WATCH !== "0") {
