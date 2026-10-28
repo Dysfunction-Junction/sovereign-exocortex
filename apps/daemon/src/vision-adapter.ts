@@ -5,6 +5,8 @@ const MAX_INPUT_PIXELS = 40_000_000;
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const MAX_MODEL_RESPONSE_BYTES = 32 * 1024;
 const MAX_SUMMARY_CHARS = 280;
+// CPU-only llava needs ~50s for one screenshot; 60s was too close to the edge.
+const DEFAULT_TIMEOUT_MS = 120_000;
 const MIN_CLASSIFICATION_CONFIDENCE = 0.9;
 
 export type TestScreenshotClassification = {
@@ -25,7 +27,7 @@ const RESPONSE_SCHEMA = {
   properties: {
     status: { type: "string", enum: ["passed", "failed", "unknown"] },
     confidence: { type: "number", minimum: 0, maximum: 1 },
-    summary: { type: "string" },
+    summary: { type: "string", maxLength: MAX_SUMMARY_CHARS },
   },
   required: ["status", "confidence", "summary"],
   additionalProperties: false,
@@ -175,7 +177,7 @@ export async function analyzeTestScreenshot(
   const response = await fetchImpl(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),
+    signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     body: requestBody(ollama, model, imageBase64),
   });
   if (!response.ok) {

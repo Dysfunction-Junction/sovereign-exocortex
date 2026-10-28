@@ -40,6 +40,7 @@ test("defaults to local llama.cpp chat completions with a resized data-URI image
   assert.equal(requestBody?.model, "llava:latest");
   assert.equal(requestBody?.response_format?.type, "json_object");
   assert.equal(typeof requestBody?.response_format?.schema, "object");
+  assert.equal(requestBody?.response_format?.schema?.properties?.summary?.maxLength, 280);
   const parts = requestBody?.messages?.[0]?.content as Array<Record<string, any>>;
   assert.equal(parts[0].type, "text");
   const url = String(parts[1].image_url.url);
