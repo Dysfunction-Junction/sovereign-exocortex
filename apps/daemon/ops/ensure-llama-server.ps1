@@ -98,7 +98,13 @@ function Ensure-LlamaInstance([hashtable]$Spec) {
         try {
             $process = Start-Process -FilePath $LlamaServerExe -ArgumentList $arguments -WorkingDirectory $LlamaDir `
                 -WindowStyle Hidden -PassThru
-            Write-LlamaKeepaliveLog "[$role] started llama-server PID $($process.Id) on 127.0.0.1:$port using $($Spec.Alias)"
+            try {
+                $priority = if ($role -in @('embed', 'vision')) { [System.Diagnostics.ProcessPriorityClass]::BelowNormal } else { [System.Diagnostics.ProcessPriorityClass]::Normal }
+                $process.PriorityClass = $priority
+            } catch {
+                Write-LlamaKeepaliveLog "[$role] failed to set priority: $_"
+            }
+            Write-LlamaKeepaliveLog "[$role] started llama-server PID $($process.Id) on 127.0.0.1:$port using $($Spec.Alias) (Priority: $($process.PriorityClass))"
             return $true
         } catch {
             Write-LlamaKeepaliveLog "[$role] llama-server launch failed: $_"
