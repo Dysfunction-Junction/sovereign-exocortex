@@ -1,3 +1,4 @@
+import { formatProposalWhy } from "../lib/proposalWhy";
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -27,6 +28,7 @@ const REASON_PRESETS = [
   "Already did",
   "Not needed",
 ] as const;
+
 
 export default function Review() {
   const navigate = useNavigate();
@@ -467,9 +469,24 @@ export default function Review() {
                     </div>
 
                     {/* Explanation Body */}
-                    <p style={{ margin: "0 0 10px", fontSize: 14, lineHeight: 1.45, color: "var(--text)" }}>
+                    <p style={{ margin: "0 0 8px", fontSize: 14, lineHeight: 1.45, color: "var(--text)" }}>
                       {item.summary || explanation.doesWhat}
                     </p>
+
+                    {/* Why line (muted context) */}
+                    {(() => {
+                      const why = formatProposalWhy(item);
+                      if (!why) return null;
+                      return (
+                        <p
+                          className="hint"
+                          data-testid="review-card-why"
+                          style={{ margin: "0 0 10px", fontSize: 12, opacity: 0.75 }}
+                        >
+                          {why}
+                        </p>
+                      );
+                    })()}
 
                     {/* Status message or reason feedback */}
                     {statusMsg && (
