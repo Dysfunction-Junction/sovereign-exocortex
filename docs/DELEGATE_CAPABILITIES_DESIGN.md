@@ -84,3 +84,8 @@ Follow-ups not done: require a `delegate:actuate` scope before SHADOW=0 is ever 
 - Every denied delegation (403 or 423) appends one `delegate_denied` event with device id, to, action, reason (`unmapped`, `scope`, `shadow`, `approval_action`) and timestamp; never the payload. Denials before the body is read (no delegate scope at all) log `to` and `action` as null. `kind` is a free-text column (as for `channel_ingest`), so there is no schema change. At most 60 denial events per device per minute are written, because the log is append-only.
 - `autonomous-triad` `classify`: in-memory token bucket, 30 per minute per device, 429 with Retry-After beyond that.
 - The 423 body now names the blocked `to.action`.
+
+### Review fixes (Opus, PR 49)
+- Audit events never store client-chosen text: `to` and `action` are logged only if the delegate map knows them; otherwise null with `unrecognized: true`.
+- Audit limiter is a burst of 10 then 1 per minute per device; denials dropped by the limiter are counted and the next record carries `suppressed_before: N`.
+- `delegate:actuate` is not in the no-scope pre-check list: on its own it no longer gets its body read.

@@ -19,7 +19,7 @@ export const SCOPE_DELEGATE_WRITE = "delegate:write";
 export const SCOPE_DELEGATE_ACTUATE = "delegate:actuate";
 export const ADMIN_SCOPES = ["admin", "admin:write"] as const;
 /** A device holding none of these may not delegate at all, so the body is not even read for it. */
-export const ANY_DELEGATE_SCOPES = [...ADMIN_SCOPES, SCOPE_DELEGATE_READ, SCOPE_DELEGATE_MEMORY_READ, SCOPE_DELEGATE_WRITE, SCOPE_DELEGATE_ACTUATE] as const;
+export const ANY_DELEGATE_SCOPES = [...ADMIN_SCOPES, SCOPE_DELEGATE_READ, SCOPE_DELEGATE_MEMORY_READ, SCOPE_DELEGATE_WRITE] as const;
 
 // `to` and `action` must already be in this form. The resolver never normalizes, so the string it authorizes is the
 // string that is forwarded.

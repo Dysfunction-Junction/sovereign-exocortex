@@ -238,6 +238,8 @@ test("route: every denial writes one metadata-only audit event, classify is rate
   db.registerDevice(deviceRow("dev_b", ["delegate:read"]));
   db.registerDevice(deviceRow("dev_act", ["admin:write", "delegate:actuate"]));
   db.registerDevice(deviceRow("dev_none", ["telemetry:write"]));
+  db.registerDevice(deviceRow("dev_actonly", ["delegate:actuate"]));
+  db.registerDevice({ ...deviceRow("dev_revoked", ["admin:write", "delegate:actuate"]), revoked_at: Date.now() - 1000 });
   setDatabase(db);
   const port = await listen(server);
   const call = async (device: string, body: string) => {
@@ -265,7 +267,8 @@ test("route: every denial writes one metadata-only audit event, classify is rate
     assert.equal(logged[0]!.denied_device, "dev_none");
     assert.equal(logged[0]!.delegate_to, null, "pre-check denials happen before the body is read");
     assert.equal(logged[1]!.delegate_to, "pieces-for-all");
-    assert.equal(logged[1]!.delegate_action, "nope");
+    assert.equal(logged[1]!.delegate_action, null, "an unknown action name is not stored");
+    assert.equal(logged[1]!.unrecognized, true);
     assert.equal(logged[4]!.denied_device, "dev_act");
     assert.doesNotMatch(JSON.stringify(logged), new RegExp(secret), "the payload is never logged");
 
@@ -273,12 +276,20 @@ test("route: every denial writes one metadata-only audit event, classify is rate
     assert.equal((await call("dev_a", envelope("autonomous-triad", "ping"))).status, 200);
     assert.equal(denials().length, 5);
 
+    // delegate:actuate alone does not pass the pre-check (403 before the body is read, even for a bad body).
+    assert.equal((await call("dev_actonly", "not json")).status, 403);
+    // A revoked device holding both scopes is refused, not forwarded and not left to SHADOW.
+    assert.equal((await call("dev_revoked", envelope("agent-mesh-mcp", "dispatch"))).status, 403);
+    assert.equal(denials().length, 7);
+    assert.equal(db.verifyEventChain().valid, true);
+
     // classify: 30 per minute per device, then 429; another device is unaffected.
     const statuses: number[] = [];
     for (let i = 0; i < 32; i++) statuses.push((await call("dev_a", envelope("autonomous-triad", "classify", { text: "hi" }))).status);
     assert.equal(statuses.filter((s) => s === 200).length, 30);
     assert.deepEqual(statuses.slice(30), [429, 429]);
     assert.equal((await call("dev_b", envelope("autonomous-triad", "classify", { text: "hi" }))).status, 200);
+    assert.equal(denials().length, 7, "429s write no audit events");
   } finally {
     if (prevShadow === undefined) delete process.env.SHADOW; else process.env.SHADOW = prevShadow;
     if (prevUp === undefined) delete process.env[triadEnvKey]; else process.env[triadEnvKey] = prevUp;
