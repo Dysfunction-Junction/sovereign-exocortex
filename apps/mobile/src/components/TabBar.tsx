@@ -1,5 +1,5 @@
 import { useLocation, useNavigate } from "react-router";
-import { StatusIcon, BrainIcon, SparklesIcon, RecentIcon, SearchIcon, SetupIcon } from "./Icons";
+import { StatusIcon, BrainIcon, SparklesIcon, RecentIcon, SearchIcon, SetupIcon, ReviewIcon } from "./Icons";
 
 interface TabItem {
   path: string;
@@ -10,6 +10,7 @@ interface TabItem {
 const TABS: TabItem[] = [
   { path: "/status", label: "Status", icon: StatusIcon },
   { path: "/brain", label: "Brain", icon: BrainIcon },
+  { path: "/review", label: "Review", icon: ReviewIcon },
   { path: "/ask", label: "Ask", icon: SparklesIcon },
   { path: "/recent", label: "Recent", icon: RecentIcon },
   { path: "/search", label: "Search", icon: SearchIcon },

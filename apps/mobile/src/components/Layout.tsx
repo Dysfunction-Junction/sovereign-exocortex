@@ -1,13 +1,14 @@
 import { Outlet, useLocation, useNavigate } from "react-router";
 import TabBar from "./TabBar";
 import BiometricApprovalModal from "./BiometricApprovalModal";
-import { StatusIcon, BrainIcon, SparklesIcon, RecentIcon, SearchIcon, SetupIcon } from "./Icons";
+import { StatusIcon, BrainIcon, SparklesIcon, RecentIcon, SearchIcon, SetupIcon, ReviewIcon } from "./Icons";
 
 import { isDesktopApp } from "../lib/config";
 
 const MOBILE_NAV_ITEMS = [
   { path: "/status", label: "Status & HUD", icon: StatusIcon },
   { path: "/brain", label: "Living Brain 3D", icon: BrainIcon },
+  { path: "/review", label: "Daily Review", icon: ReviewIcon },
   { path: "/ask", label: "Ask AI", icon: SparklesIcon },
   { path: "/recent", label: "Recent Telemetry", icon: RecentIcon },
   { path: "/search", label: "Semantic Search", icon: SearchIcon },
@@ -17,6 +18,7 @@ const MOBILE_NAV_ITEMS = [
 const DESKTOP_NAV_ITEMS = [
   { path: "/brain", label: "Living Brain 3D", icon: BrainIcon },
   { path: "/status", label: "Workstation Node", icon: StatusIcon },
+  { path: "/review", label: "Daily Review", icon: ReviewIcon },
   { path: "/ask", label: "Ask AI", icon: SparklesIcon },
   { path: "/recent", label: "Recent Telemetry", icon: RecentIcon },
   { path: "/search", label: "Semantic Search", icon: SearchIcon },

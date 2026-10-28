@@ -362,6 +362,10 @@ export interface PendingProposal {
   expiresAt: number;
   actionPayload?: Record<string, unknown>;
   shadow?: boolean;
+  state?: string;
+  tier?: number;
+  efe?: number;
+  updatedAt?: number;
 }
 
 function isPendingProposal(p: unknown): p is PendingProposal {
@@ -392,8 +396,9 @@ export async function getPendingProposals(options?: { includeShadow?: boolean })
 }
 
 /** Dedicated fetcher for un-labeled shadow proposals from SQLite. */
-export async function getPendingShadowProposals(): Promise<PendingProposal[]> {
-  const res = await authedFetch("/v3/shadow/pending");
+export async function getPendingShadowProposals(options?: { includeSuppressed?: boolean }): Promise<PendingProposal[]> {
+  const url = options?.includeSuppressed ? "/v3/shadow/pending?include_suppressed=1" : "/v3/shadow/pending";
+  const res = await authedFetch(url);
   if (!res.ok) throw new Error(`Pending shadow proposals fetch failed: HTTP ${res.status}`);
   const body = await res.json().catch(() => null);
   if (!Array.isArray(body?.proposals)) return [];
@@ -402,6 +407,10 @@ export async function getPendingShadowProposals(): Promise<PendingProposal[]> {
     summary: typeof p.summary === "string" ? p.summary : "",
     requiresBiometric: p.requiresBiometric === true,
     shadow: true,
+    state: typeof p.state === "string" ? p.state : undefined,
+    tier: typeof p.tier === "number" && Number.isFinite(p.tier) ? p.tier : undefined,
+    efe: typeof p.efe === "number" && Number.isFinite(p.efe) ? p.efe : undefined,
+    updatedAt: typeof p.updatedAt === "number" && Number.isFinite(p.updatedAt) ? p.updatedAt : undefined,
   }));
 }
 

@@ -6,6 +6,7 @@ import LivingBrain from "./pages/LivingBrain";
 import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
+import Review from "./pages/Review";
 import { flushUsageEvents } from "./lib/flush";
 import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
@@ -157,6 +158,7 @@ export default function App() {
           <Route path="/ask" element={<Ask />} />
           <Route path="/recent" element={<Recent />} />
           <Route path="/search" element={<Search />} />
+          <Route path="/review" element={<Review />} />
         </Route>
       </Routes>
     </HashRouter>

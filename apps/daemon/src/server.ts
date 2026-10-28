@@ -40,7 +40,7 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel } from "@exocortex/core";
+import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
 
 
 
@@ -1910,8 +1910,12 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
-function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): PendingProposal[] {
-  const rows = db.listProposalsByState(["SURFACED", "STAGED"], now);
+function getUnlabeledShadowProposals(
+  db: ExocortexDatabase,
+  now: number,
+  states: ProposalState[] = ["SURFACED", "STAGED", "GATED"],
+): PendingProposal[] {
+  const rows = db.listProposalsByState(states, now);
   return rows
     .filter((r) => r.shadow === 1 && r.expires_at > now && db.getShadowLabels(r.proposal_id).length === 0)
     .map((r) => {
@@ -1930,6 +1934,10 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         expiresAt: r.expires_at,
         actionPayload,
         shadow: true,
+        state: r.state,
+        tier: r.tier,
+        efe: r.efe,
+        updatedAt: r.updated_at,
       };
     });
 }
@@ -1946,7 +1954,11 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         sendJson(res, 403, { error: "forbidden: requires approval:write or admin:read scope" });
         return;
       }
-      const proposals = getUnlabeledShadowProposals(db, Date.now());
+      const states: ProposalState[] = ["SURFACED", "STAGED", "GATED"];
+      if (url.searchParams.get("include_suppressed") === "1" || url.searchParams.get("all") === "1") {
+        states.push("SUPPRESSED");
+      }
+      const proposals = getUnlabeledShadowProposals(db, Date.now(), states);
       sendJson(res, 200, { ok: true, proposals });
     } catch (err) {
       sendInternalError(res, "failed to list shadow proposals", err);
@@ -1972,7 +1984,7 @@ function getUnlabeledShadowProposals(db: ExocortexDatabase, now: number): Pendin
         sendJson(res, 200, { ok: true, proposals: live });
         return;
       }
-      const shadowProposals = getUnlabeledShadowProposals(db, Date.now());
+      const shadowProposals = getUnlabeledShadowProposals(db, Date.now(), ["SURFACED", "STAGED"]);
       const shadowMap = new Map(shadowProposals.map((sp) => [sp.proposalId, sp]));
       const combined: PendingProposal[] = [];
       const seen = new Set<string>();
