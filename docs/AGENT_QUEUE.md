@@ -49,6 +49,6 @@ Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md
 | 2.6 | Scope check on /v3/channels/* (spec R1) | Codex | Done |
 | 2.3a | Re-tier self_heal_restore: it writes local graph state, so it is T2, not T0 (spec R10, PR #59) | agy | Done |
 | 1.2 | Adapters emit channel events (spec R6, PR #61) | agy | Done |
-| 1.3 | World model projects channel events (spec R7) | Codex | In progress |
-| 1.4-1.6 | Async consumer, replay test, resync (spec R8) | Codex | Blocked on 1.3 |
+| 1.3 | World model projects channel events (spec R7, PR #62) | Codex / agy | Done |
+| 1.4-1.6 | Async consumer, replay test, resync (spec R8) | Codex | Ready (review) |
 | - | Home proxy /mobile/ask off Ollama, then retire Ollama (spec R9, other repo) | Codex | Ready (review) |
