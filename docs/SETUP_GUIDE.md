@@ -105,7 +105,7 @@ Register-ScheduledTask -TaskName "MeshSupervisorStartup" `
   -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden) `
   -Principal (New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType S4U -RunLevel Limited) -Force
 ```
-The watchdog (restarts anything that dies) is a `schtasks /Create /XML` import of a 2-minute repeating trigger pointed at `ops/supervisor-watchdog.ps1`, same hidden/S4U pattern — see that script's own header comment for the exact XML shape if `Register-ScheduledTask` doesn't support the repetition interval cleanly on your Windows build. The startup and watchdog scripts also call `ops/ensure-llama-server.ps1`, which keeps the local triage inference server available at boot and recovers it on later health checks.
+The watchdog (restarts anything that dies) is a `schtasks /Create /XML` import of a 2-minute repeating trigger pointed at `ops/supervisor-watchdog.ps1`, same hidden/S4U pattern — see that script's own header comment for the exact XML shape if `Register-ScheduledTask` doesn't support the repetition interval cleanly on your Windows build. The startup and watchdog scripts also call `ops/ensure-llama-server.ps1`, which keeps the local llama.cpp servers (triage `:8080`, embeddings `:8081`, vision `:8082`) available at boot and recovers each on later health checks. Run `ops/export-ollama-models.ps1` once to copy the model files out of Ollama; embeddings and vision are skipped until their files exist.
 
 ## 7. Neo4j
 

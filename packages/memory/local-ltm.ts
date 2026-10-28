@@ -2,7 +2,7 @@ import { readFile, appendFile, mkdir, open, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OllamaEmbedder, VectorCache, cosine } from "./embeddings.js";
+import { LocalEmbedder, VectorCache, cosine } from "./embeddings.js";
 
 export interface MemoryEntry {
   title: string;
@@ -54,20 +54,20 @@ const MIN_COSINE = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1.0 ? par
 
 export interface LocalLTMOptions {
   /** Optional semantic embedder. Omit (or null) for pure token-overlap search. */
-  embedder?: OllamaEmbedder | null;
+  embedder?: LocalEmbedder | null;
   /**
    * Resolved on first use instead of at construction, so settings loaded from a .env file after
-   * this module is imported (EXOCORTEX_EMBEDDINGS, OLLAMA_URL, ...) still take effect.
+   * this module is imported (EXOCORTEX_EMBEDDINGS, EXOCORTEX_EMBED_URL, ...) still take effect.
    * Ignored when `embedder` is given.
    */
-  embedderFactory?: () => OllamaEmbedder | null;
+  embedderFactory?: () => LocalEmbedder | null;
 }
 
 export class LocalLTM {
   private explicitPath: string | undefined;
   private resolvedPath: string | undefined;
   private options: LocalLTMOptions;
-  private resolvedEmbed: { embedder: OllamaEmbedder | null; vectors: VectorCache | null } | undefined;
+  private resolvedEmbed: { embedder: LocalEmbedder | null; vectors: VectorCache | null } | undefined;
   private cachedMemories: { mtimeMs: number; size: number; entries: MemoryEntry[] } | null = null;
 
   constructor(filePath?: string, options: LocalLTMOptions = {}) {
@@ -81,7 +81,7 @@ export class LocalLTM {
     return this.resolvedPath;
   }
 
-  private get embed(): { embedder: OllamaEmbedder | null; vectors: VectorCache | null } {
+  private get embed(): { embedder: LocalEmbedder | null; vectors: VectorCache | null } {
     if (!this.resolvedEmbed) {
       const embedder = this.options.embedder ?? this.options.embedderFactory?.() ?? null;
       this.resolvedEmbed = {
@@ -283,7 +283,7 @@ export class LocalLTM {
 }
 
 export const localLTM = new LocalLTM(undefined, {
-  embedderFactory: () => ((process.env.EXOCORTEX_EMBEDDINGS ?? "1") !== "0" ? new OllamaEmbedder() : null),
+  embedderFactory: () => ((process.env.EXOCORTEX_EMBEDDINGS ?? "1") !== "0" ? new LocalEmbedder() : null),
 });
 export const getAllMemories = () => localLTM.getAllMemories();
 export const searchMemories = (query: string, limit = 5) => localLTM.searchMemories(query, limit);

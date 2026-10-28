@@ -5,12 +5,12 @@
  *   DATABANK_KEY_FILE  master key file (32 bytes: hex/base64/raw)
  *   DATABANK_TOKEN     bearer token for `serve`
  *   DATABANK_HOST/PORT serve bind (default 127.0.0.1:8790)
- *   OLLAMA_URL         embedder (default http://127.0.0.1:11434); EXOCORTEX_EMBEDDINGS=0 disables
+ *   EXOCORTEX_EMBED_URL embedder (default llama.cpp http://127.0.0.1:8081; EXOCORTEX_EMBED_BACKEND=ollama uses OLLAMA_URL); EXOCORTEX_EMBEDDINGS=0 disables
  */
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { OllamaEmbedder } from "@exocortex/memory/embeddings";
+import { LocalEmbedder } from "@exocortex/memory/embeddings";
 import { Databank, type Embedder } from "./databank.js";
 import { archiveMemories } from "./archive.js";
 import { DatabankKeys } from "./crypto.js";
@@ -37,7 +37,7 @@ function open(): Databank {
   const keyFile = process.env.DATABANK_KEY_FILE;
   if (!keyFile) throw new Error("DATABANK_KEY_FILE is not set");
   const embedder: Embedder | null =
-    process.env.EXOCORTEX_EMBEDDINGS === "0" ? null : (new OllamaEmbedder() as unknown as Embedder);
+    process.env.EXOCORTEX_EMBEDDINGS === "0" ? null : (new LocalEmbedder() as unknown as Embedder);
   return Databank.open({ root, keys: DatabankKeys.fromFile(keyFile), embedder });
 }
 
