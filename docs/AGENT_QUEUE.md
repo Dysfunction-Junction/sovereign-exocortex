@@ -30,7 +30,7 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 0.6 | Tag `person:` entities with source channel; purge by tag on Gmail disconnect | agy | In review |
 | 0.7 | Clear mobile lint warnings (Setup.tsx, LivingBrain.tsx) | agy | Ready |
 | 4.0 | Daily review screen in the phone app for one-tap shadow labels | agy | Ready |
-| 3.3 | Inference broker (queue, priority triage > embed > vision) | Claude Code | Ready |
+| 3.3 | Inference broker (queue, priority triage > embed > vision) | Claude Code | In review |
 | 2.1-2.2 | Delegate capability map, route /network/delegate through it | Claude Code | Needs Opus review |
 | 1.1 | Channel event schema and email-body decision | Opus | Needs design |
 | 1.2-1.6, 2.3-2.5 | Ingestion build, scripted executors, kill-switch drill | agy | Blocked on 1.1 / 2.1 |

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExocortexDatabase } from "@exocortex/core/db";
 import { TriageHost, triageTextOf } from "./triage-host.js";
+import { InferenceBroker } from "./inference-broker.js";
 
 const T0 = Date.UTC(2026, 9, 11, 15, 0, 0);
 const DEVICE = "phone-1";
@@ -140,5 +141,30 @@ describe("TriageHost", () => {
     assert.equal(fired[0].deviceId, DEVICE);
     assert.equal(fired[0].category, "urgent");
     assert.equal(fired[0].seq, batch.events[0].seq);
+  });
+});
+
+describe("TriageHost and the inference broker", () => {
+  it("classifies through the triage lane and jumps ahead of queued embedding work", async () => {
+    const broker = new InferenceBroker();
+    let release!: () => void;
+    const blocker = broker.run("embed", () => new Promise<void>((r) => (release = r)));
+    const order: string[] = [];
+    const laterEmbed = broker.run("embed", async () => { order.push("embed"); });
+    const inner = okFetch({ category: "urgent", reason: "r" });
+    const recordingFetch = ((...args: Parameters<typeof fetch>) => { order.push("triage"); return inner(...args); }) as typeof fetch;
+    const host = new TriageHost({ broker, fetchImpl: recordingFetch, enabled: true });
+    const verdict = host.classify("hello");
+    release();
+    await Promise.all([blocker, laterEmbed]);
+    assert.equal((await verdict)?.category, "urgent");
+    assert.deepEqual(order, ["triage", "embed"]);
+    assert.equal(broker.stats().triage.completed, 1);
+  });
+
+  it("returns null instead of throwing when the broker rejects the job", async () => {
+    const broker = new InferenceBroker({ maxQueuePerLane: { triage: 0 } });
+    const host = new TriageHost({ broker, fetchImpl: okFetch({ category: "urgent", reason: "r" }), enabled: true });
+    assert.equal(await host.classify("hello"), null);
   });
 });
