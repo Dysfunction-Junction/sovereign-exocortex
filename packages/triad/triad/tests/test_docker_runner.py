@@ -13,8 +13,9 @@ import time
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from triad.docker_runner import DockerRunner, IsolationUnavailable, OutputLimitExceeded, bounded_run
+from triad.docker_runner import DockerRunner, IsolationUnavailable, OutputLimitExceeded, _container_user, bounded_run
 from triad.morphogenetic import MorphogeneticEngine, MutationCandidate
 from triad.tests.test_morphogenetic import FakeRunner, _make_repo
 
@@ -65,10 +66,24 @@ class TestDockerRunnerCommand(unittest.TestCase):
         cmd = " ".join(self._cmd())
         for flag in (
             "--network none", "--ipc none", "--cap-drop ALL", "--security-opt no-new-privileges",
-            "--user 65534:65534", "--read-only", "--pull never", "--pids-limit 256",
+            "--read-only", "--pull never", "--pids-limit 256",
             "--memory 1g", "--memory-swap 1g", "--rm",
         ):
             self.assertIn(flag, cmd)
+        self.assertIn(f"--user {_container_user()}", cmd)
+
+    def test_user_is_host_uid_gid_and_root_is_refused(self):
+        with mock.patch("triad.docker_runner.sys.platform", "linux"),                 mock.patch("triad.docker_runner.os.getuid", create=True, return_value=1234),                 mock.patch("triad.docker_runner.os.getgid", create=True, return_value=5678):
+            self.assertEqual(_container_user(), "1234:5678")
+            self.assertIn("--user 1234:5678", " ".join(self._cmd()))
+        for uid, gid in ((0, 1000), (1000, 0)):
+            with mock.patch("triad.docker_runner.sys.platform", "linux"),                     mock.patch("triad.docker_runner.os.getuid", create=True, return_value=uid),                     mock.patch("triad.docker_runner.os.getgid", create=True, return_value=gid):
+                with self.assertRaises(IsolationUnavailable):
+                    self.runner.build_command(self.ws, "unit", "n")
+
+    def test_user_falls_back_to_nobody_off_linux(self):
+        with mock.patch("triad.docker_runner.sys.platform", "win32"):
+            self.assertEqual(_container_user(), "65534:65534")
 
     def test_only_the_workspace_is_mounted(self):
         cmd = self._cmd()
@@ -188,9 +203,8 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.addCleanup(self._td.cleanup)
         self.ws = Path(self._td.name).resolve()
-        # mkdtemp creates 0700 owned by the host user; the container runs as uid 65534 and could neither list
-        # nor write /work. The directory is a throwaway that holds no host data.
-        os.chmod(self.ws, 0o777)
+        # Deliberately left 0700 and owned by the host user, as real workspaces are: the container runs as that user.
+        self.assertEqual(os.stat(self.ws).st_mode & 0o777, 0o700)
 
     def _run(self, code, timeout=60, **kw):
         runner = DockerRunner({"t": ["python", "-c", code]}, **kw)
@@ -199,7 +213,25 @@ class TestDockerRunnerRealIsolation(unittest.TestCase):
     def test_runs_unprivileged(self):
         res = self._run("import os; print(os.getuid(), os.geteuid())")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(res.stdout.split(), ["65534", "65534"])
+        if hasattr(os, "getuid") and sys.platform.startswith("linux"):
+            self.assertEqual(res.stdout.split(), [str(os.getuid())] * 2)
+        else:
+            self.assertEqual(res.stdout.split(), ["65534", "65534"])
+        self.assertNotEqual(res.stdout.split()[0], "0")
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "host-uid containers are Linux only")
+    def test_private_workspace_is_readable_and_writable(self):
+        (self.ws / "seed.txt").write_text("hello", encoding="utf-8")
+        os.chmod(self.ws / "seed.txt", 0o600)
+        res = self._run(
+            "import os\n"
+            "print(open('/work/seed.txt').read(), os.access('/work', os.W_OK))\n"
+            "open('/work/out.txt', 'w').write('x')\n"
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.split(), ["hello", "True"])
+        self.assertTrue((self.ws / "out.txt").exists())
+        self.assertEqual(os.stat(self.ws).st_mode & 0o777, 0o700)
 
     def test_network_is_unreachable(self):
         res = self._run(
