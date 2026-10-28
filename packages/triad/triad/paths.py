@@ -17,6 +17,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Iterable, Optional
+from urllib.parse import urlsplit
 
 HOME: Path = Path.home()
 LOCAL_APPDATA: Path = Path(os.environ.get("LOCALAPPDATA", str(HOME / "AppData" / "Local")))
@@ -119,6 +120,46 @@ PORT_TRIAD_SERVER = _safe_int_env("TRIAD_PORT", 8789)
 PORT_PIECES_OS = _safe_int_env("TRIAD_PORT_PIECES_OS", 39300)
 PORT_OLLAMA = _safe_int_env("TRIAD_PORT_OLLAMA", 11434)
 
+# --- Local advisor backend ----------------------------------------------------
+# The Tier-0 local advisor ("ollama" in advisors.json, kept for engine-name
+# compatibility) talks to the llama-server on :8080 over the OpenAI-compatible
+# /v1/chat/completions API. EXOCORTEX_TRIAD_BACKEND=ollama restores the old
+# `ollama run` subprocess on :11434.
+DEFAULT_LLAMA_CPP_URL = "http://127.0.0.1:8080"
+LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def local_backend() -> str:
+    """'llamacpp' (default) or 'ollama'. Read per call so tests and operators can flip it live."""
+    return "ollama" if os.environ.get("EXOCORTEX_TRIAD_BACKEND", "").strip().lower() == "ollama" else "llamacpp"
+
+
+def validate_loopback_url(raw: str) -> str:
+    """Return ``raw`` without a trailing slash if it is a plain http loopback URL, else raise ValueError."""
+    parts = urlsplit(raw)
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in LOOPBACK_HOSTS
+        or parts.username or parts.password or parts.query or parts.fragment
+    ):
+        raise ValueError(f"local advisor URL must be plain http on loopback, got {raw!r}")
+    return raw.rstrip("/")
+
+
+def llama_cpp_url() -> str:
+    return validate_loopback_url(os.environ.get("LLAMA_CPP_URL", "").strip() or DEFAULT_LLAMA_CPP_URL)
+
+
+def local_llm_port() -> int:
+    """Port the local-advisor readiness probe and status report check (8080 by default)."""
+    if local_backend() == "ollama":
+        return PORT_OLLAMA
+    try:
+        return urlsplit(llama_cpp_url()).port or 80
+    except ValueError:
+        return 8080
+
+
 # --- Agent Mesh MCP -----------------------------------------------------------
 AGENT_MESH_DIR: Path = resolve_file_path("TRIAD_AGENT_MESH_DIR", HOME / "projects" / "agent-mesh-mcp")
 AGENT_MESH_SERVER: Path = resolve_file_path("TRIAD_AGENT_MESH_SERVER", AGENT_MESH_DIR / "dist" / "server.js")
@@ -128,5 +169,5 @@ __all__ = [
     "CLAUDE_PATH", "CODEX_PATH", "AGY_PATH", "HERMES_PATH", "OLLAMA_PATH",
     "CODEX_AUTH", "MEM0_SCRIPT", "ANDROID_RELAY_ENV",
     "AGENT_MESH_DIR", "AGENT_MESH_SERVER",
-    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_OLLAMA",
+    "PORT_HERMES_RELAY", "PORT_PIECES_PROXY", "PORT_TRIAD_SERVER", "PORT_PIECES_OS", "PORT_OLLAMA", "local_backend", "llama_cpp_url", "local_llm_port", "validate_loopback_url",
 ]

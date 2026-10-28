@@ -40,14 +40,14 @@ try:
     from triad.competition import query_competition_council, COUNCIL_SESSIONS_LOG
     from triad.intent_engine import classify_intent
     from triad.procutil import is_port_open, clean_git_env
-    from triad.paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER
+    from triad.paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, local_llm_port, PORT_TRIAD_SERVER
     from triad.circuit import snapshot_circuits
 except ImportError:
     from advisor_manager import query_configured_advisor, get_advisors, ADVISOR_CALLS_LOG
     from competition import query_competition_council, COUNCIL_SESSIONS_LOG
     from intent_engine import classify_intent
     from procutil import is_port_open, clean_git_env
-    from paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER
+    from paths import MEM0_SCRIPT, PORT_HERMES_RELAY, PORT_PIECES_PROXY, PORT_PIECES_OS, local_llm_port, PORT_TRIAD_SERVER
     from circuit import snapshot_circuits
 
 logger = logging.getLogger("triad.server")
@@ -232,7 +232,7 @@ def _subsystem_status() -> Dict[str, bool]:
         "pieces_os": PORT_PIECES_OS,
         "hermes_relay": PORT_HERMES_RELAY,
         "pieces_proxy": PORT_PIECES_PROXY,
-        "ollama": PORT_OLLAMA,
+        "ollama": local_llm_port(),
     }
     out: Dict[str, bool] = {}
     with ThreadPoolExecutor(max_workers=len(probes)) as pool:
@@ -1319,7 +1319,7 @@ class TriadRequestHandler(BaseHTTPRequestHandler):
             if engine == "competition":
                 session = query_competition_council(prompt, context=context, mode="architect")
                 return {"synthesis": session["synthesis"], "advisors": session["advisors"]}
-            if (intent == "MICRO" or engine == "ollama") and is_port_open("127.0.0.1", PORT_OLLAMA, timeout=0.3):
+            if (intent == "MICRO" or engine == "ollama") and is_port_open("127.0.0.1", local_llm_port(), timeout=0.3):
                 resp = query_configured_advisor("ollama", prompt, context=context, mode="general")
                 return {"response": resp}
             resp = query_configured_advisor("auto", prompt, context=context, mode="architect")

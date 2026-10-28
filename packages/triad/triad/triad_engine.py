@@ -39,7 +39,7 @@ EMPTY_MCP = TRIAD_DIR / "empty-mcp.json"
 try:
     from triad.paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
-        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port, local_backend, PORT_TRIAD_SERVER,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
     )
     from triad.procutil import (
@@ -54,7 +54,7 @@ try:
 except ImportError:
     from paths import (
         CLAUDE_PATH, CODEX_PATH, AGY_PATH, HERMES_PATH, CODEX_AUTH,
-        PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA, PORT_TRIAD_SERVER,
+        PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port, local_backend, PORT_TRIAD_SERVER,
         AGENT_MESH_DIR, AGENT_MESH_SERVER,
     )
     from procutil import (
@@ -253,7 +253,7 @@ def collect_doctor_report(probe_advisors: bool = True, claude_probe_timeout: int
     # 5. Local subsystems
     local = {
         "pieces_os": {"port": PORT_PIECES_OS, "online": is_port_open("127.0.0.1", PORT_PIECES_OS)},
-        "ollama": {"port": PORT_OLLAMA, "online": is_port_open("127.0.0.1", PORT_OLLAMA)},
+        "ollama": {"port": local_llm_port(), "online": is_port_open("127.0.0.1", local_llm_port())},
         "triad_server": {"port": PORT_TRIAD_SERVER, "online": is_port_open("127.0.0.1", PORT_TRIAD_SERVER)},
     }
 
@@ -377,7 +377,7 @@ def _render_doctor_report(report: Dict[str, Any]) -> None:
     p = loc["pieces_os"]
     print(f"    - PiecesOS:     {'ONLINE' if p['online'] else 'STANDBY'} (port {p['port']})")
     o = loc["ollama"]
-    print(f"    - Ollama:       {'ONLINE' if o['online'] else 'STANDBY'} (port {o['port']})")
+    print(f"    - Local LLM:    {'ONLINE' if o['online'] else 'STANDBY'} (port {o['port']}, {'Ollama' if local_backend() == 'ollama' else 'llama.cpp'})")
     t = loc["triad_server"]
     print(f"    - Triad HTTP:   {'LISTENING' if t['online'] else 'NOT RUNNING'} (port {t['port']}, start with 'triad listen')")
 

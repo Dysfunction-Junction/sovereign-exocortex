@@ -16,9 +16,9 @@ from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, Iterable, Pattern
 
 try:
-    from triad.paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA
+    from triad.paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port
 except ImportError:
-    from paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, PORT_OLLAMA
+    from paths import MEM0_SCRIPT, ANDROID_RELAY_ENV, PORT_HERMES_RELAY, PORT_PIECES_OS, local_llm_port
 
 # Ensure UTF-8 console output
 if hasattr(sys.stdout, "reconfigure"):
@@ -305,7 +305,7 @@ def classify_intent(prompt: str, context: Optional[str] = None, diff: Optional[s
         return IntentClassification(
             intent="MICRO",
             confidence=0.94,
-            reason="Low-complexity micro-task routed to Tier-0 local SLM (port 11434)",
+            reason="Low-complexity micro-task routed to Tier-0 local SLM (llama.cpp :8080; Ollama :11434 with EXOCORTEX_TRIAD_BACKEND=ollama)",
             suggested_mode="general",
             suggested_engine="ollama",
             high_stakes=False,
@@ -378,7 +378,7 @@ def execute_intent(classification: IntentClassification, raw_prompt: str, args: 
             setattr(args, "competition", True)
         if hasattr(args, "engine") and getattr(args, "engine", "auto") == "auto":
             if classification.suggested_engine == "ollama":
-                if triad_engine.is_port_open("127.0.0.1", PORT_OLLAMA):
+                if triad_engine.is_port_open("127.0.0.1", local_llm_port()):
                     setattr(args, "engine", "ollama")
                 else:
                     setattr(args, "engine", "auto")
