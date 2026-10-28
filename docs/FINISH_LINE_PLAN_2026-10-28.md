@@ -1,6 +1,6 @@
 # Sovereign Exocortex — Finish Line Plan
 
-> Point-in-time snapshot of the Claude Docs plan (rev 20, 2026-10-28). Status overrides since then: PR #18 and PR #19 are open and validated, not yet merged; rows 3.1-3.2 are verified on the PC (triage :8080, embeddings :8081, vision :8082 healthy; vision about 13 s warm on CPU). Ollama must stay up until `packages/triad` (advisor/intent engine) and the home proxy `/mobile/ask` fallback move to llama.cpp. If this file and the code disagree, the code wins.
+> Point-in-time snapshot of the Claude Docs plan (rev 24, 2026-10-28). PR #18 and PR #19 are merged, so rows 0.1, 3.1 and 3.2 are Done (triage :8080, embeddings :8081, vision :8082 verified on the PC; vision about 13 s warm on CPU). Ollama must stay up until `packages/triad` (advisor/intent engine) and the home proxy `/mobile/ask` fallback move to llama.cpp. If this file and the code disagree, the code wins.
 
 Oct 28, 2026 · @Michael Joseph Gabriel Hebert
 
@@ -78,7 +78,7 @@ One evening of small fixes, so every later change is tested automatically. CI co
 
 | # | Action | Files | Done when | Est. | Status |
 | --- | --- | --- | --- | --- | --- |
-| 0.1 | Merge PR #18 (triage-label mock + README limits) | `apps/daemon/src/triage-labels.test.ts`, `README.md` | Merged; triage-labels 10/10 | 5 min | In progress |
+| 0.1 | Merge PR #18 (triage-label mock + README limits) | `apps/daemon/src/triage-labels.test.ts`, `README.md` | Merged; triage-labels 10/10 | 5 min | Done |
 | 0.2 | Add CI: Node 24, `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, Python 3.10+ venv for triad | `.github/workflows/ci.yml` (new) | PR shows a green check | 1–2 h | Not started |
 | 0.3 | Raise root `engines` to Node ≥ 24 to match `packages/mesh` | `package.json` | Node 22 warns on install | 5 min | Not started |
 | 0.4 | Make the Obsidian lifecycle test build a temp vault | `apps/daemon/src/channels/obsidian-adapter.test.ts` | Passes on a machine with no vault | 20 min | Not started |
@@ -120,12 +120,12 @@ Put all local models under one runtime with one scheduler, before GPU layers are
 
 | # | Action | Files | Done when | Est. | Status |
 | --- | --- | --- | --- | --- | --- |
-| 3.1 | Copy the Qwen3 GGUF to a dedicated models folder and repoint the keepalive | `apps/daemon/ops/ensure-llama-server.ps1` | Removing `qwen3:1.7b` from Ollama no longer breaks triage | 30 min | In progress |
-| 3.2 | Serve embeddings and vision from llama.cpp (an embedding server for `nomic-embed-text`, a multimodal projector for vision) under the same supervisor | `packages/memory/embeddings.ts`, `vision-adapter.ts`, ops scripts | Ollama can be stopped with no feature loss | 4 h | In progress |
+| 3.1 | Copy the Qwen3 GGUF to a dedicated models folder and repoint the keepalive | `apps/daemon/ops/ensure-llama-server.ps1` | Removing `qwen3:1.7b` from Ollama no longer breaks triage | 30 min | Done |
+| 3.2 | Serve embeddings and vision from llama.cpp (an embedding server for `nomic-embed-text`, a multimodal projector for vision) under the same supervisor | `packages/memory/embeddings.ts`, `vision-adapter.ts`, ops scripts | Ollama can be stopped with no feature loss | 4 h | Done |
 | 3.3 | Inference broker: one queue, priority triage > embed > vision, concurrency 1 on CPU, per-model memory budget when GPU layers are on | new `apps/daemon/src/inference-broker.ts` | Triage p95 latency holds while embeddings backfill | 4 h | Not started |
 | 3.4 | Settle 1.7B vs 4B from collected triage labels. Proposed rule: switch only if urgent recall rises ≥ 10 points at < 5 s mean latency | `triage-label-cli.ts` | Decision recorded with N ≥ 100 labels | 1 h | Not started |
 
-**3.1–3.2 in [PR #19](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/19):** one `llama-server` per role (triage `:8080`, embeddings `:8081`, vision `:8082`), with a watchdog that matches each process by port, plus a one-time script that copies the Ollama models into `llama.cpp\models`. Tests pass on Node 24. Before merging, the PowerShell scripts still need a parse check and a first run on the PC.
+**3.1–3.2 in [PR #19](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/19):** one `llama-server` per role (triage `:8080`, embeddings `:8081`, vision `:8082`), with a watchdog that matches each process by port, plus a one-time script that copies the Ollama models into `llama.cpp\models`. Tests pass on Node 24. Merged and verified on the PC.
 
 ## Phase 4 — Leave shadow mode
 
