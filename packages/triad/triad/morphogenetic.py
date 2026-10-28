@@ -53,6 +53,14 @@ def _max_changed_lines_from_env() -> int:
     return value if value > 0 else DEFAULT_MAX_CHANGED_LINES
 
 
+SCAN_GATE_ENV = "TRIAD_MORPHOGENETIC_SCAN_GATE"
+
+
+def _scan_gate_from_env() -> bool:
+    """The scan gate is ON by default unless explicitly disabled with 0/false/no/off."""
+    return os.environ.get(SCAN_GATE_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def changed_line_count(before: str, after: str) -> int:
     """Lines removed plus lines added (a one-line edit counts as 2)."""
     a = before.replace("\r\n", "\n").splitlines()
@@ -129,6 +137,7 @@ class MorphogeneticEngine:
         enabled: Optional[bool] = None,
         max_changed_lines: Optional[int] = None,
         require_reproduction: bool = True,
+        enable_scan_gate: Optional[bool] = None,
     ):
         if isinstance(verification_runner, UnsafeHostRunner) and not allow_unsafe_host_runner:
             raise ValueError("UnsafeHostRunner requires allow_unsafe_host_runner=True (unsafe for untrusted repairs)")
@@ -137,6 +146,8 @@ class MorphogeneticEngine:
         self.max_changed_lines = max_changed_lines if max_changed_lines and max_changed_lines > 0 else _max_changed_lines_from_env()
         # A repair must come with a test that fails before the patch and passes after it.
         self.require_reproduction = require_reproduction
+        # Static and security scan gate (ruff check and bandit -q -lll): ON by default.
+        self.enable_scan_gate = _scan_gate_from_env() if enable_scan_gate is None else bool(enable_scan_gate)
         self.repo_root = Path(repo_root or os.getcwd()).resolve()
         self.verification_runner = verification_runner
 
@@ -210,6 +221,76 @@ class MorphogeneticEngine:
         "yarn.lock", ".pre-commit-config.yaml", "cargo.toml", "cargo.lock", "tsconfig.json",
     })
     _HARNESS_CONFIG_PREFIXES = ("vitest.config.", "vitest.workspace.", "jest.config.", "tsconfig.")
+
+    def _run_scan_gate(self, sandbox: Path, changed_files: List[Path]) -> tuple[bool, str]:
+        """
+        Runs static and security scans (ruff check and bandit -q -lll) on changed Python files.
+        Returns (passed, error_message).
+        """
+        py_files = [f for f in changed_files if f.suffix.lower() == ".py"]
+        if not py_files:
+            return True, ""
+
+        ruff_bin = shutil.which("ruff")
+        if not ruff_bin:
+            return False, "Darwinian Rejection: static scan tool 'ruff' is missing"
+
+        bandit_bin = shutil.which("bandit")
+        if not bandit_bin:
+            return False, "Darwinian Rejection: static scan tool 'bandit' is missing"
+
+        for py_file in py_files:
+            rel = py_file.relative_to(sandbox).as_posix()
+
+            # 1. Ruff check (syntax, lint errors)
+            try:
+                ruff_res = subprocess.run(
+                    [ruff_bin, "check", "--select", "E9,F", "--no-cache", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'ruff' crashed: {str(e)}"
+
+            if ruff_res.returncode != 0:
+                output = (ruff_res.stdout + "\n" + ruff_res.stderr).strip()
+                return False, f"Darwinian Rejection: ruff check failed:\n{output}"
+
+            # 2. Bandit security scan (-q -lll for high severity)
+            try:
+                bandit_res = subprocess.run(
+                    [bandit_bin, "-q", "-lll", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'bandit' crashed: {str(e)}"
+
+            if bandit_res.returncode != 0:
+                output = (bandit_res.stdout + "\n" + bandit_res.stderr).strip()
+                return False, f"Darwinian Rejection: bandit security scan failed:\n{output}"
+
+            # Also verify B307 (eval) in case -lll (high-severity only) filtered it out
+            try:
+                b307_res = subprocess.run(
+                    [bandit_bin, "-q", "-t", "B307", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'bandit' crashed: {str(e)}"
+
+            if b307_res.returncode != 0:
+                output = (b307_res.stdout + "\n" + b307_res.stderr).strip()
+                return False, f"Darwinian Rejection: bandit security scan failed (eval detected):\n{output}"
+
+        return True, ""
 
     def _is_protected_target(self, root: Path, target: Path) -> bool:
         """Policy on the canonical (resolved) path: tests, CI/harness config and invariants are immutable."""
@@ -365,6 +446,13 @@ class MorphogeneticEngine:
                 for token in forbidden_tokens:
                     if token in candidate.mutated_code.lower():
                         candidate.verification_output = f"Darwinian Rejection: Mutation violated architectural invariant (found forbidden token '{token}')"
+                        return False
+
+                # 2.5 Static and security scan gate: ruff and bandit on changed Python files
+                if self.enable_scan_gate:
+                    passed, scan_err = self._run_scan_gate(sandbox, [target_file_path])
+                    if not passed:
+                        candidate.verification_output = scan_err
                         return False
 
                 # 3. Darwinian Survival Gate: run the trusted profile through the isolated runner

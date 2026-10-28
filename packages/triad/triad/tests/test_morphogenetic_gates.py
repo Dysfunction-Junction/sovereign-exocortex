@@ -1,6 +1,7 @@
 """Gates added in row 2.4: default-off flag, diff-size cap, reproduction test."""
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from unittest import mock
 from triad.morphogenetic import (
     ENABLE_ENV,
     MAX_CHANGED_LINES_ENV,
+    SCAN_GATE_ENV,
     MorphogeneticEngine,
     MutationCandidate,
     changed_line_count,
@@ -154,6 +156,86 @@ class TestReproductionGate(unittest.TestCase):
         self.assertTrue(engine.evaluate_mutation_in_sandbox(_cand(), "verify"))
         self.assertEqual(runner.calls, ["verify"])
 
+
+
+
+class TestStaticSecurityScanGate(unittest.TestCase):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.repo = _make_repo(self._td.name)
+
+    def _engine(self, runner=None, **kwargs):
+        r = runner or ScriptedRunner(repro_returncode=1, verify_returncode=0)
+        return MorphogeneticEngine(self.repo, verification_runner=r, enabled=True, require_reproduction=False, **kwargs)
+
+    def test_clean_patch_passes(self):
+        engine = self._engine()
+        cand = _cand("a = 1\nb = 99\n")
+        self.assertTrue(engine.evaluate_mutation_in_sandbox(cand, "verify"))
+        self.assertTrue(cand.survival_passed)
+
+    def test_eval_input_rejected_by_bandit(self):
+        engine = self._engine()
+        cand = _cand("a = 1\neval(input())\n")
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "verify"))
+        self.assertIn("bandit", cand.verification_output.lower())
+
+    def test_syntax_error_rejected_by_ruff(self):
+        engine = self._engine()
+        cand = _cand("def broken(:\n    pass\n")
+        self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "verify"))
+        self.assertIn("ruff", cand.verification_output.lower())
+
+    def test_missing_tool_rejects(self):
+        orig_which = shutil.which
+
+        def fake_which(cmd, *args, **kwargs):
+            if cmd in ("ruff", "bandit"):
+                return None
+            return orig_which(cmd, *args, **kwargs)
+
+        with mock.patch("shutil.which", side_effect=fake_which):
+            engine = self._engine()
+            cand = _cand("a = 1\nb = 99\n")
+            self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "verify"))
+            self.assertIn("missing", cand.verification_output.lower())
+
+    def test_tool_crash_rejects(self):
+        orig_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if isinstance(cmd, (list, tuple)) and len(cmd) > 0 and any(t in str(cmd[0]) for t in ("ruff", "bandit")):
+                raise OSError("tool execution failed")
+            return orig_run(cmd, *args, **kwargs)
+
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            engine = self._engine()
+            cand = _cand("a = 1\nb = 99\n")
+            self.assertFalse(engine.evaluate_mutation_in_sandbox(cand, "verify"))
+            self.assertIn("crashed", cand.verification_output.lower())
+
+    def test_scan_gate_config_switch(self):
+        # Default is ON
+        engine = MorphogeneticEngine(self.repo)
+        self.assertTrue(engine.enable_scan_gate)
+
+        # Explicit argument
+        self.assertFalse(MorphogeneticEngine(self.repo, enable_scan_gate=False).enable_scan_gate)
+        self.assertTrue(MorphogeneticEngine(self.repo, enable_scan_gate=True).enable_scan_gate)
+
+        # Environment variable
+        with mock.patch.dict(os.environ, {SCAN_GATE_ENV: "0"}):
+            self.assertFalse(MorphogeneticEngine(self.repo).enable_scan_gate)
+        with mock.patch.dict(os.environ, {SCAN_GATE_ENV: "false"}):
+            self.assertFalse(MorphogeneticEngine(self.repo).enable_scan_gate)
+        with mock.patch.dict(os.environ, {SCAN_GATE_ENV: "1"}):
+            self.assertTrue(MorphogeneticEngine(self.repo).enable_scan_gate)
+
+        # Disabled scan gate allows broken syntax to pass through to the verification runner
+        engine_disabled = self._engine(enable_scan_gate=False)
+        cand = _cand("def broken(:\n    pass\n")
+        self.assertTrue(engine_disabled.evaluate_mutation_in_sandbox(cand, "verify"))
 
 if __name__ == "__main__":
     unittest.main()
