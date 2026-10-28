@@ -278,9 +278,9 @@ test("route: every denial writes one metadata-only audit event, classify is rate
 
     // delegate:actuate alone does not pass the pre-check (403 before the body is read, even for a bad body).
     assert.equal((await call("dev_actonly", "not json")).status, 403);
-    // A revoked device holding both scopes is refused, not forwarded and not left to SHADOW.
-    assert.equal((await call("dev_revoked", envelope("agent-mesh-mcp", "dispatch"))).status, 403);
-    assert.equal(denials().length, 7);
+    // A revoked device holding both scopes is stopped at authentication (401): never forwarded, never audited.
+    assert.equal((await call("dev_revoked", envelope("agent-mesh-mcp", "dispatch"))).status, 401);
+    assert.equal(denials().length, 6);
     assert.equal(db.verifyEventChain().valid, true);
 
     // classify: 30 per minute per device, then 429; another device is unaffected.
@@ -289,7 +289,7 @@ test("route: every denial writes one metadata-only audit event, classify is rate
     assert.equal(statuses.filter((s) => s === 200).length, 30);
     assert.deepEqual(statuses.slice(30), [429, 429]);
     assert.equal((await call("dev_b", envelope("autonomous-triad", "classify", { text: "hi" }))).status, 200);
-    assert.equal(denials().length, 7, "429s write no audit events");
+    assert.equal(denials().length, 6, "429s write no audit events");
   } finally {
     if (prevShadow === undefined) delete process.env.SHADOW; else process.env.SHADOW = prevShadow;
     if (prevUp === undefined) delete process.env[triadEnvKey]; else process.env[triadEnvKey] = prevUp;
