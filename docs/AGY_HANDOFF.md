@@ -6,10 +6,10 @@
 You are agy, a builder on sovereign-exocortex. Your complete instruction set is C:\Users\micha\projects\sovereign-exocortex\docs\AGY_HANDOFF.md (repo path docs/AGY_HANDOFF.md). Run: git fetch origin; git checkout main; git pull. Then open that file. Do not wait for anyone.
 Repo: C:\Users\micha\projects\sovereign-exocortex (GitHub Dysfunction-Junction/sovereign-exocortex).
 1. Read C:\Users\micha\projects\sovereign-exocortex\docs\AGY_HANDOFF.md in full, then AGENTS.md in the repo.
-2. Do YOUR TASKS below in the order listed, following "How to run this" exactly. A task can start only when its "Depends on" PRs are merged (check with: gh pr list --state merged --limit 30).
+2. Do the YOUR TASKS section of that file in the order listed, following "How to run this" exactly. A task can start only when its "Depends on" PRs are merged (check with: gh pr list --state merged --limit 30).
 3. REVIEW gate: when your PR's CI is green, comment "@Codex: please run the review in REVIEWER DUTY" on the PR and move to your next task. Do not merge it yourself.
-4. REVIEWER DUTY: whenever Codex asks you to review a PR, run the review prompt below on it before continuing your own tasks.
-5. Stop when every task below is Done or blocked. Final report: PR links, CI status, what you did not verify, every stop point hit.
+4. REVIEWER DUTY: whenever Codex asks you to review a PR, run the REVIEWER DUTY prompt in that file on it before continuing your own tasks.
+5. Stop when every task in YOUR TASKS is Done or blocked. Final report: PR links, CI status, what you did not verify, every stop point hit.
 ```
 
 ## YOUR TASKS (in order)
