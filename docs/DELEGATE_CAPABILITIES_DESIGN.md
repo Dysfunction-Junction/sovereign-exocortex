@@ -73,3 +73,8 @@ Order in the handler: parse body -> parse envelope -> `isApprovalAction` 403 -> 
 6. A scope pre-check (admin, admin:write, delegate:read, delegate:memory-read, delegate:write) runs before the body is read. "Unmapped", "missing scope" and "approval action" return the same 403 body.
 7. Unknown nodes now return 403 (was 404 for admin); `audit-fixes.test.ts` updated. Shadow table reproduces the old rule (all of hermes-api incl. ping; mesh demote/synthesize/dispatch/playbook) and adds blocks on memory.add and pattern feedback.
 Follow-ups not done: require a `delegate:actuate` scope before SHADOW=0 is ever used; log denied delegations to the event log; rate-limit `classify`. `pc:dashboard` gets `admin:write` automatically, so it is an admin device.
+
+## Owner decisions applied after merge (PR for this follow-up)
+- Q2: `admin` and `admin:write` satisfy T0-T2; T3 and T4 require `admin:write`. Plain `admin` is not enough.
+- Q3: no `payload.action` on `memory` means search; a present non-string or unknown sub-action is denied (the memory node itself would treat a non-string as search, so this is stricter).
+- Q5: `to` and `action` must already be canonical, nothing is normalized, and the same parsed envelope object is both resolved and forwarded. The mesh `payload.skillId || payload.action` fallback is reachable only through `dispatch`, which is T3 (`admin:write`) and shadow-blocked; it is not mapped per skill.

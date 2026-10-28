@@ -27,7 +27,6 @@ const MAPPED: Array<[string, string, Record<string, unknown>, string, "allow" | 
   ["pieces-for-all", "status", {}, "T0", "allow"],
   ["pieces-for-all", "memory", {}, "T0", "allow"],
   ["pieces-for-all", "memory", { action: "search" }, "T0", "allow"],
-  ["pieces-for-all", "memory", { action: 7 }, "T0", "allow"],
   ["pieces-for-all", "memory", { action: "ADD" }, "T2", "block"],
   ["agent-mesh-mcp", "ping", {}, "T0", "allow"],
   ["agent-mesh-mcp", "skills", {}, "T0", "allow"],
@@ -72,7 +71,7 @@ test("unmapped and non-canonical input is denied", () => {
     ["gut-instinct", "contract"], ["tool-registry-heartbeat", "inventory"],
     ["autonomous-triad", "approve"], ["autonomous-triad", "reject"], ["autonomous-triad", "review"],
     ["pieces-for-all", "delete"], ["pieces-for-all", "memory", { action: "delete" }],
-    ["pieces-for-all", "memory", { action: "add " }], ["pieces-for-all", "memory", { action: "" }],
+    ["pieces-for-all", "memory", { action: "add " }], ["pieces-for-all", "memory", { action: 7 }], ["pieces-for-all", "memory", { action: null }], ["pieces-for-all", "memory", { action: "" }],
     ["no-such-node", "ping"], ["__proto__", "ping"], ["constructor", "ping"], ["pieces-for-all", "constructor"],
     ["pieces-for-all", "Ping"], ["pieces-for-all", " ping"], ["pieces-for-all", "ping "], ["Pieces-For-All", "ping"],
     ["agent-mesh-mcp", "SKills"], ["pieces-for-all", ""], ["", "ping"],
@@ -85,8 +84,10 @@ test("unmapped and non-canonical input is denied", () => {
 test("admin gets no exemption from default deny, only from the scope check", () => {
   assert.equal(resolveDelegate("registry-app", "release", {}), null);
   const sensitive = resolveDelegate("agent-mesh-mcp", "dispatch", {})!;
-  assert.equal(scopesSatisfy(["admin"], sensitive), true);
+  assert.equal(scopesSatisfy(["admin"], sensitive), false, "T3 needs admin:write; admin alone is not enough");
   assert.equal(scopesSatisfy(["admin:write"], sensitive), true);
+  assert.equal(scopesSatisfy(["admin"], resolveDelegate("hermes-api", "tap", {})!), false);
+  assert.equal(scopesSatisfy(["admin"], resolveDelegate("pieces-for-all", "memory", { action: "add" })!), true);
   assert.equal(scopesSatisfy(["delegate:read", "delegate:write", "delegate:memory-read"], sensitive), false);
 });
 

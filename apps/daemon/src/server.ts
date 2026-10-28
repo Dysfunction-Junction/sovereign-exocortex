@@ -7,7 +7,7 @@ import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:cryp
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
-import { ADMIN_SCOPES, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
+import { acceptedScopes, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, isApprovalAction, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
@@ -2045,7 +2045,7 @@ function getUnlabeledShadowProposals(
       }
       // Approve/reject/release carry authority only /network/approve verifies.
       const capability = isApprovalAction(parsed.action) ? null : resolveDelegate(parsed.to, parsed.action, parsed.payload);
-      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...ADMIN_SCOPES, ...capability.scopes)) {
+      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...acceptedScopes(capability))) {
         denied();
         return;
       }

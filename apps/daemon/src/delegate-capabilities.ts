@@ -68,7 +68,8 @@ export function resolveDelegate(to: string, action: string, payload: Record<stri
   if (!CANONICAL.test(to) || !CANONICAL.test(action)) return null;
   if (!Object.hasOwn(DELEGATE_MAP, to)) return null;
   if (to === "pieces-for-all" && action === "memory") {
-    // Mirror the memory node exactly: a non-string payload.action means search; the string is lower-cased, not trimmed.
+    // No sub-action means search (as the memory node does). A present but non-string sub-action is denied.
+    if (payload.action !== undefined && typeof payload.action !== "string") return null;
     const sub = typeof payload.action === "string" ? payload.action.toLowerCase() : "search";
     if (sub === "search") return MEMORY_SEARCH;
     if (sub === "add") return MEMORY_ADD;
@@ -79,6 +80,12 @@ export function resolveDelegate(to: string, action: string, payload: Record<stri
   return Object.hasOwn(table, action) ? table[action]! : null;
 }
 
+/** Scopes that satisfy a capability. T3 and T4 need `admin:write`; plain `admin` is not enough. */
+export function acceptedScopes(capability: DelegateCapability): readonly string[] {
+  if (capability.tier === "T3" || capability.tier === "T4") return ["admin:write"];
+  return [...ADMIN_SCOPES, ...capability.scopes];
+}
+
 export function scopesSatisfy(deviceScopes: readonly string[], capability: DelegateCapability): boolean {
-  return [...ADMIN_SCOPES, ...capability.scopes].some((s) => deviceScopes.includes(s));
+  return acceptedScopes(capability).some((s) => deviceScopes.includes(s));
 }
