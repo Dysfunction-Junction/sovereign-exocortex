@@ -24,7 +24,13 @@ import {
   loadProbEngineCheckpoint,
   logPrediction,
   resolveWithAction,
-  screenOf,
+  UsageBaseline,
+  actionOf as coreActionOf,
+  passiveCapturePackage,
+  timeContext,
+  DEFAULT_DWELL_DEBOUNCE_MS,
+  BASELINE_WINDOW_MS,
+  type Daypart,
   type EngineOptions,
   type FeatureMap,
   type RawEvent,
@@ -33,12 +39,14 @@ import { PLAY_CATEGORIES } from "./play-categories.js";
 
 export const DEFAULT_HORIZON_MS = 300_000;
 export const DEFAULT_CHECKPOINT_INTERVAL = 250;
-export const DEFAULT_DWELL_DEBOUNCE_MS = 1000;
+export { DEFAULT_DWELL_DEBOUNCE_MS, passiveCapturePackage };
 const HISTORY_LIMIT = 5000;
 const MAX_CANDIDATES = 8;
 
 interface DeviceState {
   engine: ProbEngine;
+  /** Pre-registered average-usage and persistence baselines (14-day window). */
+  baseline: UsageBaseline;
   lastSeq: number;
   lastScreen?: string;
   lastFeatures: FeatureMap;
@@ -55,32 +63,16 @@ export interface PredictionHostOptions {
   playCategories?: Record<string, string>;
 }
 
-/** Extract package name from a passiveCapture telemetry event, or null. */
-export function passiveCapturePackage(ev: RawEvent): string | null {
-  if (ev.kind !== "telemetry") return null;
-  let p: Record<string, unknown>;
-  try {
-    p = typeof ev.payload === "string" ? JSON.parse(ev.payload) : (ev.payload as Record<string, unknown>);
-  } catch {
-    return null;
-  }
-  if (!p || typeof p !== "object") return null;
-  if (p.type === "passive_capture" && typeof p.package === "string" && p.package) {
-    return p.package;
-  }
-  if (p.type === "system_telemetry" && typeof p.telemetry === "string") {
-    if (p.telemetry.startsWith("SMS ") || p.telemetry.startsWith("Notification from ")) {
-      return null;
-    }
-    if (typeof p.package === "string" && p.package && p.telemetry.startsWith("Package: ")) {
-      return p.package;
-    }
-    if (p.telemetry.startsWith("Package: ")) {
-      const match = p.telemetry.match(/^Package:\s*([^\s\n]+)/);
-      if (match && match[1]) return match[1];
-    }
-  }
-  return null;
+/**
+ * Action represented by an event (screen name or passive-capture category), with the package -> category
+ * map injected. The logic lives in core so offline evaluation replays exactly what the host sees.
+ */
+export function actionOf(
+  ev: RawEvent,
+  state?: { lastPassiveTs?: number; lastPassiveAction?: string },
+  opts: { playCategories?: Record<string, string>; dwellDebounceMs?: number } = {},
+): string | null {
+  return coreActionOf(ev, state, { playCategories: PLAY_CATEGORIES, ...opts });
 }
 
 export class PredictionHost {
@@ -113,47 +105,36 @@ export class PredictionHost {
     this.tracker.updateTriage(deviceId, category, ts);
   }
 
-  /**
-   * Determine the action represented by an event: either screen name from screen_view,
-   * or category name from a debounced passiveCapture event.
-   */
+  /** Determine the action represented by an event (see core actionOf). */
   public actionOf(ev: RawEvent, state?: DeviceState): string | null {
-    const screen = screenOf(ev);
-    if (screen) return screen;
+    return coreActionOf(ev, state, { playCategories: this.playCategories, dwellDebounceMs: this.dwellDebounceMs });
+  }
 
-    const pkg = passiveCapturePackage(ev);
-    if (!pkg) return null;
+  private daypartAt(ts: number): Daypart {
+    return timeContext(ts, (this.tz ?? ((t: number) => -new Date(t).getTimezoneOffset()))(ts)).daypart;
+  }
 
-    let p: Record<string, unknown> | null = null;
-    try {
-      p = typeof ev.payload === "string" ? JSON.parse(ev.payload) : (ev.payload as Record<string, unknown>);
-    } catch {}
-
-    const rawDwell = (p as any)?.dwell_ms ?? (p as any)?.touch_duration_ms;
-    if (typeof rawDwell === "number" && Number.isFinite(rawDwell) && rawDwell < this.dwellDebounceMs) {
-      return null;
+  /** Rebuild the 14-day usage baseline from the log (no checkpoint needed; the window is small). */
+  private hydrateBaseline(db: ExocortexDatabase, deviceId: string, beforeSeq: number, nowTs: number): UsageBaseline {
+    const baseline = new UsageBaseline();
+    const rows = db.raw
+      .prepare(
+        `SELECT seq, device_id, kind, ts_device, payload FROM events
+          WHERE device_id = ? AND kind IN ('touch','telemetry') AND seq < ? AND ts_device >= ?
+          ORDER BY seq ASC`,
+      )
+      .all(deviceId, beforeSeq, nowTs - BASELINE_WINDOW_MS) as unknown as RawEvent[];
+    const scratch: { lastPassiveTs?: number } = {};
+    for (const r of rows) {
+      const action = coreActionOf(r, scratch, { playCategories: this.playCategories, dwellDebounceMs: this.dwellDebounceMs });
+      if (action) baseline.observe(action, r.ts_device, this.daypartAt(r.ts_device));
     }
-
-    if (state && state.lastPassiveTs !== undefined) {
-      const dt = ev.ts_device - state.lastPassiveTs;
-      if (dt >= 0 && dt < this.dwellDebounceMs) {
-        return null;
-      }
-    }
-
-    const category = (typeof p?.category === "string" && p.category !== "Uncategorized")
-      ? p.category
-      : (this.playCategories[pkg] ?? "Uncategorized");
-
-    if (state) {
-      state.lastPassiveTs = ev.ts_device;
-      state.lastPassiveAction = category;
-    }
-    return category;
+    return baseline;
   }
 
   /** Rebuild a device's engine and tracked context from checkpoint or recent history. */
-  private hydrate(db: ExocortexDatabase, deviceId: string, beforeSeq: number): DeviceState {
+  private hydrate(db: ExocortexDatabase, deviceId: string, beforeSeq: number, nowTs: number): DeviceState {
+    const baseline = this.hydrateBaseline(db, deviceId, beforeSeq, nowTs);
     const checkpoint = loadProbEngineCheckpoint(db, deviceId);
     if (checkpoint && checkpoint.last_seq < beforeSeq) {
       // O(1) Checkpoint load
@@ -165,6 +146,7 @@ export class PredictionHost {
 
       const state: DeviceState = {
         engine,
+        baseline,
         lastSeq: checkpoint.last_seq,
         lastScreen: checkpoint.last_screen ?? undefined,
         lastFeatures,
@@ -208,7 +190,7 @@ export class PredictionHost {
 
     const engine = new ProbEngine(this.engineOptions);
     const tempTracker = new ContextTracker(this.tz);
-    const state: DeviceState = { engine, lastSeq: rows.length > 0 ? rows[rows.length - 1].seq : 0, lastFeatures: {} };
+    const state: DeviceState = { engine, baseline, lastSeq: rows.length > 0 ? rows[rows.length - 1].seq : 0, lastFeatures: {} };
 
     for (const r of rows) {
       tempTracker.update(r);
@@ -240,7 +222,7 @@ export class PredictionHost {
     let guesses = 0;
     let resolved = 0;
     for (const ev of [...events].sort((a, b) => a.seq - b.seq)) {
-      const state = this.devices.get(ev.device_id) ?? this.hydrate(db, ev.device_id, ev.seq);
+      const state = this.devices.get(ev.device_id) ?? this.hydrate(db, ev.device_id, ev.seq, ev.ts_device);
       if (ev.seq <= state.lastSeq) continue;
       state.lastSeq = ev.seq;
       this.tracker.update(ev);
@@ -258,6 +240,11 @@ export class PredictionHost {
         }
       }
 
+      const daypart = ctx.time?.daypart ?? this.daypartAt(ev.ts_device);
+      // Pre-registered: the baselines see every action up to and including this one, and not the next.
+      state.baseline.observe(action, ev.ts_device, daypart);
+      const baselines = state.baseline.predict(ev.ts_device, daypart);
+
       const features = contextFeatures(ctx, state.lastScreen);
       const dist = state.engine.predict(action, features);
       const candidates = dist.probs.filter((p) => p.value !== OTHER).slice(0, MAX_CANDIDATES);
@@ -272,6 +259,7 @@ export class PredictionHost {
           candidates,
           context: {
             ...ctx,
+            baselines,
             model: {
               other_prob: other,
               temperature: dist.temperature,

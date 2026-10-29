@@ -376,13 +376,90 @@ export function loadPredictionRows(raw: DatabaseSync, sinceMs = 0): PredictionRo
   }));
 }
 
-function wilsonLower(successes: number, n: number, z = 1.96): number | null {
+/** Wilson score interval for a binomial proportion; null when n is 0. */
+export function wilsonInterval(successes: number, n: number, z = 1.96): { lo: number; hi: number } | null {
   if (n <= 0) return null;
   const p = successes / n;
   const denom = 1 + (z * z) / n;
   const centre = p + (z * z) / (2 * n);
   const margin = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
-  return Math.max(0, (centre - margin) / denom);
+  return { lo: Math.max(0, (centre - margin) / denom), hi: Math.min(1, (centre + margin) / denom) };
+}
+
+function wilsonLower(successes: number, n: number, z = 1.96): number | null {
+  return wilsonInterval(successes, n, z)?.lo ?? null;
+}
+
+const LOSS_FLOOR = 1e-6;
+
+/** Pre-registered baselines logged with a prediction (context.baselines); see usage-baseline.ts. */
+interface LoggedDist {
+  cands: PredictionCandidate[];
+  cold_start?: boolean;
+}
+function loggedBaselines(r: PredictionRow): { avg_usage: LoggedDist; persistence: LoggedDist } | null {
+  const b = (r.context as Record<string, unknown>).baselines as Record<string, unknown> | undefined;
+  const ok = (d: unknown): boolean => !!d && typeof d === "object" && Array.isArray((d as LoggedDist).cands);
+  if (!b || !ok(b.avg_usage) || !ok(b.persistence)) return null;
+  return b as unknown as { avg_usage: LoggedDist; persistence: LoggedDist };
+}
+
+/** Probability a logged distribution gave the actual action; unlisted actions get the unlisted residual mass. */
+function probOf(cands: readonly PredictionCandidate[], actual: string): number {
+  const hit = cands.find((c) => c.value === actual);
+  if (hit) return Math.max(hit.prob, LOSS_FLOOR);
+  const residual = 1 - cands.reduce((s, c) => s + c.prob, 0);
+  return Math.max(residual, LOSS_FLOOR);
+}
+
+export interface BaselineScore {
+  top1: number | null;
+  /** Mean -ln P(actual). Unlisted actions are scored with the distribution's unlisted residual mass. */
+  logLoss: number | null;
+}
+
+/** Engine vs the logged baselines, on identical rows only. */
+export interface BaselineComparison {
+  /** Rows scored (have an actual and logged, non-cold-start baselines). */
+  n: number;
+  /** Rows with an actual left out because avg_usage was in cold start. */
+  coldStart: number;
+  /** Rows with an actual that predate baseline logging; only the legacy post-hoc `baselineTop1` covers them. */
+  legacy: number;
+  engine: BaselineScore;
+  avg_usage: BaselineScore;
+  persistence: BaselineScore;
+}
+
+function scoreRows(rows: readonly PredictionRow[]): BaselineComparison {
+  let coldStart = 0;
+  let legacy = 0;
+  let n = 0;
+  const acc = {
+    engine: { hit: 0, loss: 0 },
+    avg_usage: { hit: 0, loss: 0 },
+    persistence: { hit: 0, loss: 0 },
+  };
+  for (const r of rows) {
+    if (!r.actual) continue;
+    const b = loggedBaselines(r);
+    if (!b) {
+      legacy++;
+      continue;
+    }
+    if (b.avg_usage.cold_start) {
+      coldStart++;
+      continue;
+    }
+    n++;
+    const dists = { engine: r.candidates, avg_usage: b.avg_usage.cands, persistence: b.persistence.cands };
+    for (const k of ["engine", "avg_usage", "persistence"] as const) {
+      acc[k].hit += dists[k][0]?.value === r.actual ? 1 : 0;
+      acc[k].loss += -Math.log(probOf(dists[k], r.actual));
+    }
+  }
+  const s = (k: keyof typeof acc): BaselineScore => ({ top1: n > 0 ? acc[k].hit / n : null, logLoss: n > 0 ? acc[k].loss / n : null });
+  return { n, coldStart, legacy, engine: s("engine"), avg_usage: s("avg_usage"), persistence: s("persistence") };
 }
 
 export interface CalibrationBin {
@@ -392,6 +469,9 @@ export interface CalibrationBin {
   n: number;
   meanPredicted: number;
   observedRate: number;
+  /** Wilson 95% interval on observedRate. */
+  lo95: number;
+  hi95: number;
 }
 
 export interface GuideEntry {
@@ -415,6 +495,19 @@ export interface PredictionReport {
   /** Hit rate of always guessing the most common actual action; the bar the scorer must clear. */
   baselineTop1: number | null;
   beatsBaseline: boolean | null;
+  /** Engine vs the pre-registered logged baselines on the scored (HIT + MISS) rows. */
+  baselines: BaselineComparison;
+  /**
+   * Every row with a known actual (HIT, MISS and EXPIRED-with-actual) scored against `actual`.
+   * The headline top-1 is conditional on the next action landing inside the horizon.
+   */
+  unconditional: {
+    n: number;
+    top1: number | null;
+    top1WilsonLower: number | null;
+    top1WilsonUpper: number | null;
+    baselines: BaselineComparison;
+  };
   calibration: CalibrationBin[];
   guide: GuideEntry[];
 }
@@ -445,6 +538,10 @@ export function computePredictionReport(rows: readonly PredictionRow[], opts: Pr
   const baselineTop1 = scored > 0 ? modal / scored : null;
   const top1 = scored > 0 ? hits / scored : null;
 
+  const withActual = rows.filter((r) => r.actual !== null && r.outcome !== null);
+  const uncondHits = withActual.filter((r) => r.candidates[0]?.value === r.actual).length;
+  const uncondCi = wilsonInterval(uncondHits, withActual.length);
+
   const calibration: CalibrationBin[] = [];
   for (let b = 0; b < bins; b++) {
     const lo = b / bins;
@@ -454,12 +551,16 @@ export function computePredictionReport(rows: readonly PredictionRow[], opts: Pr
       return p >= lo && (b === bins - 1 ? p <= hi : p < hi);
     });
     if (inBin.length === 0) continue;
+    const binHits = inBin.filter((r) => r.outcome === "HIT").length;
+    const ci = wilsonInterval(binHits, inBin.length)!;
     calibration.push({
       lo,
       hi,
       n: inBin.length,
       meanPredicted: inBin.reduce((a, r) => a + (r.candidates[0]?.prob ?? 0), 0) / inBin.length,
-      observedRate: inBin.filter((r) => r.outcome === "HIT").length / inBin.length,
+      observedRate: binHits / inBin.length,
+      lo95: ci.lo,
+      hi95: ci.hi,
     });
   }
 
@@ -497,6 +598,14 @@ export function computePredictionReport(rows: readonly PredictionRow[], opts: Pr
     top3: scored > 0 ? top3Hits / scored : null,
     baselineTop1,
     beatsBaseline: top1 !== null && baselineTop1 !== null ? top1 > baselineTop1 : null,
+    baselines: scoreRows(scoredRows),
+    unconditional: {
+      n: withActual.length,
+      top1: withActual.length > 0 ? uncondHits / withActual.length : null,
+      top1WilsonLower: uncondCi?.lo ?? null,
+      top1WilsonUpper: uncondCi?.hi ?? null,
+      baselines: scoreRows(withActual),
+    },
     calibration,
     guide,
   };
@@ -504,19 +613,38 @@ export function computePredictionReport(rows: readonly PredictionRow[], opts: Pr
 
 const pct = (v: number | null): string => (v === null ? "n/a" : `${(v * 100).toFixed(1)}%`);
 
+const ll = (v: number | null): string => (v === null ? "n/a" : v.toFixed(3));
+
+function formatComparison(title: string, c: BaselineComparison): string[] {
+  const out = [`  ${title}: n=${c.n} (cold start excluded ${c.coldStart}, legacy rows without logged baselines ${c.legacy})`];
+  if (c.n > 0) {
+    for (const [name, s] of [["engine", c.engine], ["avg_usage", c.avg_usage], ["persistence", c.persistence]] as const) {
+      out.push(`    ${name.padEnd(12)} top-1 ${pct(s.top1)}  log loss ${ll(s.logLoss)}`);
+    }
+  }
+  return out;
+}
+
 export function formatPredictionReport(r: PredictionReport): string {
   const lines = [
     "Next-action prediction log",
     `  Guesses:        ${r.total}  (open ${r.open}, expired ${r.expired}, scored ${r.scored})`,
     `  Top-1 hit rate: ${pct(r.top1)}  (Wilson 95% lower ${pct(r.top1WilsonLower)})`,
     `  Top-3 hit rate: ${pct(r.top3)}`,
-    `  Baseline:       ${pct(r.baselineTop1)}  (always guess the most common next action)`,
+    `  Baseline:       ${pct(r.baselineTop1)}  (legacy, post-hoc: always guess the most common next action)`,
     `  Beats baseline: ${r.beatsBaseline === null ? "n/a" : r.beatsBaseline ? "yes" : "NO"}`,
   ];
+  lines.push(...formatComparison("Pre-registered baselines, scored rows (within horizon)", r.baselines));
+  lines.push(
+    `  Unconditional (all rows with a known actual): n=${r.unconditional.n}  top-1 ${pct(r.unconditional.top1)}  (Wilson 95% ${pct(r.unconditional.top1WilsonLower)}-${pct(r.unconditional.top1WilsonUpper)})`,
+  );
+  lines.push(...formatComparison("Pre-registered baselines, unconditional", r.unconditional.baselines));
   if (r.calibration.length > 0) {
     lines.push("  Calibration (top-1 confidence -> observed hit rate):");
     for (const c of r.calibration) {
-      lines.push(`    ${pct(c.lo)}-${pct(c.hi)}  n=${c.n}  said ${pct(c.meanPredicted)}  got ${pct(c.observedRate)}`);
+      lines.push(
+        `    ${pct(c.lo)}-${pct(c.hi)}  n=${c.n}  said ${pct(c.meanPredicted)}  got ${pct(c.observedRate)}  (95% CI ${pct(c.lo95)}-${pct(c.hi95)})`,
+      );
     }
   }
   if (r.guide.length > 0) {
