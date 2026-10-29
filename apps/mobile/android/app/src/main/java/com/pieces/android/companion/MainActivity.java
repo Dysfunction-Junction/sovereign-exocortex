@@ -15,6 +15,13 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(DevicePermissionsPlugin.class);
         registerPlugin(SecureCredentialsPlugin.class);
         registerPlugin(PairingPlugin.class);
+        registerPlugin(SensorConsentPlugin.class);
         super.onCreate(savedInstanceState);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        UsageSummary.queueArrivalsIfDue(this); // no-op unless app_switches consent is on
     }
 }

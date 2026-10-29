@@ -490,6 +490,7 @@ public class PiecesAccessibilityService extends AccessibilityService {
     private final Runnable periodicSyncRunnable = new Runnable() {
         @Override
         public void run() {
+            UsageSummary.queueArrivalsIfDue(PiecesAccessibilityService.this); // no-op unless app_switches consent is on
             NativeTelemetrySync.flushAsync(PiecesAccessibilityService.this);
             syncHandler.postDelayed(this, PERIODIC_SYNC_INTERVAL_MS);
         }
@@ -630,7 +631,8 @@ public class PiecesAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         isRunning = true;
         initClipboardListener();
-        NativeHardwareTelemetry.initSensors(this);
+        NativeHardwareTelemetry.initSensors(this); // consent-gated
+        SensorWindowSampler.start(this);
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
         syncHandler.postDelayed(periodicSyncRunnable, PERIODIC_SYNC_INTERVAL_MS);
@@ -647,6 +649,7 @@ public class PiecesAccessibilityService extends AccessibilityService {
         isRunning = false;
         cleanupClipboardListener();
         NativeHardwareTelemetry.stopSensors();
+        SensorWindowSampler.stop();
         syncHandler.removeCallbacks(periodicSyncRunnable);
         super.onDestroy();
     }
