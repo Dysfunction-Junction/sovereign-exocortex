@@ -28,6 +28,11 @@ import {
   smsPermissions, openSmsAppSettings, runSmsBackfill, resetSmsBackfillToRecent,
   listSmsContacts, getSmsAllowlist, setSmsAllowlist, type SmsContact,
 } from "../lib/smsBackfill";
+import {
+  SENSORS, MASTER_COPY, getSensorState, setSensorToggle, setSensorMaster, refreshSensors,
+  isAvailable, needsActivityPermissionNow, type SensorKey, type SensorState,
+} from "../lib/sensorConsent";
+import { requestPermission } from "../lib/devicePermissions";
 import { Switch } from "../components/Switch";
 import { ScanIcon, CheckIcon, WifiIcon, CloudIcon } from "../components/Icons";
 
@@ -63,6 +68,9 @@ export default function Setup() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [enrollToken, setEnrollToken] = useState("");
 
+  const [sensorState, setSensorState] = useState<SensorState | null>(null);
+  const [sensorBusy, setSensorBusy] = useState(false);
+
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
 
@@ -75,6 +83,28 @@ export default function Setup() {
         setSmsAllow(new Set(await getSmsAllowlist()));
       } catch { /* not granted yet */ }
     }
+  }
+
+  async function refreshSensorState() {
+    setSensorState(await getSensorState());
+  }
+
+  // Each change is applied on the phone before the switch moves, so the UI never shows "off" for a running sensor.
+  async function changeSensors(change: () => Promise<SensorState | null>) {
+    setSensorBusy(true);
+    try {
+      const next = await change();
+      if (next) setSensorState(next);
+    } catch (e) {
+      logRejection("setup.sensorConsent")(e);
+    } finally {
+      setSensorBusy(false);
+    }
+  }
+
+  async function handleAllowActivity() {
+    await requestPermission("activity");
+    await changeSensors(refreshSensors);
   }
 
   async function refreshNotifState() {
@@ -113,6 +143,7 @@ export default function Setup() {
       void Promise.resolve().then(() => {
         fireAndForget(refreshNotifState(), "setup.refreshNotifState");
         fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+        fireAndForget(refreshSensorState(), "setup.refreshSensorState");
       });
     }
     recordEventSafe({ type: "screen_view", screen: "setup", timestamp: new Date().toISOString() });
@@ -129,6 +160,7 @@ export default function Setup() {
       void Promise.resolve().then(() => {
         fireAndForget(refreshNotifState(), "setup.refreshNotifState");
         fireAndForget(refreshSmsState(), "setup.refreshSmsState");
+        fireAndForget(refreshSensorState(), "setup.refreshSensorState");
       });
     };
 
@@ -740,6 +772,47 @@ export default function Setup() {
           </div>
         )}
       </div>
+
+      {sensorState && (
+        <div className="panel">
+          <Switch
+            checked={sensorState.master}
+            onChange={(next) => void changeSensors(() => setSensorMaster(next))}
+            disabled={sensorBusy}
+            label="Sensors"
+            description={MASTER_COPY}
+          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 10, borderTop: "1px solid var(--border-subtle)" }}>
+            {SENSORS.map((info) => {
+              const available = isAvailable(sensorState, info.key);
+              return (
+                <div key={info.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Switch
+                    checked={sensorState.toggles[info.key] === true}
+                    onChange={(next) => void changeSensors(() => setSensorToggle(info.key as SensorKey, next))}
+                    disabled={sensorBusy || !available}
+                    label={info.title}
+                    description={available ? info.copy : "Not available on this phone."}
+                  />
+                  {needsActivityPermissionNow(sensorState, info) && (
+                    <div>
+                      <p className="status-error" style={{ fontSize: 13, margin: "0 0 8px" }}>
+                        Activity recognition permission not granted yet.
+                      </p>
+                      <button className="secondary" onClick={() => void handleAllowActivity()}>
+                        Allow activity recognition
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!sensorState.master && (
+              <p className="hint" style={{ margin: 0 }}>Nothing is collected until the Sensors switch is on.</p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>

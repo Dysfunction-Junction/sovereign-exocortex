@@ -91,13 +91,34 @@ public final class NativeHardwareTelemetry {
     private NativeHardwareTelemetry() {}
 
     /**
-     * Initializes hardware sensors for physical surface & pocket detection.
+     * Which of the legacy pocket/surface listeners may run, given a consent check. Proximity and light follow their
+     * own toggles; the gravity listener is orientation, so it follows "rotation". All three are off until the user
+     * opts in (previously they started unconditionally).
+     */
+    static java.util.Set<String> legacyListenerPlan(java.util.function.Predicate<String> consent) {
+        java.util.Set<String> plan = new java.util.HashSet<>();
+        if (consent.test(SensorCapabilities.KEY_PROXIMITY)) plan.add("proximity");
+        if (consent.test(SensorCapabilities.KEY_LIGHT)) plan.add("light");
+        if (consent.test(SensorCapabilities.KEY_ROTATION)) plan.add("gravity");
+        return plan;
+    }
+
+    /** Re-reads consent: unregisters whatever was revoked and starts whatever was newly allowed. Main looper. */
+    public static synchronized void refreshSensors(Context context) {
+        stopSensors();
+        initSensors(context);
+    }
+
+    /**
+     * Initializes hardware sensors for physical surface & pocket detection, only those the user has consented to.
      * Uses 1s batched sampling with 10s max latency on a dedicated background HandlerThread.
      */
     public static synchronized void initSensors(Context context) {
         if (sensorsActive || context == null) return;
         try {
             Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+            final java.util.Set<String> plan = legacyListenerPlan(k -> SensorConsentPlugin.isEnabled(appContext, k));
+            if (plan.isEmpty()) return;
             SensorManager sm = (SensorManager) appContext.getSystemService(Context.SENSOR_SERVICE);
             if (sm == null) return;
             globalSensorManager = sm;
@@ -110,7 +131,7 @@ public final class NativeHardwareTelemetry {
 
             boolean registeredAny = false;
 
-            Sensor prox = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+            Sensor prox = plan.contains("proximity") ? sm.getDefaultSensor(Sensor.TYPE_PROXIMITY) : null;
             if (prox != null) {
                 maxProximityRange = prox.getMaximumRange();
                 if (sm.registerListener(sensorListener, prox, SensorManager.SENSOR_DELAY_NORMAL, sensorHandler)) {
@@ -118,19 +139,19 @@ public final class NativeHardwareTelemetry {
                 }
             }
 
-            Sensor light = sm.getDefaultSensor(Sensor.TYPE_LIGHT);
+            Sensor light = plan.contains("light") ? sm.getDefaultSensor(Sensor.TYPE_LIGHT) : null;
             if (light != null) {
                 if (sm.registerListener(sensorListener, light, SensorManager.SENSOR_DELAY_NORMAL, sensorHandler)) {
                     registeredAny = true;
                 }
             }
 
-            Sensor grav = sm.getDefaultSensor(Sensor.TYPE_GRAVITY);
+            Sensor grav = plan.contains("gravity") ? sm.getDefaultSensor(Sensor.TYPE_GRAVITY) : null;
             if (grav != null) {
                 if (sm.registerListener(sensorListener, grav, 1_000_000, 10_000_000, sensorHandler)) {
                     registeredAny = true;
                 }
-            } else {
+            } else if (plan.contains("gravity")) {
                 Sensor accel = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
                 if (accel != null) {
                     if (sm.registerListener(sensorListener, accel, 1_000_000, 10_000_000, sensorHandler)) {

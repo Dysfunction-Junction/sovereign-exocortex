@@ -508,9 +508,14 @@ describe("ExocortexDatabase (v3 SQLite Event Store Driver)", () => {
     expect(metrics.wanted).toBe(48);
     expect(metrics.notWanted).toBe(2);
     expect(metrics.precision).toBeCloseTo(0.96, 5);
-    expect(metrics.verdict).toBe("pass");
-    expect(metrics.automatedVerdict).toBe("SUFFICIENT_DATA_PASS");
+    // No comparator available: precision is fine but the gate must not pass.
+    expect(metrics.verdict).toBe("no_baseline");
+    expect(metrics.automatedVerdict).toBe("NO_BASELINE");
     expect(metrics.breakerTripped).toBe(false);
+    const withBaseline = db.getShadowMetrics({ nowMs: now, baselinePrecision: 0.5 });
+    expect(withBaseline.verdict).toBe("pass");
+    expect(withBaseline.automatedVerdict).toBe("SUFFICIENT_DATA_PASS");
+    expect(withBaseline.breakerTripped).toBe(false);
     expect(db.isCircuitBreakerTripped({ nowMs: now })).toBe(false);
 
     // Verify subsequent writes still work (query_only was restored)

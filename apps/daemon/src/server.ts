@@ -15,6 +15,7 @@ import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 import { startCalibrationSampler } from "./calibration-sampler.js";
+import { startForecastCardSampler } from "./forecast-cards.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
 import { IngestConsumer } from "./ingest-consumer.js";
@@ -25,7 +26,7 @@ defaultTriageHost.onVerdictStored = (deviceId, verdict) => {
   defaultPredictionHost.updateTriage(deviceId, verdict.category);
 };
 import { defaultPreCognitiveHost, isValidDwell } from "./precognitive-host.js";
-import { dropKnownTelemetry } from "./telemetry-dedupe.js";
+import { dropKnownTelemetry, recordTelemetryDuplicates } from "./telemetry-dedupe.js";
 import { APPROVAL_TS_WINDOW_MS, ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
 import { getRevokedAttestationSerials } from "./attestation-status.js";
@@ -814,6 +815,14 @@ export const server = createServer(async (req, res) => {
         deduped.req.events.length > 0
           ? db.ingestBatch(deduped.req)
           : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"], insertedEvents: [] as ReturnType<typeof db.ingestBatch>["events"] };
+      // Tally what was dropped on a canonical row; the event itself is never rewritten.
+      if (deduped.pending.length > 0) {
+        try {
+          recordTelemetryDuplicates(db, reqObj.device_id, deduped.pending);
+        } catch (err) {
+          console.error("[telemetry-tally] failed:", err instanceof Error ? err.message : err);
+        }
+      }
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.insertedEvents.length > 0) {
         res.once("finish", () => ingestConsumerForDatabase(db).wake());
@@ -2361,6 +2370,7 @@ if (process.env.NODE_ENV !== "test") {
   // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
   ensureShadowRecorder(true);
   startCalibrationSampler(getDatabase);
+  startForecastCardSampler(getDatabase);
   for (const delayMs of [5_000, 15_000, 45_000]) {
     setTimeout(() => ensureShadowRecorder(true), delayMs).unref();
   }

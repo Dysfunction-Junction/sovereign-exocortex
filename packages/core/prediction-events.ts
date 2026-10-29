@@ -11,6 +11,10 @@
  *   device:   screen_state | screenState, mode, battery_pct, charging, network, idle_ms
  *   ambient:  temp_c | ambient_temp_c, humidity_pct
  *   location: place, lat, lon, accuracy_m
+ *
+ * Typed device-signal events (type: app_foreground, screen_session, sensor_window, sensor_caps,
+ * sensor_consent) are handled by explicit branches and never go through the flat keys above, so a
+ * foreground arrival cannot clobber app.package and a sensor window cannot set ambient.temp_c.
  */
 
 import type { Example } from "./prob-engine.js";
@@ -59,6 +63,21 @@ export const HARDWARE_SIGNAL_TTL_MS = {
   network: 60_000,        // 60 seconds for network quality & metering
 } as const;
 
+/** How long a 5-minute sensor window (and what it feeds: motion, battery_micro) stays usable after window_end. */
+export const SENSOR_WINDOW_TTL_MS = 10 * 60_000;
+
+/** Window sensor key -> the `PredictionContext.sensors` fields it fills (dropped on consent revocation). */
+const SENSOR_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  motion: ["motion_energy"],
+  rotation: ["orient"],
+  steps: ["steps_delta"],
+  sig_motion: ["sig_motion"],
+  pressure: ["pressure_trend"],
+  light: ["light"],
+  proximity: ["near_frac"],
+  activity: ["activity"],
+};
+
 interface DeviceState {
   app: { package?: string; label?: string; screen?: string };
   device: NonNullable<PredictionContext["device"]>;
@@ -67,12 +86,18 @@ interface DeviceState {
   system_suggestions?: NonNullable<PredictionContext["system_suggestions"]>;
   audio?: { data: NonNullable<PredictionContext["audio"]>; observed_ts: number };
   thermal?: { data: NonNullable<PredictionContext["thermal"]>; observed_ts: number };
-  battery_micro?: { data: NonNullable<PredictionContext["battery_micro"]>; observed_ts: number };
-  motion?: { data: NonNullable<PredictionContext["motion"]>; observed_ts: number };
+  battery_micro?: { data: NonNullable<PredictionContext["battery_micro"]>; observed_ts: number; ttl?: number; from_sensor?: boolean };
+  motion?: { data: NonNullable<PredictionContext["motion"]>; observed_ts: number; ttl?: number; from_sensor?: boolean };
   notification_actions?: { data: NonNullable<PredictionContext["notification_actions"]>; observed_ts: number };
   physical_surface?: { data: NonNullable<PredictionContext["physical_surface"]>; observed_ts: number };
   network_telemetry?: { data: NonNullable<PredictionContext["network_telemetry"]>; observed_ts: number };
   triage?: { category: string; observed_ts: number };
+  /** Newest accepted sensor window; `keys` are the sensors that appeared in it. */
+  sensors?: { window_end: number; data: NonNullable<PredictionContext["sensors"]>; keys: Set<string> };
+  /** Latest sensor_caps: sensors the probe reported present, and the toggles it reported. */
+  caps?: { present: Set<string>; toggles: Record<string, boolean> };
+  /** Latest sensor_consent per sensor key. `false` means later windows must not feed that key. */
+  consent: Map<string, boolean>;
 }
 
 /** Running per-device context. Feed it every event in order, then ask for a snapshot at a moment. */
@@ -80,7 +105,15 @@ export class ContextTracker {
   private readonly state = new Map<string, DeviceState>();
   private externalAmbient: NonNullable<PredictionContext["ambient"]> = {};
 
-  constructor(private readonly tzOffsetMin: (ts: number) => number = (ts) => -new Date(ts).getTimezoneOffset()) {}
+  private readonly sensorContext: boolean;
+
+  /** `sensorContext` defaults to on; EXO_SENSOR_CONTEXT=0 makes sensor windows ignored here (they stay stored). */
+  constructor(
+    private readonly tzOffsetMin: (ts: number) => number = (ts) => -new Date(ts).getTimezoneOffset(),
+    opts: { sensorContext?: boolean } = {},
+  ) {
+    this.sensorContext = opts.sensorContext ?? process.env.EXO_SENSOR_CONTEXT !== "0";
+  }
 
   /** Ambient reading from a source other than the phone (for example a home sensor); phone readings win. */
   setAmbient(ambient: NonNullable<PredictionContext["ambient"]>): void {
@@ -94,7 +127,7 @@ export class ContextTracker {
 
   private get(deviceId: string): DeviceState {
     let s = this.state.get(deviceId);
-    if (!s) this.state.set(deviceId, (s = { app: {}, device: {}, ambient: {}, location: {} }));
+    if (!s) this.state.set(deviceId, (s = { app: {}, device: {}, ambient: {}, location: {}, consent: new Map() }));
     return s;
   }
 
@@ -103,6 +136,20 @@ export class ContextTracker {
     const p = parse(ev);
     if (!p) return;
     const s = this.get(ev.device_id);
+    switch (p.type) {
+      case "app_foreground": // an action (see actionOf), not context: must not touch app.package
+      case "screen_session":
+        return;
+      case "sensor_window":
+        this.applySensorWindow(s, p);
+        return;
+      case "sensor_caps":
+        this.applySensorCaps(s, p);
+        return;
+      case "sensor_consent":
+        this.applySensorConsent(s, p);
+        return;
+    }
     const pkg = str(p.package);
     if (pkg) s.app.package = pkg;
     const label = str(p.app_label);
@@ -330,6 +377,119 @@ export class ContextTracker {
     }
   }
 
+  /**
+   * A 5-minute sensor aggregate. Accepted only when newer than the stored window, so a late older
+   * window never overwrites a newer one. Never touches ambient.temp_c (battery temperature goes to
+   * battery_micro only).
+   */
+  private applySensorWindow(s: DeviceState, p: Record<string, unknown>): void {
+    if (!this.sensorContext) return;
+    const end = num(p.window_end);
+    const raw = p.sensors && typeof p.sensors === "object" && !Array.isArray(p.sensors) ? (p.sensors as Record<string, unknown>) : null;
+    if (end === undefined || end <= 0 || !raw) return;
+    if (s.sensors && end <= s.sensors.window_end) return;
+    const grp = (k: string): Record<string, unknown> | null =>
+      s.consent.get(k) !== false && raw[k] && typeof raw[k] === "object" && !Array.isArray(raw[k]) ? (raw[k] as Record<string, unknown>) : null;
+
+    const data: NonNullable<PredictionContext["sensors"]> = { window_end: end };
+    const keys = new Set<string>();
+    const energy = str(grp("motion")?.energy_class);
+    if (energy) {
+      data.motion_energy = energy;
+      keys.add("motion");
+    }
+    const orient = str(grp("rotation")?.orient);
+    if (orient) {
+      data.orient = orient;
+      keys.add("rotation");
+    }
+    const steps = num(grp("steps")?.delta);
+    if (steps !== undefined && steps >= 0) {
+      data.steps_delta = steps;
+      keys.add("steps");
+    }
+    const sig = bool(grp("sig_motion")?.fired);
+    if (sig !== undefined) {
+      data.sig_motion = sig;
+      keys.add("sig_motion");
+    }
+    const trend = str(grp("pressure")?.trend);
+    if (trend) {
+      data.pressure_trend = trend;
+      keys.add("pressure");
+    }
+    const light = str(grp("light")?.bucket);
+    if (light) {
+      data.light = light;
+      keys.add("light");
+    }
+    const near = num(grp("proximity")?.near_frac);
+    if (near !== undefined && near >= 0 && near <= 1) {
+      data.near_frac = near;
+      keys.add("proximity");
+    }
+    const activity = grp("activity");
+    const activityState = str(activity?.state);
+    if (activityState) {
+      data.activity = activityState;
+      keys.add("activity");
+      if (!s.motion || end > s.motion.observed_ts) {
+        const conf = num(activity?.conf);
+        s.motion = {
+          data: { state: activityState, ...(conf !== undefined ? { confidence: conf } : {}) },
+          observed_ts: end,
+          ttl: SENSOR_WINDOW_TTL_MS,
+          from_sensor: true,
+        };
+      }
+    }
+    const battery = grp("battery");
+    if (battery) {
+      keys.add("battery");
+      const pct = num(battery.pct);
+      if (pct !== undefined && pct >= 0 && pct <= 100) s.device.battery_pct = pct;
+      const plugged = str(battery.plugged);
+      if (plugged) s.device.charging = plugged !== "unplugged" && plugged !== "none";
+      const bTemp = num(battery.batt_temp_c);
+      if (bTemp !== undefined || plugged) {
+        s.battery_micro = {
+          data: { ...(bTemp !== undefined ? { temp_c: bTemp } : {}), ...(plugged ? { plugged } : {}) },
+          observed_ts: end,
+          ttl: SENSOR_WINDOW_TTL_MS,
+          from_sensor: true,
+        };
+      }
+    }
+    s.sensors = { window_end: end, data, keys };
+  }
+
+  private applySensorCaps(s: DeviceState, p: Record<string, unknown>): void {
+    const raw = p.sensors && typeof p.sensors === "object" && !Array.isArray(p.sensors) ? (p.sensors as Record<string, unknown>) : null;
+    if (!raw) return;
+    const present = new Set<string>();
+    for (const [k, v] of Object.entries(raw)) if (v && typeof v === "object" && (v as Record<string, unknown>).present === true) present.add(k);
+    const toggles: Record<string, boolean> = {};
+    if (p.toggles && typeof p.toggles === "object" && !Array.isArray(p.toggles)) {
+      for (const [k, v] of Object.entries(p.toggles as Record<string, unknown>)) if (typeof v === "boolean") toggles[k] = v;
+    }
+    s.caps = { present, toggles };
+  }
+
+  /** Revocation: later windows ignore the key, and what it already put into the running state is dropped. */
+  private applySensorConsent(s: DeviceState, p: Record<string, unknown>): void {
+    const key = str(p.key);
+    const enabled = bool(p.enabled);
+    if (!key || enabled === undefined) return;
+    s.consent.set(key, enabled);
+    if (enabled) return;
+    if (s.sensors) {
+      for (const f of SENSOR_FIELDS[key] ?? []) delete (s.sensors.data as Record<string, unknown>)[f];
+      s.sensors.keys.delete(key);
+    }
+    if (key === "activity" && s.motion?.from_sensor) delete s.motion;
+    if (key === "battery" && s.battery_micro?.from_sensor) delete s.battery_micro;
+  }
+
   /** Context at `ts` for a device: wall clock plus the latest tracked signals. */
   snapshot(deviceId: string, ts: number): PredictionContext {
     const s = this.state.get(deviceId);
@@ -370,13 +530,13 @@ export class ContextTracker {
     }
     if (s.battery_micro) {
       const d = ts - s.battery_micro.observed_ts;
-      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.battery_micro) {
+      if (d >= 0 && d <= (s.battery_micro.ttl ?? HARDWARE_SIGNAL_TTL_MS.battery_micro)) {
         ctx.battery_micro = { ...s.battery_micro.data };
       }
     }
     if (s.motion) {
       const d = ts - s.motion.observed_ts;
-      if (d >= 0 && d <= HARDWARE_SIGNAL_TTL_MS.motion) {
+      if (d >= 0 && d <= (s.motion.ttl ?? HARDWARE_SIGNAL_TTL_MS.motion)) {
         ctx.motion = { ...s.motion.data };
       }
     }
@@ -424,6 +584,17 @@ export class ContextTracker {
         if (ctx.network_telemetry.transport && !ctx.device?.network) {
           ctx.device = { ...ctx.device, network: ctx.network_telemetry.transport };
         }
+      }
+    }
+    if (this.sensorContext) {
+      const fresh = !!s.sensors && ts - s.sensors.window_end >= 0 && ts - s.sensors.window_end <= SENSOR_WINDOW_TTL_MS;
+      if (fresh) ctx.sensors = { ...s.sensors!.data };
+      if (s.caps) {
+        // Present and toggled on, yet absent from the fresh window: a real gap, not an opt-out.
+        const stale = [...s.caps.present]
+          .filter((k) => (s.consent.get(k) ?? s.caps!.toggles[k]) === true && !(fresh && s.sensors!.keys.has(k)))
+          .map((k) => `sensors.${k}`);
+        if (stale.length > 0) ctx.missing = stale;
       }
     }
     return ctx;

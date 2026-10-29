@@ -55,12 +55,13 @@ export interface BaselineResult {
   baselineNotWanted: number;
 }
 
-export type ShadowVerdict = "insufficient_data" | "heuristic_scorer" | "pass" | "fail";
+export type ShadowVerdict = "insufficient_data" | "no_baseline" | "heuristic_scorer" | "pass" | "fail";
 
 export type AutomatedVerdict =
   | "SUFFICIENT_DATA_PASS"
   | "BREAKER_TRIPPED_PRECISION_LOW"
   | "INSUFFICIENT_DATA"
+  | "NO_BASELINE"
   | "HEURISTIC_SCORER";
 
 export function toAutomatedVerdict(verdict: ShadowVerdict): AutomatedVerdict {
@@ -71,9 +72,19 @@ export function toAutomatedVerdict(verdict: ShadowVerdict): AutomatedVerdict {
       return "BREAKER_TRIPPED_PRECISION_LOW";
     case "insufficient_data":
       return "INSUFFICIENT_DATA";
+    case "no_baseline":
+      return "NO_BASELINE";
     case "heuristic_scorer":
       return "HEURISTIC_SCORER";
   }
+}
+
+/** Tap-labelled outcome of one calibration sampler; reported, never judged. */
+export interface CalibrationSourceMetrics {
+  surfaced: number;
+  wanted: number;
+  notWanted: number;
+  precision: number | null;
 }
 
 export interface ShadowMetrics {
@@ -88,9 +99,20 @@ export interface ShadowMetrics {
   inferred: number;
   /** wanted/not_wanted labels whose source is inferred; excluded from precision. */
   inferredDecided: number;
+  /** All surfaced rows including calibration samples; diagnostic, and the input to the breaker. */
   precision: number | null;
   calibrationSurfaced: number;
+  /** Tap-labelled gate proposals only (excludes `calibration:` rows); the verdict is judged on this. */
+  precisionGate: number | null;
+  /** @deprecated alias of precisionGate; remove after one release. */
   precisionGateOnly: number | null;
+  gateWanted: number;
+  gateNotWanted: number;
+  verdictBasis: "gate_only";
+  calibration: {
+    forecastCards: CalibrationSourceMetrics;
+    queuedSamples: CalibrationSourceMetrics;
+  };
   wilsonLower: number | null;
   pessimisticPrecision: number | null;
   coverage: number | null;
@@ -169,8 +191,18 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
   const precision = ratio(wanted, decided);
   const calibrationRows = surfaced.filter((r) => r.reason?.startsWith("calibration:") === true);
   const gateOnlyRows = surfaced.filter((r) => r.reason?.startsWith("calibration:") !== true);
-  const gateOnlyWanted = gateOnlyRows.filter((r) => r.label === "wanted" && sourceOf(r) === "tap").length;
-  const gateOnlyDecided = gateOnlyWanted + gateOnlyRows.filter((r) => r.label === "not_wanted" && sourceOf(r) === "tap").length;
+  const tapCount = (rs: ShadowRow[], label: ShadowLabel) =>
+    rs.filter((r) => r.label === label && sourceOf(r) === "tap").length;
+  const gateWanted = tapCount(gateOnlyRows, "wanted");
+  const gateNotWanted = tapCount(gateOnlyRows, "not_wanted");
+  const gateDecided = gateWanted + gateNotWanted;
+  const precisionGate = ratio(gateWanted, gateDecided);
+  const calibrationSource = (prefix: string): CalibrationSourceMetrics => {
+    const rs = calibrationRows.filter((r) => r.reason?.startsWith(prefix) === true);
+    const w = tapCount(rs, "wanted");
+    const nw = tapCount(rs, "not_wanted");
+    return { surfaced: rs.length, wanted: w, notWanted: nw, precision: ratio(w, w + nw) };
+  };
   const focusRows = surfaced.filter((r) => r.mode === "DEEP_FOCUS");
 
   let baselinePrecision = opts.baselinePrecision;
@@ -187,14 +219,19 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     }
   }
 
+  // The verdict is judged on gate proposals only, so the gap is gate precision over the baseline.
   const baselineGap =
-    precision !== null && baselinePrecision !== undefined ? precision - baselinePrecision : null;
+    precisionGate !== null && baselinePrecision !== undefined ? precisionGate - baselinePrecision : null;
 
   // Compare in counts, not floats: wanted/decided >= threshold.
-  const meetsThreshold = wanted >= threshold * decided - 1e-9;
+  const trips = (w: number, d: number) => d >= minLabels && !(w >= threshold * d - 1e-9);
+  // Breaker: all-rows clause is the original rule (never looser); the gate-only clause
+  // stops calibration labels from masking a failing gate.
+  const breakerTripped = trips(wanted, decided) || trips(gateWanted, gateDecided);
   let verdict: ShadowVerdict;
-  if (precision === null || decided < minLabels) verdict = "insufficient_data";
-  else if (!meetsThreshold) verdict = "fail";
+  if (breakerTripped) verdict = "fail";
+  else if (precisionGate === null || gateDecided < minLabels) verdict = "insufficient_data";
+  else if (baselinePrecision === undefined) verdict = "no_baseline";
   else if (baselineGap !== null && baselineGap <= 0) verdict = "heuristic_scorer";
   else verdict = "pass";
 
@@ -211,7 +248,15 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     inferredDecided,
     precision,
     calibrationSurfaced: calibrationRows.length,
-    precisionGateOnly: ratio(gateOnlyWanted, gateOnlyDecided),
+    precisionGate,
+    precisionGateOnly: precisionGate,
+    gateWanted,
+    gateNotWanted,
+    verdictBasis: "gate_only",
+    calibration: {
+      forecastCards: calibrationSource("calibration: forecast card"),
+      queuedSamples: calibrationSource("calibration: conservative queued sample"),
+    },
     wilsonLower: wilsonLowerBound(wanted, decided),
     pessimisticPrecision: ratio(wanted, decided + ignored),
     coverage: ratio(decided, surfaced.length),
@@ -232,7 +277,7 @@ export function computeShadowMetrics(rows: ShadowRow[], opts: ShadowMetricsOptio
     minLabels,
     verdict,
     automatedVerdict: toAutomatedVerdict(verdict),
-    breakerTripped: verdict === "fail",
+    breakerTripped,
   };
 }
 
@@ -409,6 +454,10 @@ function pct(v: number | null): string {
   return v === null ? "n/a" : `${(v * 100).toFixed(1)}%`;
 }
 
+function calibrationLine(c: CalibrationSourceMetrics): string {
+  return `surfaced ${c.surfaced}, wanted ${c.wanted}, not_wanted ${c.notWanted}, precision ${pct(c.precision)}`;
+}
+
 export function formatShadowReport(m: ShadowMetrics): string {
   const baselineStr =
     m.baselineGap === null
@@ -422,8 +471,11 @@ export function formatShadowReport(m: ShadowMetrics): string {
     `  Surfaced:            ${m.surfaced}  (unlabeled ${m.unlabeled})`,
     `  Labels:              wanted ${m.wanted}, not_wanted ${m.notWanted}, already_did ${m.alreadyDid}, ignored ${m.ignored}`,
     `  Label sources:       tapped ${m.tapped}, inferred ${m.inferred} (inferred wanted/not_wanted excluded from precision: ${m.inferredDecided})`,
-    `  Precision@surface:   ${pct(m.precision)}  (Wilson 95% lower ${pct(m.wilsonLower)}, pessimistic ${pct(m.pessimisticPrecision)})`,
-    `  Calibration:        surfaced ${m.calibrationSurfaced}, precision gate only ${pct(m.precisionGateOnly)}`,
+    `  Precision (gate):    ${pct(m.precisionGate)}  (gate proposals only; wanted ${m.gateWanted}, not_wanted ${m.gateNotWanted}; verdict basis)`,
+    `  Precision (all):     ${pct(m.precision)}  (Wilson 95% lower ${pct(m.wilsonLower)}, pessimistic ${pct(m.pessimisticPrecision)}; diagnostic, breaker input)`,
+    `  Calibration:         surfaced ${m.calibrationSurfaced} (excluded from verdict, included in breaker)`,
+    `    forecast cards:    ${calibrationLine(m.calibration.forecastCards)}`,
+    `    queued samples:    ${calibrationLine(m.calibration.queuedSamples)}`,
     `  Coverage:            ${pct(m.coverage)}`,
     `  Focus regret:        ${m.focusRegret}  (target 0)`,
     `  Focus outcomes:      already_did ${m.focusOutcomes.alreadyDid}, ignored ${m.focusOutcomes.ignored}, tapped wanted ${m.focusOutcomes.wanted}, tapped not_wanted ${m.focusOutcomes.notWanted}, inferred wanted ${m.focusOutcomes.inferredWanted}, inferred not_wanted ${m.focusOutcomes.inferredNotWanted}, unlabeled ${m.focusOutcomes.unlabeled}`,

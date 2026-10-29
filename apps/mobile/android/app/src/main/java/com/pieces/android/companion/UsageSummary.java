@@ -22,11 +22,15 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Turns Android's app-usage events into one compact telemetry event per sync window.
+ * Turns Android's app-usage events into telemetry.
  *
- * Output goes through NativeTelemetrySync.queueScreenCapture() with package "android.usage", so it rides the same
- * durable outbox and reaches the daemon as a normal system_telemetry event. The text lists only app labels, foreground
- * time and open counts; no screen content. It does nothing unless Usage Access is granted.
+ * 1. One compact summary per sync window (legacy route): NativeTelemetrySync.queueAppTransitions() with package
+ *    "android.usage". The text lists only app labels, foreground time and open counts; no screen content.
+ * 2. One v3 event per foreground arrival and per screen/keyguard state change (queueArrivalsIfDue), only while the
+ *    "app_switches" consent toggle is on.
+ *
+ * Privacy-excluded apps (AccessibilityPlugin.isPrivacyExcluded) are never named by either path. Both do nothing
+ * unless Usage Access is granted.
  */
 final class UsageSummary {
     private static final String TAG = "UsageSummary";
@@ -46,8 +50,201 @@ final class UsageSummary {
                 == AppOpsManager.MODE_ALLOWED;
     }
 
+    // ---- Foreground arrivals: one v3 event per app arrival (ANDROID_SENSOR_SPEC_2026-10-29.md section A3) ----
+
+    private static final String KEY_ARR_TS = "last_arrival_ts";
+    private static final String KEY_ARR_PKG = "last_pkg";
+    private static final String KEY_ARR_PKG_TS = "last_arrival_pkg_ts";
+    private static final String KEY_ARR_RUN = "arrivals_last_run_ms";
+    private static final long ARRIVALS_MIN_GAP_MS = 60_000L;
+    private static final long ARRIVALS_FIRST_LOOKBACK_MS = 15L * 60_000L;
+    static final int MAX_ARRIVALS_PER_CALL = 500;
+    // UsageEvents.Event.MOVE_TO_FOREGROUND and SCREEN_INTERACTIVE..KEYGUARD_HIDDEN (the latter are API 28+; plain
+    // literals keep minSdk 26 code valid, and older devices simply never report those types).
+    static final int EV_FOREGROUND = 1;
+    static final int EV_SCREEN_INTERACTIVE = 15;
+    static final int EV_SCREEN_NON_INTERACTIVE = 16;
+    static final int EV_KEYGUARD_SHOWN = 17;
+    static final int EV_KEYGUARD_HIDDEN = 18;
+
+    /** A UsageEvents entry reduced to what the arrival logic needs. */
+    static final class RawEvent {
+        final String pkg;
+        final int type;
+        final long ts;
+        RawEvent(String pkg, int type, long ts) {
+            this.pkg = pkg;
+            this.type = type;
+            this.ts = ts;
+        }
+    }
+
+    /** Package metadata lookup; a seam so the arrival logic runs without a PackageManager. */
+    interface AppInfo {
+        String label(String pkg);
+        String category(String pkg);
+    }
+
+    /** Cursor persisted between calls. Re-querying (cursor, now] never re-emits or alters an event. */
+    static final class ArrivalState {
+        long lastArrivalTs = 0L;
+        String lastPkg = null;
+        long lastArrivalPkgTs = 0L;
+    }
+
+    static final class Emitted {
+        final String eventId;
+        final long ts;
+        final JSONObject payload;
+        Emitted(String eventId, long ts, JSONObject payload) {
+            this.eventId = eventId;
+            this.ts = ts;
+            this.payload = payload;
+        }
+    }
+
+    static final class ArrivalResult {
+        final List<Emitted> events = new ArrayList<>();
+        int dropped = 0;
+    }
+
+    /**
+     * Pure: turns time-ordered UsageEvents into app_foreground / screen_session events and advances `st`.
+     * A privacy-excluded app is emitted only as category "excluded", with no package and no label, on both the `to`
+     * and `from` ends. Noise apps (launcher, system UI...) map to category home/system and keep their package.
+     */
+    static ArrivalResult buildArrivals(List<RawEvent> raw, ArrivalState st, AppInfo info) {
+        ArrivalResult out = new ArrivalResult();
+        for (RawEvent ev : raw) {
+            if (ev.ts <= st.lastArrivalTs) continue; // strictly after the cursor
+            try {
+                if (ev.type == EV_FOREGROUND) {
+                    if (ev.pkg == null || ev.pkg.equals(st.lastPkg)) {
+                        st.lastArrivalTs = ev.ts;
+                        continue;
+                    }
+                    out.events.add(arrival(ev, st, info));
+                    st.lastPkg = ev.pkg;
+                    st.lastArrivalPkgTs = ev.ts;
+                } else if (ev.type >= EV_SCREEN_INTERACTIVE && ev.type <= EV_KEYGUARD_HIDDEN) {
+                    String state = ev.type == EV_SCREEN_INTERACTIVE ? "interactive"
+                        : ev.type == EV_SCREEN_NON_INTERACTIVE ? "non_interactive"
+                        : ev.type == EV_KEYGUARD_SHOWN ? "keyguard_shown" : "keyguard_hidden";
+                    JSONObject p = new JSONObject();
+                    p.put("type", "screen_session");
+                    p.put("state", state);
+                    p.put("src", "usage_stats");
+                    out.events.add(new Emitted("ss-" + ev.ts + "-" + state, ev.ts, p));
+                }
+            } catch (Exception ignored) {}
+            st.lastArrivalTs = ev.ts;
+        }
+        while (out.events.size() > MAX_ARRIVALS_PER_CALL) { // oldest dropped, counted
+            out.events.remove(0);
+            out.dropped++;
+        }
+        return out;
+    }
+
+    private static Emitted arrival(RawEvent ev, ArrivalState st, AppInfo info) throws Exception {
+        String pkg = ev.pkg;
+        String label = info.label(pkg);
+        boolean excluded = AccessibilityPlugin.isPrivacyExcluded(pkg, label);
+        JSONObject p = new JSONObject();
+        p.put("type", "app_foreground");
+        p.put("event", "APP_TRANSITION");
+        if (excluded) {
+            p.put("category", "excluded");
+        } else {
+            p.put("to", pkg);
+            p.put("category", AccessibilityPlugin.isNoise(pkg) ? AccessibilityPlugin.noiseCategory(pkg) : info.category(pkg));
+            p.put("app_label", label);
+        }
+        if (st.lastPkg != null) {
+            if (AccessibilityPlugin.isPrivacyExcluded(st.lastPkg, info.label(st.lastPkg))) {
+                p.put("from_category", "excluded");
+            } else {
+                p.put("from", st.lastPkg);
+                p.put("from_category", AccessibilityPlugin.isNoise(st.lastPkg)
+                    ? AccessibilityPlugin.noiseCategory(st.lastPkg) : info.category(st.lastPkg));
+            }
+            p.put("dwell_prev_ms", Math.max(0L, ev.ts - st.lastArrivalPkgTs));
+        }
+        p.put("excluded", excluded);
+        p.put("src", "usage_stats");
+        // Excluded apps hash a constant so the id cannot be dictionary-matched back to a package.
+        String idKey = excluded ? "excluded" : pkg;
+        return new Emitted("fg-" + ev.ts + "-" + NativeTelemetrySync.sha1Hex(idKey + "|x").substring(0, 8), ev.ts, p);
+    }
+
+    /**
+     * Queues arrival and screen-session events since the last call, at most once a minute. Does nothing unless the
+     * master and "app_switches" consent toggles are on and Usage Access is granted. The cursor only advances past
+     * events that were processed, and re-processing is idempotent (deterministic ids and payloads).
+     */
+    static synchronized void queueArrivalsIfDue(Context ctx) {
+        try {
+            if (!SensorConsentPlugin.isEnabled(ctx, SensorCapabilities.KEY_APP_SWITCHES)) return;
+            if (!hasUsageAccess(ctx)) return;
+            SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            long now = System.currentTimeMillis();
+            if (now - prefs.getLong(KEY_ARR_RUN, 0L) < ARRIVALS_MIN_GAP_MS) return;
+            UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
+            if (usm == null) return;
+
+            ArrivalState st = new ArrivalState();
+            st.lastArrivalTs = prefs.getLong(KEY_ARR_TS, 0L);
+            st.lastPkg = prefs.getString(KEY_ARR_PKG, null);
+            st.lastArrivalPkgTs = prefs.getLong(KEY_ARR_PKG_TS, 0L);
+            long start = st.lastArrivalTs == 0L ? now - ARRIVALS_FIRST_LOOKBACK_MS
+                : Math.max(st.lastArrivalTs + 1L, now - MAX_LOOKBACK_MS);
+
+            List<RawEvent> raw = new ArrayList<>();
+            UsageEvents events = usm.queryEvents(start, now);
+            UsageEvents.Event ev = new UsageEvents.Event();
+            while (events.hasNextEvent()) {
+                events.getNextEvent(ev);
+                raw.add(new RawEvent(ev.getPackageName(), ev.getEventType(), ev.getTimeStamp()));
+            }
+            final PackageManager pm = ctx.getPackageManager();
+            final Map<String, String> labels = new HashMap<>();
+            ArrivalResult res = buildArrivals(raw, st, new AppInfo() {
+                @Override public String label(String pkg) {
+                    String l = labels.get(pkg);
+                    if (l == null) {
+                        l = UsageSummary.label(pm, pkg);
+                        labels.put(pkg, l);
+                    }
+                    return l;
+                }
+                @Override public String category(String pkg) {
+                    try {
+                        return AccessibilityPlugin.categoryLabel(pm.getApplicationInfo(pkg, 0).category);
+                    } catch (PackageManager.NameNotFoundException e) {
+                        return "Uncategorized";
+                    }
+                }
+            });
+            for (Emitted e : res.events) {
+                NativeTelemetrySync.queueV3Event(ctx, e.eventId, e.ts, e.payload);
+            }
+            if (res.dropped > 0) Log.w(TAG, "Dropped " + res.dropped + " oldest arrivals over the per-call cap");
+            prefs.edit()
+                .putLong(KEY_ARR_TS, st.lastArrivalTs)
+                .putString(KEY_ARR_PKG, st.lastPkg)
+                .putLong(KEY_ARR_PKG_TS, st.lastArrivalPkgTs)
+                .putLong(KEY_ARR_RUN, now)
+                .apply();
+        } catch (Exception e) {
+            Log.e(TAG, "queueArrivalsIfDue failed", e);
+        }
+    }
+
+    // ---- Legacy per-window summary ----
+
     /** Called from the periodic sync job. Queues a summary for the time since the last one, at most every ~14 minutes. */
     static void queueIfDue(Context ctx) {
+        queueArrivalsIfDue(ctx);
         try {
             SharedPreferences prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
             long now = System.currentTimeMillis();
@@ -76,6 +273,7 @@ final class UsageSummary {
         UsageStatsManager usm = (UsageStatsManager) ctx.getSystemService(Context.USAGE_STATS_SERVICE);
         if (usm == null) return "unavailable";
 
+        PackageManager pm = ctx.getPackageManager();
         Map<String, Long> resumedAt = new HashMap<>();
         Map<String, Long> millis = new HashMap<>();
         Map<String, Integer> opens = new HashMap<>();
@@ -99,20 +297,25 @@ final class UsageSummary {
                     if (lastPkg != null && !lastPkg.equals(pkg) && !lastPkg.equals(ctx.getPackageName()) && !pkg.equals(ctx.getPackageName())) {
                         switches++;
                         long dwellMs = lastResumedAt > 0L ? Math.max(0L, nowTs - lastResumedAt) : 0L;
-                        try {
-                            JSONObject tr = new JSONObject();
-                            tr.put("from", lastPkg);
-                            tr.put("to", pkg);
-                            tr.put("dwell_ms", dwellMs);
-                            tr.put("ts", nowTs);
-                            Calendar cal = Calendar.getInstance();
-                            cal.setTimeInMillis(nowTs);
-                            tr.put("hour", cal.get(Calendar.HOUR_OF_DAY));
-                            recentTransitions.add(tr);
-                            if (recentTransitions.size() > 30) {
-                                recentTransitions.remove(0);
-                            }
-                        } catch (Exception ignored) {}
+                        // A privacy-excluded app still counts as a switch but is never named in the transitions.
+                        boolean hidden = AccessibilityPlugin.isPrivacyExcluded(lastPkg, label(pm, lastPkg))
+                            || AccessibilityPlugin.isPrivacyExcluded(pkg, label(pm, pkg));
+                        if (!hidden) {
+                            try {
+                                JSONObject tr = new JSONObject();
+                                tr.put("from", lastPkg);
+                                tr.put("to", pkg);
+                                tr.put("dwell_ms", dwellMs);
+                                tr.put("ts", nowTs);
+                                Calendar cal = Calendar.getInstance();
+                                cal.setTimeInMillis(nowTs);
+                                tr.put("hour", cal.get(Calendar.HOUR_OF_DAY));
+                                recentTransitions.add(tr);
+                                if (recentTransitions.size() > 30) {
+                                    recentTransitions.remove(0);
+                                }
+                            } catch (Exception ignored) {}
+                        }
                     }
                     lastPkg = pkg;
                     lastResumedAt = nowTs;
@@ -131,7 +334,10 @@ final class UsageSummary {
 
         List<Map.Entry<String, Long>> ranked = new ArrayList<>();
         for (Map.Entry<String, Long> e : millis.entrySet()) {
-            if (e.getValue() >= MIN_APP_MS && !e.getKey().equals(ctx.getPackageName())) ranked.add(e);
+            if (e.getValue() >= MIN_APP_MS && !e.getKey().equals(ctx.getPackageName())
+                && !AccessibilityPlugin.isPrivacyExcluded(e.getKey(), label(pm, e.getKey()))) {
+                ranked.add(e);
+            }
         }
         Collections.sort(ranked, (a, b) -> Long.compare(b.getValue(), a.getValue()));
         // Advance the window even when nothing was used, so idle stretches are not re-scanned.
@@ -144,7 +350,6 @@ final class UsageSummary {
         sb.append("App usage ").append(hm.format(new Date(start))).append("-").append(hm.format(new Date(end)))
             .append(" (").append(switches).append(" app switches)\n");
         long total = 0L;
-        PackageManager pm = ctx.getPackageManager();
         for (int i = 0; i < ranked.size() && i < MAX_APPS; i++) {
             Map.Entry<String, Long> e = ranked.get(i);
             total += e.getValue();
