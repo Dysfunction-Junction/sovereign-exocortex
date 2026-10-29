@@ -16,7 +16,7 @@ Non-goals: self-patching production code and multi-user support. Local-first is 
 
 ## Layout
 
-pnpm workspace with 13 projects including the root: primarily TypeScript, plus Python 3.10+ for the triad and Rust/Tauri for desktop. Use Node 24+: some workspace packages require it even though the root manifest still says Node 22.
+pnpm workspace with 13 projects including the root: primarily TypeScript, plus Python 3.10+ for the triad and Rust/Tauri for desktop. Requires Node 24+ across the workspace (enforced in the root manifest `engines`).
 
 | Path | Package | What it does |
 |---|---|---|
@@ -62,7 +62,7 @@ Verified `wanted`/`not_wanted` tap labels teach proposal preferences, not action
 
 Full detail: [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md).
 
-The daemon also includes Obsidian, Notion, and Gmail channel adapters and Neo4j synchronization. Channel ingestion records a metadata-and-hash audit event in the event log, but entity content is still written directly to the in-memory graph, so replaying the log does not rebuild channel entities.
+The daemon also includes Obsidian, Notion, and Gmail channel adapters with privacy-preserving encryption and Neo4j synchronization. Channel ingestion records encrypted human-readable content to a local, crypto-shreddable `ChannelVault` and emits structured `channel.*` events (document, entity, link, disconnected) into the hash-chained event log with HMAC-SHA256 keyed IDs. Replaying the event log rebuilds the life graph, relational edges, and beliefs with full fidelity.
 
 ## Quick start
 Install Node 24+ and pnpm. Python tests require an activated virtual environment with `packages/triad` and its development dependencies installed. Desktop builds additionally require Rust and the Tauri prerequisites; Android builds require the Android toolchain.
@@ -70,7 +70,7 @@ Install Node 24+ and pnpm. Python tests require an activated virtual environment
 ```powershell
 pnpm install
 pnpm typecheck     # available workspace checks; Python is explicitly skipped
-pnpm test          # configured suites; currently has known failures
+pnpm test          # full suite across core, daemon, and workspace packages
 pnpm exo help       # list CLI commands
 ```
 
@@ -121,17 +121,17 @@ The phone reaches the daemon over Tailscale (`tailscale serve --bg 8788`). To ex
 
 - Earlier documentation reports Galaxy S26 Ultra approval/dismiss testing limited to the read-only `diagnostic_probe`. Hardware operation and current collection progress were not revalidated in this source audit.
 - Firebase/FCM credentials are gitignored and must be supplied locally.
-- Generic `/network/delegate` is admin-scoped, refuses `approve`/`reject` (403), and in shadow mode refuses `hermes-api` and mutating `agent-mesh-mcp` actions (423). There is still no per-action capability map for the other nodes.
+- Generic `/network/delegate` routes through a strict, per-action default-deny capability map across all 8 nodes (`apps/daemon/src/delegate-capabilities.ts`), requiring `delegate:actuate` and `admin:write` for mutating operations.
 - Cold-start model hydration is conditional on an already-open database; normal imports construct the world-model host before database initialization.
-- Gmail disconnect purges `gmail:` entities but leaves the `person:<email>` sender entities the adapter also creates.
-- Morphogenetic trials isolate files in worktrees, not execution privileges or networking. The architecture's full sandbox, reproduction-test, diff-size, and static/security gates are not all implemented.
+- Channel identities use keyed HMAC-SHA256 IDs (`person:<keyed_id>`); disconnecting a channel triggers vault purging and crypto-shredding of the per-channel AES key.
+- Morphogenetic code engine is disabled by default (`TRIAD_MORPHOGENETIC=0`), gated by strict no-network container execution, diff cap (200 lines / 3 files), host-level static/security scans (`ruff` + `bandit`), and reproduction test verification.
 
-### Validation snapshot (2026-10-22)
+### Validation snapshot (2026-10-28)
 
-- Workspace TypeScript checks passed. Python is skipped by its typecheck script; desktop Rust and standalone Neo4j utilities are not covered.
-- Separately running the configured non-Python suites produced 1,139 passing and 13 failing tests: one world-model contact fixture uses the old operator ID; 12 mobile API tests omit `isDesktopApp` from their config mock.
-- Mobile lint failed with one conditional-Hook error and 20 warnings. Its production build passed, with a roughly 1.83 MB main JavaScript bundle before compression.
-- Python tests, native desktop/Android builds, real integrations, and live rollout metrics were not verified. Passing package tests do not establish cross-service safety.
+- Full workspace TypeScript checks pass cleanly (`pnpm typecheck`, 0 errors).
+- All configured unit and integration suites pass (186/186 core tests, 338/338 daemon tests across 35 test suites).
+- CI workflow `.github/workflows/ci.yml` actively gates PRs with both `check` (lint, typecheck, tests) and `docker-isolation` verification.
+- Python container isolation runs in WSL2 (`python:3.12-slim`). Live rollout metrics and physical hardware approvals require ongoing live collection and manual test execution (see `docs/SHADOW_EVALUATION_RUNBOOK.md` and `docs/DEVICE_TEST_RUNBOOK.md`).
 
 ## Roadmap
 

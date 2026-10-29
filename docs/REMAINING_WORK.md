@@ -29,11 +29,23 @@ If this file and the code disagree, the code wins: fix this file in the same PR.
 
 ## 1. Where things stand (merged on `main`)
 
-Phase 0 (0.1-0.8), 2.1-2.2 + 2.1b + 2.1c (#49), 2.3 scripted executors (#47), 2.5 kill-switch drill (#51), 2.4 (engine off by default, diff cap, reproduction gate), 2.4a, 3.1-3.3a, 4.0, N.1, Living Brain sizing + usability (#46, #48), triad off Ollama (#22). CI runs on every PR (`check` blocking, `docker-isolation` too).
+Phase 0 (0.1-0.8), 2.1-2.2 + 2.1b + 2.1c (#49), 2.3 scripted executors (#47), 2.5 kill-switch drill (#51), 2.4 (engine off by default, diff cap, reproduction gate), 2.4a, 3.1-3.3a, 4.0, N.1, Living Brain sizing + usability (#46, #48), triad off Ollama (#22).
+Finish line tasks merged:
+- R1 (2.6): Scope check on `/v3/channels/*` (#55)
+- R2 (2.3): Scripted executors for T0/T1 actions (#47)
+- R3 (2.4b): Morphogenetic static & security scan gate (#56)
+- R4 (4.0a): Calibration surfacing in shadow mode (#57)
+- R5 (1.1): Channel event schema and private content vault (#58)
+- R6 (1.2): Adapters emit channel events without plaintext (#61)
+- R7 (1.3): World model projects channel events into graph (#62)
+- R8 (1.4-1.6): Async consumer, replay integration test, HMAC keyed IDs, and channel resync CLI (#64, docs #65)
+- R10 (2.3a): Re-tier `self_heal_restore` to T2 (#59)
+
+All rows on `sovereign-exocortex` are **Done**. Only R9 (home proxy `/mobile/ask` off Ollama, in `pieces-android-shizuku-fix`) remains. CI runs on every PR (`check` blocking, `docker-isolation` too).
 
 ## 2. Open PRs to land first
 
-None. #47, #49 and #51 are merged. R2 (2.3) is **Done**: skip it.
+None. All finish-line PRs on `sovereign-exocortex` are merged into `main`.
 
 ## 3. Tasks
 
