@@ -1238,7 +1238,41 @@ public class NativeTelemetrySync {
     static final int V3_MAX_EVENTS_PER_POST = 100; // server limit on /v3/events
     static final int V3_MAX_EVENT_ID_CHARS = 128;
     private static final java.util.Set<String> V3_TYPES = new java.util.HashSet<>(java.util.Arrays.asList(
-        "app_foreground", "screen_session", "sensor_window", "sensor_caps", "sensor_consent"));
+        "app_foreground", "screen_session", "sensor_window", "sensor_caps", "sensor_consent",
+        "mic_window", "place_window", "place_event", "typing_window"));
+
+    /**
+     * Exact payload keys allowed per sensitive type. Any other key (ssid, bssid, text, summary, ...) quarantines the
+     * event, so a bug in a sampler cannot leak content into the append-only log. Only SH edits this map; a new field
+     * is a reviewed change here.
+     */
+    private static final java.util.Map<String, java.util.Set<String>> V3_KEY_ALLOWLIST = new java.util.HashMap<>();
+    static {
+        V3_KEY_ALLOWLIST.put("mic_window", keys("type", "window_start", "window_end", "dur_ms", "vad", "sample_ms",
+            "period_ms", "samples", "speech_samples", "speech_frac", "call_frac", "skipped"));
+        V3_KEY_ALLOWLIST.put("place_window", keys("type", "window_start", "window_end", "place_id", "label", "dwell_ms",
+            "conf", "src"));
+        V3_KEY_ALLOWLIST.put("place_event", keys("type", "event", "place_id", "label", "ts"));
+        // Counts and timings only, never characters or words.
+        V3_KEY_ALLOWLIST.put("typing_window", keys("type", "window_start", "window_end", "dur_ms", "events", "chars_added",
+            "chars_deleted", "bursts", "active_ms", "median_gap_ms"));
+    }
+
+    private static java.util.Set<String> keys(String... k) {
+        return new java.util.HashSet<>(java.util.Arrays.asList(k));
+    }
+
+    /** Null when the payload's keys are within its type's allowlist (types without one are unrestricted). */
+    static String allowlistProblem(String type, JSONObject payload) {
+        java.util.Set<String> allowed = V3_KEY_ALLOWLIST.get(type);
+        if (allowed == null || payload == null) return null;
+        java.util.Iterator<String> it = payload.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            if (!allowed.contains(k)) return "key not allowed for " + type + ": " + k;
+        }
+        return null;
+    }
 
     /** Device id inside a gateway JWT ("deviceId"); the LAN token is opaque, so fall back like flush.ts does. */
     static String deviceIdFromToken(String token) {
@@ -1297,6 +1331,7 @@ public class NativeTelemetrySync {
                     String type = payload instanceof JSONObject ? ((JSONObject) payload).optString("type") : null;
                     String problem = v3Problem(e.optString("id"), v3.optLong("ts_device", 0L), payload, type);
                     if (problem == null && !V3_TYPES.contains(type)) problem = "unknown type " + type;
+                    if (problem == null) problem = allowlistProblem(type, (JSONObject) payload);
                     if (problem != null) {
                         out.invalid.add(new String[]{e.optString("id"), problem});
                         continue;

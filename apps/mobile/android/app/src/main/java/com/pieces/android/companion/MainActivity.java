@@ -16,6 +16,8 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(SecureCredentialsPlugin.class);
         registerPlugin(PairingPlugin.class);
         registerPlugin(SensorConsentPlugin.class);
+        registerPlugin(PlaceLabelPlugin.class);
+        registerPlugin(TypedTextPlugin.class);
         super.onCreate(savedInstanceState);
     }
 

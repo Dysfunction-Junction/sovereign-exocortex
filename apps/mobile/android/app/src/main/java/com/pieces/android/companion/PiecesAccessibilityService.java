@@ -88,6 +88,9 @@ public class PiecesAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        // Typed-text capture sees the event first, before getSource(), and consumes text-change events. Its kill
+        // switch is checked inside, before any text is read. A no-op (false) unless typed_text consent is on.
+        if (TypedTextCapture.intercept(this, event)) return;
         if (event == null || event.getSource() == null) return;
 
         // Master switch mirrored from the JS-side Setup toggle (config.ts's
@@ -457,6 +460,17 @@ public class PiecesAccessibilityService extends AccessibilityService {
                 var == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
         if (pw) return;
 
+        // Editable fields hold what the user is typing. Typed content never rides the screen-context push; only
+        // the typed-text path may read it, and it never leaves the phone. Labels and hints are still read below.
+        if (node.isEditable()) {
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                extractText(child, texts, depth + 1, charBudget, titleFound);
+                if (child != null) child.recycle();
+            }
+            return;
+        }
+
         boolean clickable = node.isClickable();
 
         if (node.getText() != null && node.getText().length() > 0) {
@@ -633,6 +647,9 @@ public class PiecesAccessibilityService extends AccessibilityService {
         initClipboardListener();
         NativeHardwareTelemetry.initSensors(this); // consent-gated
         SensorWindowSampler.start(this);
+        MicWindowSampler.start(this);   // consent-gated, runs inside this service (no foreground service)
+        PlaceSampler.start(this);       // consent-gated
+        TypedTextCapture.start(this);   // consent-gated
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
         syncHandler.postDelayed(periodicSyncRunnable, PERIODIC_SYNC_INTERVAL_MS);
@@ -650,6 +667,9 @@ public class PiecesAccessibilityService extends AccessibilityService {
         cleanupClipboardListener();
         NativeHardwareTelemetry.stopSensors();
         SensorWindowSampler.stop();
+        MicWindowSampler.stop();
+        PlaceSampler.stop();
+        TypedTextCapture.stop();
         syncHandler.removeCallbacks(periodicSyncRunnable);
         super.onDestroy();
     }

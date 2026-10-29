@@ -29,9 +29,11 @@ import {
   listSmsContacts, getSmsAllowlist, setSmsAllowlist, type SmsContact,
 } from "../lib/smsBackfill";
 import {
-  SENSORS, MASTER_COPY, getSensorState, setSensorToggle, setSensorMaster, refreshSensors,
-  isAvailable, needsActivityPermissionNow, type SensorKey, type SensorState,
+  SENSORS, MASTER_COPY, TYPED_TEXT, getSensorState, setSensorToggle, setSensorMaster, setTypedText, refreshSensors,
+  requestSensorPermission, missingPermission, isAvailable, needsActivityPermissionNow,
+  type SensorKey, type SensorPermission, type SensorState,
 } from "../lib/sensorConsent";
+import { CONTROL_LABELS, getPreferredControl, setPreferredControl, type KillSwitchControl } from "../lib/typedText";
 import { requestPermission } from "../lib/devicePermissions";
 import { Switch } from "../components/Switch";
 import { ScanIcon, CheckIcon, WifiIcon, CloudIcon } from "../components/Icons";
@@ -70,6 +72,7 @@ export default function Setup() {
 
   const [sensorState, setSensorState] = useState<SensorState | null>(null);
   const [sensorBusy, setSensorBusy] = useState(false);
+  const [killControl, setKillControl] = useState<KillSwitchControl>("accessibility_button");
 
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
@@ -87,6 +90,7 @@ export default function Setup() {
 
   async function refreshSensorState() {
     setSensorState(await getSensorState());
+    setKillControl(await getPreferredControl());
   }
 
   // Each change is applied on the phone before the switch moves, so the UI never shows "off" for a running sensor.
@@ -99,6 +103,18 @@ export default function Setup() {
       logRejection("setup.sensorConsent")(e);
     } finally {
       setSensorBusy(false);
+    }
+  }
+
+  async function handleAllowSensorPermission(name: SensorPermission) {
+    await changeSensors(() => requestSensorPermission(name));
+  }
+
+  async function handleKillControl(control: KillSwitchControl) {
+    try {
+      setKillControl(await setPreferredControl(control));
+    } catch (e) {
+      logRejection("setup.typedTextControl")(e);
     }
   }
 
@@ -794,6 +810,22 @@ export default function Setup() {
                     label={info.title}
                     description={available ? info.copy : "Not available on this phone."}
                   />
+                  {(() => {
+                    const missing = missingPermission(sensorState, info);
+                    if (!missing) return null;
+                    const label = missing === "mic" ? "microphone"
+                      : missing === "fineLocation" ? "precise location" : "location \"all the time\"";
+                    return (
+                      <div>
+                        <p className="status-error" style={{ fontSize: 13, margin: "0 0 8px" }}>
+                          The {label} permission is not granted yet.
+                        </p>
+                        <button className="secondary" onClick={() => void handleAllowSensorPermission(missing)}>
+                          Allow {label}
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {needsActivityPermissionNow(sensorState, info) && (
                     <div>
                       <p className="status-error" style={{ fontSize: 13, margin: "0 0 8px" }}>
@@ -811,6 +843,26 @@ export default function Setup() {
               <p className="hint" style={{ margin: 0 }}>Nothing is collected until the Sensors switch is on.</p>
             )}
           </div>
+        </div>
+      )}
+
+      {sensorState && (
+        <div className="panel">
+          <Switch
+            checked={sensorState.typedText}
+            onChange={(next) => void changeSensors(() => setTypedText(next))}
+            disabled={sensorBusy || !sensorState.master}
+            label={TYPED_TEXT.title}
+            description={sensorState.master ? TYPED_TEXT.copy : `${TYPED_TEXT.copy} Turn the Sensors switch on first.`}
+          />
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 10, borderTop: "1px solid var(--border-subtle)" }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Instant off control</span>
+            <select value={killControl} onChange={(e) => void handleKillControl(e.target.value as KillSwitchControl)}>
+              {(Object.keys(CONTROL_LABELS) as KillSwitchControl[]).map((c) => (
+                <option key={c} value={c}>{CONTROL_LABELS[c]}</option>
+              ))}
+            </select>
+          </label>
         </div>
       )}
 

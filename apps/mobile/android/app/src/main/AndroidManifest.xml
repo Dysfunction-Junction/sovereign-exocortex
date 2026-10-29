@@ -61,6 +61,17 @@
             </intent-filter>
         </service>
 
+        <!-- Quick Settings kill switch for typed-text summaries (ANDROID_SENSITIVE_CAPTURE_DESIGN section 1). -->
+        <service
+            android:name=".TypedTextTileService"
+            android:label="Typed-text summaries"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
         <!-- Persistent background sync job to drain outbox across process restarts -->
         <service
             android:name=".TelemetrySyncJobService"
@@ -109,4 +120,12 @@
     <!-- Optional runtime prompts. -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
+
+    <!-- Sensitive capture (opt-in, runtime prompts): mic speech-present yes/no, Wi-Fi place recognition.
+         Deliberately absent: CHANGE_WIFI_STATE, NEARBY_WIFI_DEVICES, FOREGROUND_SERVICE_MICROPHONE. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 </manifest>

@@ -2,13 +2,17 @@ package com.pieces.android.companion;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
 import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -29,7 +33,14 @@ import org.json.JSONObject;
  * outbox, (4) queue a sensor_consent event so the daemon stops using later windows for that key.
  * Data already sent cannot be deleted (the event log is append-only).
  */
-@CapacitorPlugin(name = "SensorConsent")
+@CapacitorPlugin(
+    name = "SensorConsent",
+    permissions = {
+        @Permission(alias = "mic", strings = { android.Manifest.permission.RECORD_AUDIO }),
+        @Permission(alias = "fineLocation", strings = { android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_COARSE_LOCATION }),
+        @Permission(alias = "backgroundLocation", strings = { android.Manifest.permission.ACCESS_BACKGROUND_LOCATION })
+    }
+)
 public class SensorConsentPlugin extends Plugin {
     private static final String PREFS = "sensor_consent_prefs";
     private static final String MASTER = "master";
@@ -42,6 +53,11 @@ public class SensorConsentPlugin extends Plugin {
     static boolean isEnabled(Context ctx, String key) {
         SharedPreferences p = prefs(ctx);
         return p.getBoolean(MASTER, false) && p.getBoolean(key, false);
+    }
+
+    /** Typed-text summaries: master AND its own toggle. Master ON never enables it; master OFF forces it off. */
+    static boolean isTypedTextOn(Context ctx) {
+        return isEnabled(ctx, SensorCapabilities.KEY_TYPED_TEXT);
     }
 
     /** Per-key toggles plus master, as stored (not ANDed). */
@@ -72,8 +88,13 @@ public class SensorConsentPlugin extends Plugin {
      */
     static void applyChange(Context ctx, String key, boolean enabled) {
         Context app = ctx.getApplicationContext();
-        prefs(app).edit().putBoolean(key == null ? MASTER : key, enabled).commit();
+        SharedPreferences.Editor ed = prefs(app).edit().putBoolean(key == null ? MASTER : key, enabled);
+        if (key == null && !enabled) ed.putBoolean(SensorCapabilities.KEY_TYPED_TEXT, false); // master off => typed text off
+        ed.commit();
         SensorWindowSampler.onConsentChanged(app);
+        MicWindowSampler.onConsentChanged(app);
+        PlaceSampler.onConsentChanged(app);
+        TypedTextCapture.onConsentChanged(app);
         NativeHardwareTelemetry.refreshSensors(app);
         if (!enabled) purgeUnsent(app, key);
         try {
@@ -94,9 +115,15 @@ public class SensorConsentPlugin extends Plugin {
             NativeTelemetrySync.purgeUnsentV3(app, "fg-", null);
             NativeTelemetrySync.purgeUnsentV3(app, "ss-", null);
         }
+        if (all || SensorCapabilities.KEY_MIC_SPEECH.equals(key)) NativeTelemetrySync.purgeUnsentV3(app, "mw-", null);
+        if (all || SensorCapabilities.KEY_PLACES.equals(key)) {
+            NativeTelemetrySync.purgeUnsentV3(app, "pw-", null);
+            NativeTelemetrySync.purgeUnsentV3(app, "pe-", null);
+        }
+        if (all || SensorCapabilities.KEY_TYPING_RHYTHM.equals(key)) NativeTelemetrySync.purgeUnsentV3(app, "tw-", null);
         if (all) {
             NativeTelemetrySync.purgeUnsentV3(app, "sw-", null);
-        } else if (!SensorCapabilities.KEY_APP_SWITCHES.equals(key)) {
+        } else if (SensorCapabilities.SENSOR_KEYS.contains(key)) {
             NativeTelemetrySync.purgeUnsentV3(app, "sw-", key); // strips just this sensor from queued windows
         }
     }
@@ -115,6 +142,10 @@ public class SensorConsentPlugin extends Plugin {
         out.put("toggles", t);
         out.put("caps", caps);
         out.put("activityPermission", SensorCapabilities.hasActivityPermission(ctx));
+        out.put("micPermission", ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED);
+        out.put("fineLocation", ctx.checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED);
+        out.put("backgroundLocation", ctx.checkSelfPermission(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED);
+        out.put("typedText", isTypedTextOn(ctx));
         return out;
     }
 
@@ -127,7 +158,8 @@ public class SensorConsentPlugin extends Plugin {
     public void setToggle(PluginCall call) {
         final String key = call.getString("key");
         final Boolean enabled = call.getBoolean("enabled");
-        if (!SensorCapabilities.isKnownKey(key) || enabled == null) {
+        boolean known = SensorCapabilities.isKnownKey(key) || SensorCapabilities.KEY_TYPED_TEXT.equals(key);
+        if (!known || enabled == null) {
             call.reject("unknown sensor key or missing enabled");
             return;
         }
@@ -146,6 +178,38 @@ public class SensorConsentPlugin extends Plugin {
         }
         new Handler(Looper.getMainLooper()).post(() -> {
             applyChange(getContext(), null, enabled);
+            call.resolve(state());
+        });
+    }
+
+    /**
+     * System prompt for "mic" | "fineLocation" | "backgroundLocation". Background location is asked separately, after
+     * fine location (Android 11+ refuses to grant both in one dialog). Granting does not switch anything on.
+     */
+    @PluginMethod
+    public void requestPermission(PluginCall call) {
+        String name = call.getString("name", "");
+        if (!"mic".equals(name) && !"fineLocation".equals(name) && !"backgroundLocation".equals(name)) {
+            call.reject("name must be mic, fineLocation or backgroundLocation");
+            return;
+        }
+        if ("backgroundLocation".equals(name) && getPermissionState("fineLocation") != PermissionState.GRANTED) {
+            call.reject("grant precise location first");
+            return;
+        }
+        if (getPermissionState(name) == PermissionState.GRANTED) {
+            call.resolve(state());
+            return;
+        }
+        requestPermissionForAlias(name, call, "permissionResult");
+    }
+
+    @PermissionCallback
+    private void permissionResult(PluginCall call) {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            // A grant may let a consented sampler start; a denial leaves it counting "perm" skips.
+            MicWindowSampler.onConsentChanged(getContext());
+            PlaceSampler.onConsentChanged(getContext());
             call.resolve(state());
         });
     }

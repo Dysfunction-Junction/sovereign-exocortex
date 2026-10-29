@@ -31,6 +31,15 @@ final class SensorCapabilities {
     static final String KEY_BATTERY = "battery";
     /** Not a hardware sensor: gates app_foreground and screen_session events. */
     static final String KEY_APP_SWITCHES = "app_switches";
+    /** Not hardware sensors: mic speech-present yes/no, Wi-Fi place recognition, typing counts (no content). */
+    static final String KEY_MIC_SPEECH = "mic_speech";
+    static final String KEY_PLACES = "places";
+    static final String KEY_TYPING_RHYTHM = "typing_rhythm";
+    /**
+     * Typed-text summaries. A consent key (stored in the same prefs file) but NOT in ALL_KEYS: it is not a sensor, it
+     * is never part of the sensor_caps toggles, and master ON never enables it.
+     */
+    static final String KEY_TYPED_TEXT = "typed_text";
     /** Magnetometer is deliberately absent: it is an indoor-position fingerprint and is never collected. */
 
     static final List<String> SENSOR_KEYS = Arrays.asList(
@@ -38,7 +47,8 @@ final class SensorCapabilities {
         KEY_PRESSURE, KEY_LIGHT, KEY_PROXIMITY, KEY_AMBIENT_TEMP, KEY_BATTERY);
     static final List<String> ALL_KEYS = Arrays.asList(
         KEY_MOTION, KEY_ROTATION, KEY_STEPS, KEY_SIG_MOTION, KEY_ACTIVITY,
-        KEY_PRESSURE, KEY_LIGHT, KEY_PROXIMITY, KEY_AMBIENT_TEMP, KEY_BATTERY, KEY_APP_SWITCHES);
+        KEY_PRESSURE, KEY_LIGHT, KEY_PROXIMITY, KEY_AMBIENT_TEMP, KEY_BATTERY, KEY_APP_SWITCHES,
+        KEY_MIC_SPEECH, KEY_PLACES, KEY_TYPING_RHYTHM);
 
     private SensorCapabilities() {}
 
