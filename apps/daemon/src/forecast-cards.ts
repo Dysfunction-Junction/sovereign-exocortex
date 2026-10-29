@@ -14,6 +14,7 @@ const DAY_MS = 24 * HOUR_MS;
 const DEFAULT_DAILY_CAP = 4;
 const MAX_DAILY_CAP = 8;
 const MIN_TOP_PROB = 0.5;
+const SAMPLER_VERSION = 1;
 export const FORECAST_REASON = "calibration: forecast card";
 export const FORECAST_INVARIANT = "inv_forecast_card";
 
@@ -47,6 +48,7 @@ export class ForecastCardSampler {
   constructor(
     private readonly nowMs: () => number = Date.now,
     private readonly env: NodeJS.ProcessEnv = process.env,
+    private readonly rng: () => number = Math.random,
   ) {}
 
   run(db: ExocortexDatabase): number {
@@ -70,7 +72,6 @@ export class ForecastCardSampler {
     if (remaining <= 0) return 0;
 
     // Only forecasts that have resolved or expired, so the card never races the live prediction.
-    // Highest-confidence first: those are the ones worth preparing for.
     const rows = raw.prepare(`
       SELECT p.prediction_id, p.candidates, p.made_at
         FROM predictions p
@@ -81,18 +82,35 @@ export class ForecastCardSampler {
        LIMIT 200
     `).all(now - DAY_MS) as unknown as ForecastRow[];
 
-    const ranked = rows
+    const pool = rows
       .map((row) => {
         const top = (JSON.parse(row.candidates) as Array<{ value: string; prob: number }>)[0];
-        return { row, top };
+        return { row, top, weight: top ? Math.max(top.prob, MIN_TOP_PROB) : 0 };
       })
-      .filter((x) => x.top && x.top.prob >= MIN_TOP_PROB)
-      .sort((a, b) => b.top.prob - a.top.prob)
-      .slice(0, remaining);
+      .filter((x) => x.top && x.top.prob >= MIN_TOP_PROB);
+
+    // Weighted draw without replacement, weight = top prob (floored, so every eligible forecast has a chance).
+    // A deterministic top-prob pick would bias Precision@surface and leave no propensities for off-policy
+    // evaluation. selection_prob is the conditional probability at this draw step (weight / remaining weight);
+    // the overall inclusion probability across all draws is larger and is not simply this value.
+    const picks: Array<{ row: ForecastRow; top: { value: string; prob: number }; selectionProb: number; poolSize: number; drawIndex: number }> = [];
+    const draws = Math.min(remaining, pool.length);
+    for (let drawIndex = 0; drawIndex < draws; drawIndex++) {
+      const total = pool.reduce((sum, x) => sum + x.weight, 0);
+      const target = this.rng() * total;
+      let index = pool.length - 1;
+      let cumulative = 0;
+      for (let i = 0; i < pool.length; i++) {
+        cumulative += pool[i].weight;
+        if (target < cumulative) { index = i; break; }
+      }
+      const [chosen] = pool.splice(index, 1);
+      picks.push({ row: chosen.row, top: chosen.top, selectionProb: chosen.weight / total, poolSize: pool.length + 1, drawIndex });
+    }
 
     const recorder = new ShadowRecorder(db, { nowMs: () => now, cooldownMs: 0, shadow: true });
     let created = 0;
-    for (const { row, top } of ranked) {
+    for (const { row, top, selectionProb, poolSize, drawIndex } of picks) {
       const id = `forecast_${row.prediction_id}`;
       const pct = Math.round(top.prob * 100);
       const title = `Forecast: you'd open "${top.value}" next (${pct}%)`;
@@ -108,7 +126,16 @@ export class ForecastCardSampler {
         expectedFreeEnergyScore: 1 - top.prob,
         estimatedRisk: 0,
         urgency: 0.1,
-        actionPayload: { kind: "forecast_card", prediction_id: row.prediction_id, predicted: top.value, prob: top.prob },
+        actionPayload: {
+          kind: "forecast_card",
+          prediction_id: row.prediction_id,
+          predicted: top.value,
+          prob: top.prob,
+          selection_prob: selectionProb,
+          pool_size: poolSize,
+          draw_index: drawIndex,
+          sampler_version: SAMPLER_VERSION,
+        },
       };
       const proposal: ProposalEnvelope = {
         id,
