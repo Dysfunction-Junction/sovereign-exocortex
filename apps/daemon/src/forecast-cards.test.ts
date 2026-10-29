@@ -80,13 +80,19 @@ test("forecast cards: weighted draw without replacement logs hand-computed prope
     const sampler = new ForecastCardSampler(() => localTime(9), { SHADOW: "1", FORECAST_CARD_DAILY_CAP: "3" }, rngOf(0.4, 0.1, 0));
     assert.equal(sampler.run(db), 3);
     const payload = (id: string) => JSON.parse(db.getProposal(`forecast_${id}`)!.action);
+    const snapshot = [{ prediction_id: low, weight: 0.5 }, { prediction_id: mid, weight: 0.6 }, { prediction_id: high, weight: 0.9 }];
+    const runId = payload(mid).run_id as string;
+    assert.match(runId, /^fcr_\d+_[0-9a-f]{8}$/);
     const expected: Array<[string, number, number, number]> = [[mid, 0, 3, 0.3], [low, 1, 2, 0.5 / 1.4], [high, 2, 1, 1]];
     for (const [id, drawIndex, poolSize, prob] of expected) {
       const a = payload(id);
       assert.equal(a.prediction_id, id);
       assert.equal(a.draw_index, drawIndex);
       assert.equal(a.pool_size, poolSize);
-      assert.equal(a.sampler_version, 1);
+      assert.equal(a.sampler_version, 2);
+      assert.equal(a.draws_in_run, 3);
+      assert.deepEqual(a.pool, snapshot, "full pre-draw pool, newest first, weight = top prob");
+      assert.equal(a.run_id, runId);
       near(a.selection_prob, prob);
       assert.ok(a.selection_prob > 0 && a.selection_prob <= 1);
     }
@@ -107,6 +113,54 @@ test("forecast cards: a low-prob eligible forecast can be chosen over stronger o
     assert.equal(a.prediction_id, low);
     assert.equal(a.pool_size, 3);
     near(a.selection_prob, 0.5 / 2.35);
+  } finally {
+    db.close();
+  }
+});
+
+test("forecast cards: run_id is shared within a run; draws_in_run and pool are bounded", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    const ids: string[] = [];
+    for (let i = 1; i <= 230; i++) ids.push(seed(db, i, 0.5 + (i % 5) / 10));
+    seed(db, 231, 0.2);
+    const env = { SHADOW: "1", FORECAST_CARD_DAILY_CAP: "3" };
+    assert.equal(new ForecastCardSampler(() => localTime(9), env, rngOf(0.3, 0.6, 0.9)).run(db), 3);
+    assert.equal(new ForecastCardSampler(() => localTime(10), env, rngOf(0.3)).run(db), 0, "cap reached");
+    const cards = (db.raw.prepare("SELECT proposal_id FROM gate_decisions WHERE reason = ?").all(FORECAST_REASON) as Array<{ proposal_id: string }>)
+      .map((r) => JSON.parse(db.getProposal(r.proposal_id)!.action));
+    assert.equal(cards.length, 3);
+    assert.equal(new Set(cards.map((c) => c.run_id)).size, 1);
+    for (const c of cards) {
+      assert.equal(c.draws_in_run, 3);
+      assert.equal(c.sampler_version, 2);
+      assert.equal(c.pool.length, 199, "200-row query limit minus the one weak forecast");
+      assert.equal(c.pool_size + c.draw_index, 199);
+      assert.ok(c.pool.every((e: { weight: number }) => e.weight >= 0.5));
+    }
+    // Offline propensity check: selection_prob equals weight / (sum of snapshot weights minus earlier picks).
+    const sorted = [...cards].sort((a, b) => a.draw_index - b.draw_index);
+    let remaining = sorted[0].pool.reduce((t: number, e: { weight: number }) => t + e.weight, 0);
+    for (const c of sorted) {
+      const w = c.pool.find((e: { prediction_id: string }) => e.prediction_id === c.prediction_id).weight;
+      near(c.selection_prob, w / remaining);
+      remaining -= w;
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test("forecast cards: draws_in_run is min(remaining, pool) when the pool is small", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    seed(db, 1, 0.9);
+    seed(db, 2, 0.8);
+    assert.equal(new ForecastCardSampler(() => localTime(9), { SHADOW: "1", FORECAST_CARD_DAILY_CAP: "4" }, () => 0).run(db), 2);
+    const cards = (db.raw.prepare("SELECT proposal_id FROM gate_decisions WHERE reason = ?").all(FORECAST_REASON) as Array<{ proposal_id: string }>)
+      .map((r) => JSON.parse(db.getProposal(r.proposal_id)!.action));
+    assert.deepEqual(cards.map((c) => c.draws_in_run), [2, 2]);
+    assert.equal(new Set(cards.map((c) => c.run_id)).size, 1);
   } finally {
     db.close();
   }

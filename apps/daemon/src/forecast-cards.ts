@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import type { GateDecision, InferencePolicy, ProposalEnvelope } from "@exocortex/world-model";
 import { ShadowRecorder } from "./shadow-recorder.js";
@@ -14,7 +15,11 @@ const DAY_MS = 24 * HOUR_MS;
 const DEFAULT_DAILY_CAP = 4;
 const MAX_DAILY_CAP = 8;
 const MIN_TOP_PROB = 0.5;
-const SAMPLER_VERSION = 1;
+const POOL_QUERY_LIMIT = 200;
+// The pool query is LIMIT POOL_QUERY_LIMIT, so the snapshot can never exceed this; the slice is a hard bound on payload size.
+const MAX_POOL_SNAPSHOT = POOL_QUERY_LIMIT;
+// v2: actionPayload adds run_id, draws_in_run and pool (pre-draw snapshot) so exact inclusion probabilities can be computed offline.
+const SAMPLER_VERSION = 2;
 export const FORECAST_REASON = "calibration: forecast card";
 export const FORECAST_INVARIANT = "inv_forecast_card";
 
@@ -79,19 +84,24 @@ export class ForecastCardSampler {
        WHERE p.made_at > ?
          AND NOT EXISTS (SELECT 1 FROM proposals q WHERE q.proposal_id = 'forecast_' || p.prediction_id)
        ORDER BY p.made_at DESC
-       LIMIT 200
+       LIMIT ${POOL_QUERY_LIMIT}
     `).all(now - DAY_MS) as unknown as ForecastRow[];
 
     const pool = rows
       .map((row) => {
         const top = (JSON.parse(row.candidates) as Array<{ value: string; prob: number }>)[0];
-        return { row, top, weight: top ? Math.max(top.prob, MIN_TOP_PROB) : 0 };
+        return { row, top, weight: top ? top.prob : 0 };
       })
       .filter((x) => x.top && x.top.prob >= MIN_TOP_PROB);
+    // The filter above already guarantees prob >= MIN_TOP_PROB, so weight = top prob with no extra floor;
+    // MIN_TOP_PROB acts only as the eligibility threshold, not as a weight floor.
+    const runId = `fcr_${now}_${randomUUID().slice(0, 8)}`;
+    const poolSnapshot = pool.slice(0, MAX_POOL_SNAPSHOT).map((x) => ({ prediction_id: x.row.prediction_id, weight: x.weight }));
 
-    // Weighted draw without replacement, weight = top prob (floored, so every eligible forecast has a chance).
+    // Weighted draw without replacement, weight = top prob (every eligible forecast, prob >= 0.5, has a chance).
     // A deterministic top-prob pick would bias Precision@surface and leave no propensities for off-policy
-    // evaluation. selection_prob is the conditional probability at this draw step (weight / remaining weight);
+    // evaluation. The pre-draw pool, run_id and draws_in_run are logged on every card so the exact successive-sampling
+    // inclusion probability can be recomputed offline. selection_prob is the conditional probability at this draw step (weight / remaining weight);
     // the overall inclusion probability across all draws is larger and is not simply this value.
     const picks: Array<{ row: ForecastRow; top: { value: string; prob: number }; selectionProb: number; poolSize: number; drawIndex: number }> = [];
     const draws = Math.min(remaining, pool.length);
@@ -108,6 +118,7 @@ export class ForecastCardSampler {
       picks.push({ row: chosen.row, top: chosen.top, selectionProb: chosen.weight / total, poolSize: pool.length + 1, drawIndex });
     }
 
+    const drawsInRun = picks.length;
     const recorder = new ShadowRecorder(db, { nowMs: () => now, cooldownMs: 0, shadow: true });
     let created = 0;
     for (const { row, top, selectionProb, poolSize, drawIndex } of picks) {
@@ -134,6 +145,9 @@ export class ForecastCardSampler {
           selection_prob: selectionProb,
           pool_size: poolSize,
           draw_index: drawIndex,
+          run_id: runId,
+          draws_in_run: drawsInRun,
+          pool: poolSnapshot,
           sampler_version: SAMPLER_VERSION,
         },
       };
