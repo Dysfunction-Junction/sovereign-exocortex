@@ -254,6 +254,7 @@ When every gate passes, record 5 s of `AudioRecord(MIC, 16 kHz, mono, PCM16)` an
   - **(c)** a bundled non-AICore model (Gemma via MediaPipe/LiteRT): not Nano, 0.5-1 GB, more battery [I];
   - **(d)** W5 only.
 - The code sits behind a `Summarizer` interface, so D1 blocks nothing else.
+- **D1 decided 2026-10-29: (c) bundled non-AICore model** (Gemma via MediaPipe/LiteRT). The `Summarizer` interface gets a `BundledSummarizer` implementation that runs in the accessibility service process, so it does not depend on the companion being foregrounded. Open for the build: model choice and size, battery cost, and a go/no-go phone test (S5-2) before A5 ships. S5-1 still runs to confirm the Nano limit.
 - **Validation is weak by construction.** Quality can only be judged on the phone, using synthetic text the user types into a test note. The guard catches echoed digits, names and quotes, but not paraphrased sensitive meaning (for example "asked about a diagnosis").
 - **What failure looks like:** generic or empty summaries, invented topics, high reject rates, `BUSY` or quota drops. All of these are visible as counters, never as silent junk.
 
