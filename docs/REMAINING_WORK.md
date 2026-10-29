@@ -40,8 +40,9 @@ Finish line tasks merged:
 - R7 (1.3): World model projects channel events into graph (#62)
 - R8 (1.4-1.6): Async consumer, replay integration test, HMAC keyed IDs, and channel resync CLI (#64, docs #65)
 - R10 (2.3a): Re-tier `self_heal_restore` to T2 (#59)
+- R9: Home proxy `/mobile/ask` off Ollama to llama.cpp (PR #14 in `pieces-android-companion-seamless`)
 
-All rows on `sovereign-exocortex` are **Done**. Only R9 (home proxy `/mobile/ask` off Ollama, in `pieces-android-shizuku-fix`) remains. CI runs on every PR (`check` blocking, `docker-isolation` too).
+All builder rows across both repositories (`sovereign-exocortex` and `pieces-android-shizuku-fix`) are **Done**. Ollama dependency has been retired from all active proxy and runtime execution paths. Ready for owner checklist verification (section 6). CI runs on every PR (`check` blocking, `docker-isolation` too).
 
 ## 2. Open PRs to land first
 
