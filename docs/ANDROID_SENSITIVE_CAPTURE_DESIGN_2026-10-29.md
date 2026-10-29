@@ -190,7 +190,7 @@ When every gate passes, record 5 s of `AudioRecord(MIC, 16 kHz, mono, PCM16)` an
    - dating/adult keywords ("dating", "tinder", "bumble", "hinge", "grindr", "adult");
    - all noise prefixes (IMEs).
    - Email and SMS are allowed.
-   - **Open question for the user:** Messenger, Discord, social apps and the dialer are not named in E2. They stay excluded by default.
+   - **User decision (2026-10-29):** Messenger, Discord, social apps and the dialer stay excluded.
 5. **Field check.** Skip a field when any of these holds:
    - `isPassword()` or a password variation [V 447-457];
    - class `NUMBER`, `PHONE` or `DATETIME`;
@@ -254,7 +254,8 @@ When every gate passes, record 5 s of `AudioRecord(MIC, 16 kHz, mono, PCM16)` an
   - **(c)** a bundled non-AICore model (Gemma via MediaPipe/LiteRT): not Nano, 0.5-1 GB, more battery [I];
   - **(d)** W5 only.
 - The code sits behind a `Summarizer` interface, so D1 blocks nothing else.
-- **D1 decided 2026-10-29: (c) bundled non-AICore model** (Gemma via MediaPipe/LiteRT). The `Summarizer` interface gets a `BundledSummarizer` implementation that runs in the accessibility service process, so it does not depend on the companion being foregrounded. Open for the build: model choice and size, battery cost, and a go/no-go phone test (S5-2) before A5 ships. S5-1 still runs to confirm the Nano limit.
+- **D1 decided 2026-10-29: (c) bundled non-AICore model** (Gemma via MediaPipe/LiteRT). The `Summarizer` interface gets a `BundledSummarizer` implementation that runs in the accessibility service process, so it does not depend on the companion being foregrounded. Battery cost and a go/no-go phone test (S5-2) remain open before A5 ships. S5-1 still runs to confirm the Nano limit.
+- **Model choice (2026-10-29):** evaluate instruction-tuned Gemma 3 1B at 4-bit first. Quality, battery use, package size and runtime compatibility remain to be measured on the phone; S5-2 must pass before enabling A5.
 - **Validation is weak by construction.** Quality can only be judged on the phone, using synthetic text the user types into a test note. The guard catches echoed digits, names and quotes, but not paraphrased sensitive meaning (for example "asked about a diagnosis").
 - **What failure looks like:** generic or empty summaries, invented topics, high reject rates, `BUSY` or quota drops. All of these are visible as counters, never as silent junk.
 
@@ -276,6 +277,14 @@ When every gate passes, record 5 s of `AudioRecord(MIC, 16 kHz, mono, PCM16)` an
 | S5-3: `setServiceInfo` adds and removes text events live. The assigned accessibility button fires the callback rather than toggling the service (Samsung). The tile works. |
 | S5-4: biometric unwrap works and survives a reboot. A new fingerprint enrollment invalidates the key. |
 | S5-5: after a session, `adb logcat` and `run-as … ls databases shared_prefs files` show no raw text. |
+
+## Phone results (2026-10-29, preliminary)
+
+- With the accessibility service running and mic and places enabled, the daemon received `mw-1793305200000` through `mw-1793305800000` and corresponding `pw-` events. Their payloads contained the specified fields; the place source was `wifi_connected`. The 15:30 CDT window still had an unknown place and no label, so place recognition over time remains to be checked.
+- Those microphone windows contained zero samples and 2–3 `unknown` pocket-gate skips each, with no `silenced` skips. No companion recording appeared in `dumpsys audio`. This does not establish whether background recording is silenced: the gate prevented recording. The cause of the missing sensor reading is unconfirmed.
+- Wi-Fi reported 6 foreground and 0 background throttled one-shot requests at both observations. These are global counters, so this is not proof of per-app scan behavior. Source inspection shows `PlaceSampler` does not call `startScan`.
+- A six-minute screen-on observation was completed; pocket behavior and actual background recording remain to be verified.
+- Follow-up at 15:42–15:45 CDT: the user confirmed the phone had been in a pocket for 10–15 minutes, with the screen on. `dumpsys audio` recorded a companion MIC session from 15:43:49 to 15:43:54, not silenced. The 15:40–15:45 window (`mw-1793306700000`) contained two samples and zero `pocket` skips. **S3-3 failed:** the pocket gate allowed a recording. Earlier windows show the `unknown` gate is intermittent, not a permanent failure. Whether another app was on top during these specific samples has not been established.
 
 ## 5. Privacy and threat note
 
