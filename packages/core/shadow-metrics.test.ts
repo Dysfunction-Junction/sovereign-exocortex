@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   computeSameHourYesterdayBaseline,
   computeShadowMetrics,
@@ -53,19 +57,82 @@ describe("computeShadowMetrics", () => {
     expect(m.pessimisticPrecision).toBeCloseTo(18 / 25, 10);
     expect(m.coverage).toBeCloseTo(20 / 30, 10);
     expect(m.unlabeled).toBe(2);
-    expect(m.verdict).toBe("pass");
+    // Sufficient labels and 90% precision, but no comparator: never a pass.
+    expect(m.verdict).toBe("no_baseline");
+    expect(m.automatedVerdict).toBe("NO_BASELINE");
     expect(m.breakerTripped).toBe(false);
+    const ok = computeShadowMetrics(rows({ wanted: 18, not_wanted: 2 }), { ...OPTS, baselinePrecision: 0.5 });
+    expect(ok.verdict).toBe("pass");
+    expect(ok.automatedVerdict).toBe("SUFFICIENT_DATA_PASS");
+    expect(ok.verdictBasis).toBe("gate_only");
   });
 
-  it("includes calibration labels in the gate precision and reports the gate-only precision", () => {
+  it("judges the verdict on gate rows only and reports calibration sources separately", () => {
     const data = [
       row({ id: "ordinary", label: "wanted", label_source: "tap" }),
       row({ id: "calibration", label: "not_wanted", label_source: "tap", reason: "calibration: conservative queued sample" }),
+      row({ id: "card", label: "wanted", label_source: "tap", reason: "calibration: forecast card" }),
     ];
     const m = computeShadowMetrics(data, OPTS);
-    expect(m.precision).toBe(0.5);
-    expect(m.calibrationSurfaced).toBe(1);
+    expect(m.precision).toBeCloseTo(2 / 3, 10);
+    expect(m.calibrationSurfaced).toBe(2);
+    expect(m.precisionGate).toBe(1);
     expect(m.precisionGateOnly).toBe(1);
+    expect(m.gateWanted).toBe(1);
+    expect(m.gateNotWanted).toBe(0);
+    expect(m.calibration.queuedSamples).toEqual({ surfaced: 1, wanted: 0, notWanted: 1, precision: 0 });
+    expect(m.calibration.forecastCards).toEqual({ surfaced: 1, wanted: 1, notWanted: 0, precision: 1 });
+    expect(m.verdict).toBe("insufficient_data");
+  });
+
+  it("counts only gate rows toward minLabels: calibration taps cannot satisfy it", () => {
+    const data = [
+      ...rows({ wanted: 5 }),
+      ...Array.from({ length: 30 }, (_, i) =>
+        row({ id: `cal${i}`, label: "wanted", label_source: "tap", reason: "calibration: forecast card" }),
+      ),
+    ];
+    const m = computeShadowMetrics(data, { ...OPTS, baselinePrecision: 0.1 });
+    expect(m.precision).toBe(1);
+    expect(m.verdict).toBe("insufficient_data");
+    expect(m.breakerTripped).toBe(false);
+  });
+
+  it("trips the breaker when calibration not_wanted rows drag all-rows precision down while the gate passes", () => {
+    const data = [
+      ...rows({ wanted: 20 }),
+      ...Array.from({ length: 10 }, (_, i) =>
+        row({ id: `cal${i}`, label: "not_wanted", label_source: "tap", reason: "calibration: forecast card" }),
+      ),
+    ];
+    const m = computeShadowMetrics(data, { ...OPTS, baselinePrecision: 0.5 });
+    expect(m.precisionGate).toBe(1);
+    expect(m.precision).toBeCloseTo(20 / 30, 10);
+    expect(m.breakerTripped).toBe(true);
+    expect(m.verdict).toBe("fail");
+    expect(m.automatedVerdict).toBe("BREAKER_TRIPPED_PRECISION_LOW");
+  });
+
+  it("fails when the gate fails even though calibration is perfect", () => {
+    const data = [
+      ...rows({ wanted: 15, not_wanted: 10 }),
+      ...Array.from({ length: 100 }, (_, i) =>
+        row({ id: `cal${i}`, label: "wanted", label_source: "tap", reason: "calibration: conservative queued sample" }),
+      ),
+    ];
+    const m = computeShadowMetrics(data, { ...OPTS, baselinePrecision: 0.1 });
+    expect(m.precision).toBeGreaterThan(0.9);
+    expect(m.precisionGate).toBeCloseTo(0.6, 10);
+    expect(m.breakerTripped).toBe(true);
+    expect(m.verdict).toBe("fail");
+  });
+
+  it("never lets no_baseline, insufficient_data or heuristic_scorer trip the breaker", () => {
+    expect(computeShadowMetrics(rows({ wanted: 25 }), OPTS).breakerTripped).toBe(false);
+    expect(computeShadowMetrics(rows({ wanted: 5 }), OPTS).breakerTripped).toBe(false);
+    const h = computeShadowMetrics(rows({ wanted: 25 }), { ...OPTS, baselinePrecision: 1 });
+    expect(h.verdict).toBe("heuristic_scorer");
+    expect(h.breakerTripped).toBe(false);
   });
 
   it("returns null precision and insufficient_data with no tapped labels", () => {
@@ -213,9 +280,11 @@ describe("loadShadowRows + formatShadowReport (sqlite)", () => {
     expect(() => raw.exec("DELETE FROM proposals")).toThrow();
     const m = computeShadowMetrics(loaded, OPTS);
     const text = formatShadowReport(m);
-    expect(text).toContain("Precision@surface");
+    expect(text).toContain("Precision (gate):    n/a");
+    expect(text).toContain("Precision (all):");
     expect(text).toContain("Calibration:");
-    expect(text).toContain("precision gate only n/a");
+    expect(text).toContain("forecast cards:    surfaced 0");
+    expect(text).toContain("queued samples:    surfaced 0");
     expect(text).toContain("insufficient_data");
   });
 
@@ -336,6 +405,38 @@ describe("computeSameHourYesterdayBaseline (sqlite)", () => {
     const report = formatShadowReport(metrics);
     expect(report).toContain("baseline 100.0%, n=20");
   });
+});
+
+describe("shadow-report-cli exit codes", () => {
+  it("exits 5 on no_baseline and 0 once a beaten baseline is supplied", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shadow-cli-"));
+    const path = join(dir, "t.db");
+    const now = Date.now();
+    const raw = new DatabaseSync(path);
+    raw.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));
+    raw.exec("PRAGMA foreign_keys = OFF");
+    for (let i = 0; i < 50; i++) {
+      raw.exec(`
+        INSERT INTO proposals(proposal_id,created_seq,policy_type,tier,summary,action,action_hash,efe,risk_term,ambiguity_term,state,shadow,expires_at,updated_at)
+          VALUES ('c${i}',${i + 1},'PRAGMATIC',1,'s','{}',x'01',1,0,0,'SURFACED',1,1,1);
+        INSERT INTO gate_decisions(proposal_id,mode,decision,reason,ts) VALUES ('c${i}','MAINTENANCE','SURFACE','r',${now - 1000});
+        INSERT INTO shadow_labels(proposal_id,label,actual,latency_ms,ts) VALUES ('c${i}','wanted','{"source":"tap"}',10,${now - 500});
+      `);
+    }
+    raw.close();
+    const cli = fileURLToPath(new URL("./shadow-report-cli.ts", import.meta.url));
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, ["--import", "tsx", cli, path, ...args], { encoding: "utf8", cwd: dirname(cli) });
+    try {
+      const noBase = run();
+      expect(noBase.stderr).toBe("");
+      expect(noBase.status).toBe(5);
+      expect(noBase.stdout).toContain("no_baseline");
+      expect(run("--baseline", "0.5").status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("evaluateSystemSuggestionDecisions", () => {
