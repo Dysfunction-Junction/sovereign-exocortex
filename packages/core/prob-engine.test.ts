@@ -1,9 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  CANDIDATE_FEATURE_NAMES,
+  DEFAULT_EXPERTS,
+  FEATURE_NAMES,
   OTHER,
   ProbEngine,
   baselineEngine,
   benchmarkAgainstSystemSuggestion,
+  candidateExperts,
   compareLogLoss,
   contextFeatures,
   prequential,
@@ -327,5 +331,35 @@ describe("benchmarkAgainstSystemSuggestion", () => {
   it("handles empty items or items with no system suggestions gracefully", () => {
     expect(benchmarkAgainstSystemSuggestion([]).totalEvaluated).toBe(0);
     expect(benchmarkAgainstSystemSuggestion([{ actual: "a", exocortexTop: "a", systemSuggestion: null }]).eligibleEvaluated).toBe(0);
+  });
+});
+
+describe("candidate sensor features", () => {
+  const sensors = { window_end: 1, motion_energy: "light", orient: "flat_up", steps_delta: 120, sig_motion: false, pressure_trend: "steady", light: "dim", near_frac: 0.6 };
+
+  it("are emitted by contextFeatures but sit outside the live feature set and experts", () => {
+    const f = contextFeatures({ sensors });
+    expect(f).toMatchObject({ motion_energy: "light", orient: "flat_up", steps: "51-300", sig_motion: "0", pressure_trend: "steady", light: "dim", near: "mostly" });
+    for (const name of CANDIDATE_FEATURE_NAMES) {
+      expect((FEATURE_NAMES as readonly string[]).includes(name)).toBe(false);
+      expect(DEFAULT_EXPERTS.some((e) => e.features.includes(name))).toBe(false);
+    }
+    expect(contextFeatures({})).toEqual({});
+  });
+
+  it("do not change the live model's predictions", () => {
+    const a = new ProbEngine();
+    const b = new ProbEngine();
+    for (const eng of [a, b]) for (const [c, y] of [["x", "y"], ["y", "x"], ["x", "y"]] as const) eng.observe(c, {}, y);
+    const base = contextFeatures({ time: undefined });
+    expect(b.predict("x", { ...base, ...contextFeatures({ sensors }) })).toEqual(a.predict("x", base));
+  });
+
+  it("candidateExperts builds cur+<f> experts that wake only when the feature is present", () => {
+    const specs = candidateExperts();
+    expect(specs.map((s) => s.name)).toEqual(CANDIDATE_FEATURE_NAMES.map((f) => `cur+${f}`));
+    const e = new ProbEngine({ experts: [...DEFAULT_EXPERTS, ...specs] });
+    expect(e.predict("x", {}).active).not.toContain("cur+light");
+    expect(e.predict("x", { light: "dim" }).active).toContain("cur+light");
   });
 });

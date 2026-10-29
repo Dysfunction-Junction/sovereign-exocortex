@@ -6,7 +6,7 @@
 
 | Requirement | Why | Verify |
 |---|---|---|
-| Node 24+ | Several workspace packages require it even though the root manifest says Node 22 | `node --version` |
+| Node 24+ | Required across the workspace and enforced in root package.json engines | `node --version` |
 | pnpm | Workspace package manager (13 projects) | `pnpm --version` |
 | Python 3.10+ with a venv | `packages/triad` (advisory council / morphogenetic trials) | only needed if you touch `packages/triad` |
 | Rust + Tauri prerequisites | Only for `apps/desktop` builds | only needed for desktop builds |
@@ -61,7 +61,7 @@ pnpm --filter @exocortex/daemon start
 ```
 Confirm: `curl http://127.0.0.1:8788/mobile/health` → `200`.
 
-> **Known gap (see README "Honest limits"):** the root `pnpm start` currently points at a missing `apps/daemon/src/index.ts` — always use the `--filter @exocortex/daemon start` form above, not bare `pnpm start`.
+> **Tip:** You can start the daemon with either `pnpm start` (which delegates to `@exocortex/daemon`) or `pnpm --filter @exocortex/daemon start`.
 
 ## 5. Enroll your phone and start the mobile app
 

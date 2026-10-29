@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -722,6 +723,109 @@ public class NativeTelemetrySync {
         });
     }
 
+    /**
+     * Queues a v3-only event (app_foreground, screen_session, sensor_window, sensor_caps, sensor_consent). It rides
+     * the same durable outbox, wrapped in the fields readBatch requires, but is sent only to /v3/events and never
+     * to the legacy /mobile/usage-report route. The outbox row id is the v3 event_id.
+     */
+    public static void queueV3Event(Context context, String eventId, long tsDevice, JSONObject payload) {
+        final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        DISK_EXECUTOR.execute((CaptureTask) () -> {
+            try {
+                JSONObject v3 = new JSONObject();
+                v3.put("kind", "telemetry");
+                v3.put("ts_device", tsDevice);
+                v3.put("schema_ver", 1);
+                v3.put("payload", payload);
+                JSONObject event = new JSONObject();
+                event.put("id", eventId);
+                event.put("package", V3_PACKAGE);
+                event.put("timestamp", formatIsoUtc(tsDevice));
+                event.put("telemetry", payload.optString("type"));
+                event.put(V3_KEY, v3);
+                appendEvent(appContext, event);
+                flushAsync(appContext);
+            } catch (Exception e) {
+                droppedEventsCount.incrementAndGet();
+                Log.e(TAG, "Failed to queue v3 event: " + e.getClass().getSimpleName());
+            }
+        });
+    }
+
+    /**
+     * Revocation: deletes unsent v3 events whose id starts with `idPrefix` ("fg-", "ss-", "sw-"). With `sensorKey`
+     * non-null (sensor windows), only that sensor's aggregate is stripped and a window left with no sensors is
+     * deleted. Runs on the same single disk thread as appends, so anything queued before the call is covered.
+     */
+    public static void purgeUnsentV3(Context context, String idPrefix, String sensorKey) {
+        final Context appContext = context.getApplicationContext() != null ? context.getApplicationContext() : context;
+        DISK_EXECUTOR.execute(() -> {
+            if (!ensureInitialized(appContext) || readyDb == null) return;
+            Cursor c = null;
+            try {
+                SQLiteDatabase db = readyDb;
+                c = db.query(TABLE_OUTBOX, new String[]{"id", "payload"}, "id LIKE ?",
+                    new String[]{idPrefix + "%"}, null, null, null);
+                List<String> ids = new ArrayList<>();
+                List<String> payloads = new ArrayList<>();
+                while (c.moveToNext()) {
+                    ids.add(c.getString(0));
+                    payloads.add(c.getString(1));
+                }
+                c.close();
+                c = null;
+                db.beginTransaction();
+                try {
+                    for (int i = 0; i < ids.size(); i++) {
+                        String rewritten = sensorKey == null ? null : stripSensor(payloads.get(i), sensorKey);
+                        if (rewritten == null) {
+                            db.delete(TABLE_OUTBOX, "id = ?", new String[]{ids.get(i)});
+                        } else if (!rewritten.equals(payloads.get(i))) {
+                            ContentValues cv = new ContentValues();
+                            cv.put("payload", rewritten);
+                            db.update(TABLE_OUTBOX, cv, "id = ?", new String[]{ids.get(i)});
+                        }
+                    }
+                    db.setTransactionSuccessful();
+                } finally {
+                    db.endTransaction();
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "purgeUnsentV3 failed: " + e.getClass().getSimpleName());
+            } finally {
+                if (c != null) c.close();
+            }
+        });
+    }
+
+    /**
+     * Pure: removes `sensorKey` from a queued sensor_window row. Returns the rewritten row JSON, or null when no
+     * sensors remain (or the row is unreadable), meaning the row should be deleted.
+     */
+    static String stripSensor(String rowJson, String sensorKey) {
+        try {
+            JSONObject row = new JSONObject(rowJson);
+            JSONObject payload = row.getJSONObject(V3_KEY).getJSONObject("payload");
+            JSONObject sensors = payload.optJSONObject("sensors");
+            if (sensors == null) return null;
+            sensors.remove(sensorKey);
+            return sensors.length() == 0 ? null : row.toString();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    static String sha1Hex(String s) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-1").digest(s.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : d) sb.append(String.format(Locale.ROOT, "%02x", b));
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private static String truncate(String val, int max) {
         if (val == null) return "";
         val = val.trim();
@@ -1128,6 +1232,13 @@ public class NativeTelemetrySync {
 
     /** Usage summaries carry no raw screen or message text, so they are safe to put in the append-only event log. */
     private static final String USAGE_PACKAGE = "android.usage";
+    /** Outbox rows queued by queueV3Event: v3-only, never sent to the legacy route. */
+    private static final String V3_PACKAGE = "android.v3";
+    private static final String V3_KEY = "v3";
+    static final int V3_MAX_EVENTS_PER_POST = 100; // server limit on /v3/events
+    static final int V3_MAX_EVENT_ID_CHARS = 128;
+    private static final java.util.Set<String> V3_TYPES = new java.util.HashSet<>(java.util.Arrays.asList(
+        "app_foreground", "screen_session", "sensor_window", "sensor_caps", "sensor_consent"));
 
     /** Device id inside a gateway JWT ("deviceId"); the LAN token is opaque, so fall back like flush.ts does. */
     static String deviceIdFromToken(String token) {
@@ -1142,46 +1253,125 @@ public class NativeTelemetrySync {
         }
     }
 
-    /**
-     * Builds a /v3/events body (same shape as usageEventToV3 in flush.ts) from the usage-summary entries in a batch,
-     * or null if the batch has none. Everything else stays on the legacy route only.
-     */
-    static String buildUsageV3Body(List<String> serializedEntries, String token) {
+    /** True for an outbox row that must go to /v3/events only. */
+    static boolean isV3Only(String serializedEntry) {
         try {
-            JSONArray out = new JSONArray();
-            for (String entry : serializedEntries) {
-                JSONObject e = new JSONObject(entry);
-                if (!USAGE_PACKAGE.equals(e.optString("package"))) continue;
-                long ts;
-                try {
-                    ts = Instant.parse(e.optString("timestamp")).toEpochMilli();
-                } catch (Exception ignored) {
-                    ts = System.currentTimeMillis();
-                }
-                JSONObject payload = new JSONObject();
-                payload.put("type", "system_telemetry");
-                payload.put("screen", "background");
-                payload.put("telemetry", e.optString("telemetry"));
-                payload.put("package", USAGE_PACKAGE);
-                payload.put("app_label", e.optString("app_label"));
-                payload.put("triaged", false);
-                JSONObject ev = new JSONObject();
-                ev.put("event_id", e.optString("id"));
-                ev.put("kind", "telemetry");
-                ev.put("ts_device", ts);
-                ev.put("schema_ver", 1);
-                ev.put("payload", payload);
-                out.put(ev);
-            }
-            if (out.length() == 0) return null;
-            JSONObject body = new JSONObject();
-            body.put("device_id", deviceIdFromToken(token));
-            body.put("events", out);
-            return body.toString();
+            return new JSONObject(serializedEntry).has(V3_KEY);
         } catch (Exception e) {
-            Log.w(TAG, "Could not build /v3/events body", e);
-            return null;
+            return false;
         }
+    }
+
+    /** Result of buildV3Body: ready-to-POST chunks, plus rows that fail the server's /v3/events limits. */
+    static final class V3Build {
+        final List<String> bodies = new ArrayList<>();
+        /** {outbox id, reason}: quarantine these instead of letting one bad event 400 a whole batch. */
+        final List<String[]> invalid = new ArrayList<>();
+    }
+
+    /** Mirrors the /v3/events limits: event_id <=128 chars, numeric ts_device, plain-object payload, known type. */
+    private static String v3Problem(String eventId, long ts, Object payload, String type) {
+        if (eventId == null || eventId.isEmpty() || eventId.length() > V3_MAX_EVENT_ID_CHARS) return "bad event_id";
+        if (ts <= 0) return "bad ts_device";
+        if (!(payload instanceof JSONObject)) return "payload is not an object";
+        if (type != null && !type.equals("system_telemetry") && !V3_TYPES.contains(type)) return "unknown type " + type;
+        return null;
+    }
+
+    /**
+     * Builds /v3/events bodies (same event shape as usageEventToV3 in flush.ts) from the batch: the android.usage
+     * summaries plus every v3-only row. Everything else stays on the legacy route only. Events are chunked to
+     * <=100 per POST and <=MAX_BATCH_BYTES per body; invalid ones are reported, not sent.
+     */
+    static V3Build buildV3Body(List<String> serializedEntries, String token) {
+        V3Build out = new V3Build();
+        String deviceId = deviceIdFromToken(token);
+        List<String> events = new ArrayList<>();
+        for (String entry : serializedEntries) {
+            try {
+                JSONObject e = new JSONObject(entry);
+                JSONObject ev = new JSONObject();
+                if (e.has(V3_KEY)) {
+                    JSONObject v3 = e.getJSONObject(V3_KEY);
+                    Object payload = v3.opt("payload");
+                    String type = payload instanceof JSONObject ? ((JSONObject) payload).optString("type") : null;
+                    String problem = v3Problem(e.optString("id"), v3.optLong("ts_device", 0L), payload, type);
+                    if (problem == null && !V3_TYPES.contains(type)) problem = "unknown type " + type;
+                    if (problem != null) {
+                        out.invalid.add(new String[]{e.optString("id"), problem});
+                        continue;
+                    }
+                    ev.put("event_id", e.optString("id"));
+                    ev.put("kind", v3.optString("kind", "telemetry"));
+                    ev.put("ts_device", v3.getLong("ts_device"));
+                    ev.put("schema_ver", v3.optInt("schema_ver", 1));
+                    ev.put("payload", payload);
+                } else if (USAGE_PACKAGE.equals(e.optString("package"))) {
+                    long ts;
+                    try {
+                        ts = Instant.parse(e.optString("timestamp")).toEpochMilli();
+                    } catch (Exception ignored) {
+                        ts = System.currentTimeMillis();
+                    }
+                    JSONObject payload = new JSONObject();
+                    payload.put("type", "system_telemetry");
+                    payload.put("screen", "background");
+                    payload.put("telemetry", e.optString("telemetry"));
+                    payload.put("package", USAGE_PACKAGE);
+                    payload.put("app_label", e.optString("app_label"));
+                    payload.put("triaged", false);
+                    String problem = v3Problem(e.optString("id"), ts, payload, "system_telemetry");
+                    if (problem != null) {
+                        out.invalid.add(new String[]{e.optString("id"), problem});
+                        continue;
+                    }
+                    ev.put("event_id", e.optString("id"));
+                    ev.put("kind", "telemetry");
+                    ev.put("ts_device", ts);
+                    ev.put("schema_ver", 1);
+                    ev.put("payload", payload);
+                } else {
+                    continue;
+                }
+                events.add(ev.toString());
+            } catch (Exception ex) {
+                Log.w(TAG, "Could not convert an outbox row for /v3/events");
+            }
+        }
+        String head = "{\"device_id\":" + JSONObject.quote(deviceId) + ",\"events\":[";
+        StringBuilder sb = null;
+        int count = 0;
+        int bytes = 0;
+        for (String ev : events) {
+            int evBytes = ev.getBytes(StandardCharsets.UTF_8).length;
+            if (sb != null && (count >= V3_MAX_EVENTS_PER_POST
+                || bytes + evBytes + 1 + head.length() + 2 > MAX_BATCH_BYTES)) {
+                out.bodies.add(sb.append("]}").toString());
+                sb = null;
+            }
+            if (sb == null) {
+                sb = new StringBuilder(head);
+                count = 0;
+                bytes = 0;
+            } else {
+                sb.append(',');
+                bytes += 1;
+            }
+            sb.append(ev);
+            count++;
+            bytes += evBytes;
+        }
+        if (sb != null) out.bodies.add(sb.append("]}").toString());
+        return out;
+    }
+
+    private static byte[] legacyBody(List<String> entries) {
+        StringBuilder sb = new StringBuilder("{\"events\":[");
+        for (int i = 0; i < entries.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(entries.get(i));
+        }
+        return sb.append("]}").toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /** POSTs a /v3/events body. Returns the HTTP status, or -1 on a network error/timeout/cancel. */
@@ -1239,6 +1429,29 @@ public class NativeTelemetrySync {
                 return FlushOutcome.DRAINED; // Outbox empty
             }
 
+            // Rows that would fail /v3/events validation are quarantined here, so one bad event never 400s a batch.
+            boolean batchHasV3Only = false;
+            for (String entry : batch.serializedEntries) {
+                if (isV3Only(entry)) { batchHasV3Only = true; break; }
+            }
+            if (batchHasV3Only) {
+                V3Build check = buildV3Body(batch.serializedEntries, "");
+                if (!check.invalid.isEmpty()) {
+                    boolean ok = true;
+                    for (String[] bad : check.invalid) {
+                        int idx = batch.ids.indexOf(bad[0]);
+                        String raw = idx >= 0 ? batch.serializedEntries.get(idx) : "{}";
+                        ok &= quarantineAndRemoveEvent(context, bad[0], raw, "Invalid v3 event: " + bad[1]);
+                    }
+                    if (!ok) {
+                        lastFailureElapsed = SystemClock.elapsedRealtime();
+                        scheduleRetry(context, MIN_RETRY_INTERVAL_MS, run);
+                        return FlushOutcome.FAILED;
+                    }
+                    continue; // re-read the batch without them
+                }
+            }
+
             StringBuilder sb = new StringBuilder(MAX_BATCH_BYTES);
             sb.append("{\"events\":[");
             for (int i = 0; i < batch.serializedEntries.size(); i++) {
@@ -1267,15 +1480,43 @@ public class NativeTelemetrySync {
                 Target target = targets.get(i);
                 boolean isProbe = targets.size() > 1 && i == 0 && "lan".equals(target.mode);
                 int timeoutMs = isProbe ? 3000 : 8000;
-                // Usage summaries also go to the exocortex event log. Transient failures try the next target
-                // with nothing cleared; 404/403 (route or scope unsupported) and 400/409 fall through to the legacy post.
-                final String v3Body = buildUsageV3Body(batch.serializedEntries, target.token);
-                if (v3Body != null) {
+                // Usage summaries and v3-only events also go to the exocortex event log. Transient failures try the
+                // next target with nothing cleared. For usage summaries, 404/403 (route or scope unsupported) and
+                // 400/409 fall through to the legacy post; v3-only events have no legacy route, so they block the batch.
+                final V3Build v3 = buildV3Body(batch.serializedEntries, target.token);
+                boolean v3Transient = false;
+                boolean v3Failed = false;
+                int v3FailCode = 0;
+                for (String v3Body : v3.bodies) {
                     int v3Code = postV3(target, run, timeoutMs, v3Body);
                     if (v3Code == -1 || v3Code == 401 || v3Code == 429 || v3Code >= 500) {
-                        continue;
+                        v3Transient = true;
+                        break;
+                    }
+                    if (v3Code < 200 || v3Code >= 300) {
+                        v3Failed = true;
+                        v3FailCode = v3Code;
+                        break;
                     }
                 }
+                if (v3Transient) continue;
+                final List<String> legacyEntries = new ArrayList<>();
+                for (String entry : batch.serializedEntries) {
+                    if (!isV3Only(entry)) legacyEntries.add(entry);
+                }
+                if (batchHasV3Only && v3Failed) {
+                    if (v3FailCode == 400 || v3FailCode == 409 || v3FailCode == 422) {
+                        targetsValidationRejectCount++;
+                        lastValidationCode = v3FailCode;
+                    }
+                    continue;
+                }
+                if (legacyEntries.isEmpty()) { // v3-only batch: a v3 2xx counts as delivered, no legacy POST
+                    batchSent = true;
+                    maxBatchCount = BATCH_SIZE;
+                    break;
+                }
+                final byte[] legacyData = legacyEntries.size() == batch.serializedEntries.size() ? postData : legacyBody(legacyEntries);
 
                 HttpURLConnection conn = null;
 
@@ -1292,7 +1533,7 @@ public class NativeTelemetrySync {
                     conn.setDoOutput(true);
 
                     try (OutputStream os = conn.getOutputStream()) {
-                        os.write(postData);
+                        os.write(legacyData);
                         os.flush();
                     }
 

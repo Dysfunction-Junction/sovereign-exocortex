@@ -122,6 +122,19 @@ export const DEFAULT_EXPERTS: readonly ExpertSpec[] = [
   { name: "cur+sys_suggest+app", features: ["sys_suggest", "app"] },
 ];
 
+/**
+ * Sensor-derived features under evaluation. They are emitted by contextFeatures (so every example
+ * carries them from day one) but are NOT in FEATURE_NAMES / DEFAULT_EXPERTS, so no live expert reads
+ * them. Promotion needs the pre-registered admission rule (>=4 weeks, >=300 app-stream examples,
+ * paired log-loss z >= 2.6 against DEFAULT_EXPERTS); promote one at a time.
+ */
+export const CANDIDATE_FEATURE_NAMES = ["motion_energy", "orient", "steps", "sig_motion", "pressure_trend", "light", "near"] as const;
+
+/** `cur+<f>` experts for candidate features, to be appended to DEFAULT_EXPERTS for a replay comparison. */
+export function candidateExperts(features: readonly string[] = CANDIDATE_FEATURE_NAMES): ExpertSpec[] {
+  return features.map((f) => ({ name: `cur+${f}`, features: [f] }));
+}
+
 const bucket = (v: number, edges: readonly number[], labels: readonly string[]): string => {
   for (let i = 0; i < edges.length; i++) if (v < edges[i]) return labels[i];
   return labels[labels.length - 1];
@@ -198,6 +211,20 @@ export function contextFeatures(ctx: PredictionContext | undefined, prev?: strin
   const triage = ctx?.triage ?? (typeof (ctx as any)?.triage_category === "string" ? (ctx as any).triage_category : undefined);
   if (typeof triage === "string" && triage) {
     f.triage = triage;
+  }
+  const sn = ctx?.sensors;
+  if (sn) {
+    if (sn.motion_energy) f.motion_energy = sn.motion_energy;
+    if (sn.orient) f.orient = sn.orient;
+    if (typeof sn.steps_delta === "number" && Number.isFinite(sn.steps_delta) && sn.steps_delta >= 0) {
+      f.steps = bucket(sn.steps_delta, [1, 51, 301], ["0", "1-50", "51-300", ">300"]);
+    }
+    if (typeof sn.sig_motion === "boolean") f.sig_motion = sn.sig_motion ? "1" : "0";
+    if (sn.pressure_trend) f.pressure_trend = sn.pressure_trend;
+    if (sn.light) f.light = sn.light;
+    if (typeof sn.near_frac === "number" && Number.isFinite(sn.near_frac) && sn.near_frac >= 0) {
+      f.near = bucket(sn.near_frac, [0.05, 0.5], ["none", "some", "mostly"]);
+    }
   }
   return f;
 }
@@ -455,6 +482,32 @@ export class ProbEngine {
     };
   }
 
+  /**
+   * Expert weights are matched by name, not position, so a checkpoint saved with N experts loads into
+   * a different set. An expert the checkpoint never had starts at the uniform prior; if the set
+   * changed at all the weights are renormalised. An identical set copies the saved weights verbatim.
+   */
+  private static mapWeightsByName(data: SerializedProbEngineState, specs: readonly ExpertSpec[]): number[] {
+    const saved = new Map<string, number>();
+    data.experts.forEach((e, i) => {
+      const w = data.logW?.[i];
+      if (typeof w === "number" && Number.isFinite(w)) saved.set(e.name, w);
+    });
+    let unmatched = 0;
+    const lw = specs.map((spec) => {
+      const w = saved.get(spec.name);
+      if (w === undefined) {
+        unmatched++;
+        return -Math.log(specs.length);
+      }
+      return w;
+    });
+    if (unmatched === 0 && saved.size === specs.length) return lw;
+    const m = Math.max(...lw);
+    const norm = m + Math.log(lw.reduce((a, v) => a + Math.exp(v - m), 0));
+    return lw.map((v) => v - norm);
+  }
+
   static fromJSON(data: SerializedProbEngineState, opts: EngineOptions = {}): ProbEngine {
     const engine = new ProbEngine(opts);
     engine.unigram.clear();
@@ -462,7 +515,7 @@ export class ProbEngine {
       engine.unigram.set(k, v);
     }
     engine.unigramTotal = data.unigramTotal;
-    engine.logW = [...data.logW];
+    engine.logW = ProbEngine.mapWeightsByName(data, engine.specs);
     engine.temperature = data.temperature;
     engine.seen = data.seen;
     if (data.history) {

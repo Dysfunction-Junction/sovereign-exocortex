@@ -20,6 +20,7 @@ the image, so use image-relative commands (``python``, not ``sys.executable``).
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import uuid
 from pathlib import Path
@@ -102,6 +103,22 @@ def bounded_run(
         b"".join(chunks["out"]).decode("utf-8", "replace"),
         b"".join(chunks["err"]).decode("utf-8", "replace"),
     )
+
+
+def _container_user() -> str:
+    """uid:gid the verification container runs as.
+
+    Real workspaces (mkdtemp, `git clone --shared`) are 0700 and owned by the invoking user, so a fixed
+    unprivileged uid cannot read them. On Linux the container therefore runs as the invoking uid:gid, which
+    keeps the host directory private. Root is refused: it would make the bind mount writable as root.
+    Elsewhere (no getuid, or a VM-backed Docker where uids are remapped) the fixed unprivileged uid is kept.
+    """
+    if sys.platform.startswith("linux") and hasattr(os, "getuid") and hasattr(os, "getgid"):
+        uid, gid = os.getuid(), os.getgid()
+        if uid == 0 or gid == 0:
+            raise IsolationUnavailable("refusing to run verification containers as root (uid or gid 0)")
+        return f"{uid}:{gid}"
+    return "65534:65534"
 
 
 class IsolationUnavailable(RuntimeError):
@@ -189,7 +206,7 @@ class DockerRunner:
             "--ipc", "none",
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
-            "--user", "65534:65534",
+            "--user", _container_user(),
             "--read-only",
             "--tmpfs", f"/tmp:rw,nosuid,size={self.tmpfs_size}",
             "--memory", self.memory, "--memory-swap", self.memory,

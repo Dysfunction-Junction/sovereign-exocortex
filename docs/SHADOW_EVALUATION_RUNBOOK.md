@@ -51,5 +51,6 @@ These metrics measure usefulness prediction, not causal ranking lift or Precisio
 
 - `wanted` and `not_wanted` tap labels determine Precision@surface.
 - `already_did` and `ignored` are inferred outcomes and are useful for coverage and focus-regret analysis, but do not count as direct precision labels.
-- `insufficient_data`, `heuristic_scorer`, and breaker failures all mean the rollout gate is unmet.
+- `insufficient_data`, `no_baseline`, `heuristic_scorer`, and breaker failures all mean the rollout gate is unmet. `no_baseline` (CLI exit 5) means the tap labels are sufficient but no comparator exists: supply `--baseline` or let the database derive one. It never passes by default and never trips the breaker.
+- Pass/fail is judged on gate proposals only (`precisionGate`, `verdictBasis: "gate_only"`). Forecast cards and queued calibration samples are reported separately under `calibration.forecastCards` and `calibration.queuedSamples`; they are excluded from the verdict but included in the circuit breaker, so poor calibration labels can still trip it. `precision` covers all rows and is diagnostic only; `precisionGateOnly` is a deprecated alias of `precisionGate`.
 - Record the date range, tap count, precision, Wilson lower bound, baseline gap, and focus regret with each review so later runs can be compared.

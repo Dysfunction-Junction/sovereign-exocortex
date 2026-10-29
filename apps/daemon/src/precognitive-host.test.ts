@@ -614,3 +614,41 @@ test("PreCognitiveHost: supports native Android transitions & clipboard_intent k
 });
 
 
+
+test("PreCognitiveHost: app_foreground arrivals feed the Markov model and excluded arrivals pre-stage nothing", () => {
+  const now = 300_000;
+  const host = PreCognitiveHost.createIsolatedForTest(() => now);
+  const fakeDb = {} as any;
+  let seq = 0;
+  const arrival = (payload: Record<string, unknown>) => ({
+    seq: ++seq,
+    event_id: `evt_fg_${seq}`,
+    device_id: "phone-fg",
+    kind: "telemetry",
+    schema_ver: 1,
+    prev_hash: new Uint8Array(32),
+    hash: new Uint8Array(32),
+    ts_server: now,
+    ts_device: now - 100 + seq,
+    payload: JSON.stringify({ type: "app_foreground", event: "APP_TRANSITION", src: "usage_stats", ...payload }),
+  });
+
+  // Excluded arrivals name no app (to and from are redacted), whatever else they carry.
+  host.onEventsAppended([arrival({ category: "excluded", excluded: true, dwell_prev_ms: 500 })], fakeDb);
+  host.onEventsAppended([arrival({ category: "excluded", excluded: true, from: "com.bank.app", to: "com.bank.app" })], fakeDb);
+  assert.equal(host.getStatus("phone-fg").isPreStaged, false);
+  assert.equal(host.getPreWarmedProposal("phone-fg"), null);
+  assert.equal(host.getMarkovModel("phone-fg").getTotalTransitionsFrom("com.bank.app"), 0);
+
+  // Real arrivals are the v3 carrier: a repeated chrome -> maps hop is learned, then chrome pre-stages maps.
+  host.onEventsAppended([arrival({ from: "com.android.chrome", to: "com.google.android.apps.maps", category: "Maps", dwell_prev_ms: 4000 })], fakeDb);
+  host.onEventsAppended([arrival({ from: "com.android.chrome", to: "com.google.android.apps.maps", category: "Maps", dwell_prev_ms: 5000 })], fakeDb);
+  host.onEventsAppended([arrival({ from: "com.slack", to: "com.android.chrome", category: "Communication", dwell_prev_ms: 9000 })], fakeDb);
+  assert.equal(host.getMarkovModel("phone-fg").getTransitionCount("com.android.chrome", "com.google.android.apps.maps"), 2);
+  assert.equal(host.getPreWarmedProposal("phone-fg")?.targetApp, "com.google.android.apps.maps");
+
+  // A later excluded arrival leaves the model and the pre-staged proposal untouched.
+  const total = host.getMarkovModel("phone-fg").getTotalTransitionsFrom("com.android.chrome");
+  host.onEventsAppended([arrival({ category: "excluded", excluded: true })], fakeDb);
+  assert.equal(host.getMarkovModel("phone-fg").getTotalTransitionsFrom("com.android.chrome"), total);
+});

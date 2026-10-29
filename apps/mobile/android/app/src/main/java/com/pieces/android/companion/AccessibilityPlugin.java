@@ -142,6 +142,10 @@ public class AccessibilityPlugin extends Plugin {
         "io.ente.auth",                           // Ente Auth
         "com.samsung.android.authframework",      // Samsung Pass
         "me.proton.android.pass",                 // Proton Pass
+        // Health and medical. Real ids only; confirm on-device with `adb shell pm list packages`.
+        // The exact list is a user decision (ANDROID_SENSOR_SPEC section A2); label keywords below catch the rest.
+        "com.sec.android.app.shealth",           // Samsung Health
+        "com.google.android.apps.fitness",       // Google Fit
         // Messaging / SMS / calling
         "com.google.android.apps.messaging",
         "com.samsung.android.messaging",
@@ -227,7 +231,9 @@ public class AccessibilityPlugin extends Plugin {
         "rocket money", "truebill",
         // Authenticator / OTP / Security keywords
         "authenticator", "2fa", "mfa", "otp", "totp", "duo mobile",
-        "security key", "one-time password", "verification code"
+        "security key", "one-time password", "verification code",
+        // Health and medical
+        "health", "pharmacy", "therapy", "clinic", "mychart"
     );
 
     // static + package-visible so PiecesAccessibilityService.isAllowed can
@@ -250,10 +256,15 @@ public class AccessibilityPlugin extends Plugin {
     }
 
     static boolean isExcluded(String packageName, String appLabel) {
+        return isPrivacyExcluded(packageName, appLabel) || isNoise(packageName);
+    }
+
+    /**
+     * Privacy half of isExcluded: sensitive apps (finance, authenticators, messaging, health...). Foreground-transition
+     * telemetry records these only as category "excluded", with no package and no label.
+     */
+    static boolean isPrivacyExcluded(String packageName, String appLabel) {
         for (String prefix : EXCLUDED_PREFIXES) {
-            if (packageName.startsWith(prefix)) return true;
-        }
-        for (String prefix : EXCLUDED_NOISE_PREFIXES) {
             if (packageName.startsWith(prefix)) return true;
         }
         if (appLabel != null) {
@@ -269,12 +280,34 @@ public class AccessibilityPlugin extends Plugin {
         return false;
     }
 
+    /** Noise half of isExcluded: launcher, system UI, keyboards, OEM services. Not sensitive, just no useful text. */
+    static boolean isNoise(String packageName) {
+        for (String prefix : EXCLUDED_NOISE_PREFIXES) {
+            if (packageName.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    /** Category for a noise package in foreground telemetry: launchers are "home", everything else "system". */
+    static String noiseCategory(String packageName) {
+        for (String prefix : LAUNCHER_PREFIXES) {
+            if (packageName.startsWith(prefix)) return "home";
+        }
+        return "system";
+    }
+
+    private static final List<String> LAUNCHER_PREFIXES = Arrays.asList(
+        "com.sec.android.app.launcher",
+        "com.google.android.apps.nexuslauncher",
+        "com.android.launcher3"
+    );
+
     // ApplicationInfo.CATEGORY_* constants (API 26+) — getCategoryTitle() needs
     // a Resources handle we don't have per-app here, so map to a fixed label
     // set ourselves. CATEGORY_UNDEFINED (-1) and anything unmapped falls into
     // "Uncategorized" in the JS-side grouping, not here — this method only
     // reports the raw label, grouping is a picker-UI concern.
-    private static String categoryLabel(int category) {
+    static String categoryLabel(int category) {
         switch (category) {
             case ApplicationInfo.CATEGORY_GAME: return "Game";
             case ApplicationInfo.CATEGORY_AUDIO: return "Audio";

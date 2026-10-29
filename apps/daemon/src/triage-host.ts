@@ -114,6 +114,7 @@ export class TriageHost {
   public onVerdictStored?: (deviceId: string, verdict: TriageVerdict, eventSeq: number) => void;
   private readonly queue: TriageJob[] = [];
   private readonly ready = new WeakSet<object>();
+  private readonly processedSeqByDb = new WeakMap<ExocortexDatabase, number>();
   private running: Promise<void> | null = null;
 
   constructor(opts: TriageHostOptions = {}) {
@@ -131,14 +132,17 @@ export class TriageHost {
   /** Queue newly appended events. Synchronous, cheap, never throws into the ingest path. */
   onEventsAppended(events: readonly RawEvent[], db: ExocortexDatabase): { queued: number } {
     if (!this.enabled) return { queued: 0 };
+    const lastSeq = this.processedSeqByDb.get(db) ?? 0;
+    const pending = [...events].sort((a, b) => a.seq - b.seq).filter((ev) => ev.seq > lastSeq);
     let queued = 0;
-    for (const ev of [...events].sort((a, b) => a.seq - b.seq)) {
+    for (const ev of pending) {
       const text = triageTextOf(ev);
       if (!text) continue;
       if (this.queue.length >= this.maxQueue) this.queue.shift(); // drop oldest; newest events matter most
       this.queue.push({ db, seq: ev.seq, deviceId: ev.device_id, text });
       queued++;
     }
+    if (pending.length > 0) this.processedSeqByDb.set(db, pending[pending.length - 1].seq);
     if (queued > 0 && !this.running) {
       this.running = this.drain().finally(() => {
         this.running = null;

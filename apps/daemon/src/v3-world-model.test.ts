@@ -13,7 +13,7 @@ process.env.GATEWAY_JWT_SECRET = TEST_SECRET;
 process.env.GATEWAY_ENROLL_TOKEN = TEST_ENROLL_TOKEN;
 process.env.NODE_ENV = "test";
 
-const { server, setPendingFetcherForTest, setPendingSpeculatorForTest } = await import("./server.js");
+const { server, setPendingFetcherForTest, setPendingSpeculatorForTest, ingestConsumerForDatabase } = await import("./server.js");
 
 test("v3 world-model endpoints integration test", async () => {
   process.env.SHADOW = "1";
@@ -152,6 +152,7 @@ test("v3 world-model endpoints integration test", async () => {
     const ingestData = await ingestRes.json();
     assert.equal(ingestData.ok, true);
     assert.equal(ingestData.result.insertedCount, 2);
+    await ingestConsumerForDatabase(memoryDb).idle();
 
     // 3. GET /v3/world-model/beliefs: verify belief snapshots were created
     const beliefsRes = await fetch(`${baseUrl}/v3/world-model/beliefs`, {

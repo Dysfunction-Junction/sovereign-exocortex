@@ -222,3 +222,84 @@ describe("computePredictionReport", () => {
     expect(loadPredictionRows(raw, T0 + 1000)).toHaveLength(1);
   });
 });
+
+describe("report: calibration intervals and pre-registered baselines", () => {
+  const dist = (cands: Array<[string, number]>) => ({ cands: cands.map(([value, prob]) => ({ value, prob })), other: 0.1 });
+  function seed(raw: DatabaseSync, i: number, actual: string, eng: string, avg: string, pers: string, cold = false, dt = 1000, withBaselines = true) {
+    const baselines = withBaselines
+      ? { avg_usage: { ...dist([[avg, 0.6]]), n: 40, cell: "overall", cold_start: cold }, persistence: { ...dist([[pers, 0.6]]), repeat_rate: 0.5 } }
+      : undefined;
+    logPrediction(raw, guess({ made_seq: i * 10, made_at: T0 + i * 100_000, candidates: [{ value: eng, prob: 0.6 }], context: baselines ? { baselines } : {} }));
+    resolveWithAction(raw, "d1", { seq: i * 10 + 1, ts: T0 + i * 100_000 + dt, value: actual });
+  }
+
+  it("adds Wilson 95% bounds to every calibration bin", () => {
+    const raw = fresh();
+    for (let i = 1; i <= 10; i++) seed(raw, i, i <= 6 ? "ask" : "x", "ask", "ask", "ask");
+    const bin = computePredictionReport(loadPredictionRows(raw)).calibration[0];
+    expect(bin.n).toBe(10);
+    expect(bin.observedRate).toBeCloseTo(0.6);
+    expect(bin.lo95).toBeGreaterThan(0.26);
+    expect(bin.lo95).toBeLessThan(0.6);
+    expect(bin.hi95).toBeGreaterThan(0.6);
+    expect(bin.hi95).toBeLessThan(0.89);
+    expect(formatPredictionReport(computePredictionReport(loadPredictionRows(raw)))).toContain("95% CI");
+  });
+
+  it("scores engine, avg_usage and persistence on identical rows, excluding cold start and legacy rows", () => {
+    const raw = fresh();
+    seed(raw, 1, "ask", "ask", "ask", "setup"); // persistence wrong
+    seed(raw, 2, "ask", "ask", "setup", "ask"); // avg_usage wrong
+    seed(raw, 3, "ask", "setup", "ask", "ask", true); // cold start: excluded
+    seed(raw, 4, "ask", "ask", "ask", "ask", false, 1000, false); // legacy: no baselines
+    const r = computePredictionReport(loadPredictionRows(raw));
+    expect(r.baselines).toMatchObject({ n: 2, coldStart: 1, legacy: 1 });
+    expect(r.baselines.engine.top1).toBe(1);
+    expect(r.baselines.avg_usage.top1).toBe(0.5);
+    expect(r.baselines.persistence.top1).toBe(0.5);
+    expect(r.baselines.engine.logLoss!).toBeCloseTo(-Math.log(0.6));
+    expect(r.baselines.avg_usage.logLoss!).toBeGreaterThan(r.baselines.engine.logLoss!);
+    expect(r.baselines.avg_usage.logLoss!).toBeCloseTo((-Math.log(0.6) - Math.log(0.4)) / 2);
+  });
+
+  it("unconditional block includes EXPIRED rows that have an actual", () => {
+    const raw = fresh();
+    seed(raw, 1, "ask", "ask", "ask", "ask");
+    seed(raw, 2, "ask", "ask", "setup", "ask", false, 200_000); // lands after the 60s horizon -> EXPIRED
+    seed(raw, 3, "ask", "setup", "ask", "ask", false, 200_000);
+    logPrediction(raw, guess({ made_seq: 99, made_at: T0 + 9_000_000 })); // open, no actual
+    const r = computePredictionReport(loadPredictionRows(raw));
+    expect(r.scored).toBe(1);
+    expect(r.baselines.n).toBe(1);
+    expect(r.unconditional.n).toBe(3);
+    expect(r.unconditional.top1).toBeCloseTo(2 / 3);
+    expect(r.unconditional.baselines.n).toBe(3);
+    expect(r.unconditional.top1WilsonUpper!).toBeGreaterThan(r.unconditional.top1WilsonLower!);
+  });
+});
+
+describe("streams", () => {
+  it("a stream-filtered resolve leaves screen predictions open when an app action arrives", () => {
+    const raw = fresh();
+    logPrediction(raw, guess({ made_seq: 1 })); // legacy row: no context.stream, counts as "screen"
+    logPrediction(raw, guess({ made_seq: 2, context: { stream: "app" } }));
+    expect(resolveWithAction(raw, "d1", { seq: 3, ts: T0 + 1000, value: "ask" }, "app")).toBe(1);
+    let rows = loadPredictionRows(raw);
+    expect(rows.find((r) => r.made_seq === 1)!.outcome).toBeNull();
+    expect(rows.find((r) => r.made_seq === 2)!.outcome).toBe("HIT");
+    // The default stream is "screen": it resolves the legacy row and leaves nothing app-side to touch.
+    expect(resolveWithAction(raw, "d1", { seq: 4, ts: T0 + 2000, value: "setup" })).toBe(1);
+    rows = loadPredictionRows(raw);
+    expect(rows.find((r) => r.made_seq === 1)!.outcome).toBe("MISS");
+  });
+
+  it("loads one stream's rows on request and keeps the stream in the stored context", () => {
+    const raw = fresh();
+    logPrediction(raw, guess({ made_seq: 1 }));
+    logPrediction(raw, guess({ made_seq: 2, context: { stream: "app" } }));
+    expect(loadPredictionRows(raw).length).toBe(2);
+    expect(loadPredictionRows(raw, 0, "app").map((r) => r.made_seq)).toEqual([2]);
+    expect(loadPredictionRows(raw, 0, "screen").map((r) => r.made_seq)).toEqual([1]);
+    expect(loadPredictionRows(raw, 0, "app")[0].context.stream).toBe("app");
+  });
+});

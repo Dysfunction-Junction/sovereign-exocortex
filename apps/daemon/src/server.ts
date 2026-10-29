@@ -7,20 +7,26 @@ import { timingSafeEqual, createPublicKey, generateKeyPairSync } from "node:cryp
 import { Agent, setGlobalDispatcher } from "undici";
 import { findAllowedRoute } from "@pieces-android/allowlist";
 import { verifyToken, issueToken } from "./jwt.js";
-import { ADMIN_SCOPES, ANY_DELEGATE_SCOPES, resolveDelegate } from "./delegate-capabilities.js";
+import { ANY_DELEGATE_SCOPES, resolveDelegate, scopesSatisfy } from "./delegate-capabilities.js";
+import { recordDelegateDenial, type DelegateDenialReason } from "./delegate-audit.js";
+import { classifyBucket } from "./token-bucket.js";
 import { canonicalJsonStringify, forwardApprove, forwardDelegate, GATEWAY_NODE, isApprovalAction, isDelegateEnvelope, localNodes, parseDelegateEnvelope } from "./network.js";
 import { defaultWorldModelHost } from "./world-model-host.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
+import { startCalibrationSampler } from "./calibration-sampler.js";
+import { startForecastCardSampler } from "./forecast-cards.js";
 import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
+import { IngestConsumer } from "./ingest-consumer.js";
+import { registerIngestWakeHandler } from "./ingest-scheduler.js";
 
 // Wire local LLM triage category stream into next-action prediction context
 defaultTriageHost.onVerdictStored = (deviceId, verdict) => {
   defaultPredictionHost.updateTriage(deviceId, verdict.category);
 };
 import { defaultPreCognitiveHost, isValidDwell } from "./precognitive-host.js";
-import { dropKnownTelemetry } from "./telemetry-dedupe.js";
+import { dropKnownTelemetry, recordTelemetryDuplicates } from "./telemetry-dedupe.js";
 import { APPROVAL_TS_WINDOW_MS, ChallengeStore, approvalKeyMessage, parseP256Spki, verifyApprovalAttestation, verifyEcSignature, verifyLabelAttestation } from "./approval-attestation.js";
 import { allowUnattestedKeys, verifyKeyAttestationChain } from "./key-attestation.js";
 import { getRevokedAttestationSerials } from "./attestation-status.js";
@@ -41,7 +47,55 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+import { isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+
+const ingestConsumers = new WeakMap<ExocortexDatabase, IngestConsumer>();
+
+export function ingestConsumerForDatabase(db: ExocortexDatabase): IngestConsumer {
+  let consumer = ingestConsumers.get(db);
+  if (consumer) return consumer;
+  const hooks = [
+    { name: "world-model", apply: async (events: EventRecord[], target: ExocortexDatabase) => {
+      ensureShadowRecorder();
+      await defaultWorldModelHost.onEventsAppended(events, target);
+    } },
+    { name: "precognitive", apply: (events: EventRecord[], target: ExocortexDatabase) => defaultPreCognitiveHost.onEventsAppended(events, target) },
+    { name: "prediction", apply: (events: EventRecord[], target: ExocortexDatabase) => {
+      if (process.env.EXOCORTEX_PREDICTIONS !== "0") defaultPredictionHost.onEventsAppended(events, target);
+    } },
+    { name: "triage", apply: async (events: EventRecord[], target: ExocortexDatabase) => {
+      defaultTriageHost.onEventsAppended(events, target);
+      await defaultTriageHost.idle();
+    } },
+    { name: "shadow-labels", apply: (events: EventRecord[], target: ExocortexDatabase) => {
+      for (const ev of events) {
+        if (ev.kind !== "label") continue;
+        try {
+          const payload = JSON.parse(ev.payload);
+          if (payload?.proposal_id && isShadowLabel(payload?.label)) {
+            const source = payload?.source === "inferred"
+              ? "inferred"
+              : labelSource(target, ev.device_id, String(payload.proposal_id), payload.label, payload.attestation);
+            applyShadowLabel(target, ev.device_id, {
+              proposalId: String(payload.proposal_id),
+              label: payload.label,
+              source,
+              actual: payload.actual,
+              latencyMs: payload.latency_ms,
+              emitEvent: false,
+            });
+          }
+        } catch {
+          // Invalid legacy labels are ignored, as they were on the synchronous path.
+        }
+      }
+    } },
+  ];
+  consumer = new IngestConsumer({ db, hooks });
+  ingestConsumers.set(db, consumer);
+  registerIngestWakeHandler(db, () => consumer?.wake());
+  return consumer;
+}
 
 
 
@@ -120,6 +174,8 @@ if (process.env.NODE_ENV !== "test") {
     process.exit(1);
   }
 
+  ingestConsumerForDatabase(getDatabase()).start();
+
   // Attach automated Neo4j Living Brain real-time sync
   defaultNeo4jSyncService.attachToHost(defaultWorldModelHost);
 
@@ -195,7 +251,7 @@ function deviceHasScope(db: ExocortexDatabase, deviceId: string, ...allowedScope
  * Lazily attach the shadow recorder on first event or observation (no DB side effects at import time).
  * Env is read once at attach; changing SHADOW or EXOCORTEX_SHADOW_RECORD needs a restart.
  */
-function ensureShadowRecorder(): void {
+function ensureShadowRecorder(atStartup = false): void {
   if (process.env.EXOCORTEX_SHADOW_RECORD === "0" || defaultWorldModelHost.shadowRecordingSettled) return;
   try {
     defaultWorldModelHost.setShadowRecorder(
@@ -206,6 +262,12 @@ function ensureShadowRecorder(): void {
     const seeded = defaultWorldModelHost.seedFromPastEvents(getDatabase());
     if (seeded) console.log(`[life-graph] seeded from ${seeded.sessions} past sessions: ${seeded.projects} projects, ${seeded.edges} edges`);
   } catch (err) {
+    // At startup the database may still be locked by the process being replaced. Leave recording enabled so the
+    // retry (or the first event) attaches it, instead of disabling it for the life of this daemon.
+    if (atStartup) {
+      console.error("[shadow-recorder] startup attach failed, will retry:", err instanceof Error ? err.message : err);
+      return;
+    }
     console.error("[shadow-recorder] disabled:", err instanceof Error ? err.message : err);
     defaultWorldModelHost.disableShadowRecording();
   }
@@ -753,63 +815,17 @@ export const server = createServer(async (req, res) => {
         deduped.req.events.length > 0
           ? db.ingestBatch(deduped.req)
           : { insertedCount: 0, duplicateCount: 0, events: [] as ReturnType<typeof db.ingestBatch>["events"], insertedEvents: [] as ReturnType<typeof db.ingestBatch>["events"] };
+      // Tally what was dropped on a canonical row; the event itself is never rewritten.
+      if (deduped.pending.length > 0) {
+        try {
+          recordTelemetryDuplicates(db, reqObj.device_id, deduped.pending);
+        } catch (err) {
+          console.error("[telemetry-tally] failed:", err instanceof Error ? err.message : err);
+        }
+      }
       const result = { ...stored, duplicateCount: stored.duplicateCount + deduped.skipped };
       if (result.insertedEvents.length > 0) {
-        try {
-          // Attach the shadow recorder to the normal append-only event pipeline. The host
-          // maps only explicitly supported observation signals into shadow proposals.
-          ensureShadowRecorder();
-          defaultWorldModelHost.onEventsAppended(result.insertedEvents, db);
-        } catch (wmErr) {
-          console.error("[world-model-host] event batch ingest hook error:", wmErr);
-        }
-
-        // Frontier 1: PreCognitive neuromotor readiness & dynamic wake threshold tracking
-        try {
-          defaultPreCognitiveHost.onEventsAppended(result.insertedEvents, db);
-        } catch (precogErr) {
-          console.error("[precognitive-host] event batch hook error:", precogErr instanceof Error ? precogErr.message : precogErr);
-        }
-
-        // Next-action prediction log (shadow only). Isolated: it must never break event ingest.
-        if (process.env.EXOCORTEX_PREDICTIONS !== "0") {
-          try {
-            defaultPredictionHost.onEventsAppended(result.insertedEvents, db);
-          } catch (predErr) {
-            console.error("[prediction-host] event batch hook error:", predErr instanceof Error ? predErr.message : predErr);
-          }
-        }
-
-        // Local-LLM triage of telemetry text (shadow only, async, off the ingest path).
-        try {
-          defaultTriageHost.onEventsAppended(result.insertedEvents, db);
-        } catch (triageErr) {
-          console.error("[triage-host] event batch hook error:", triageErr instanceof Error ? triageErr.message : triageErr);
-        }
-
-        // Synchronize any shadow label events into shadow_labels table
-        for (const ev of result.insertedEvents) {
-          if (ev.kind === "label") {
-            try {
-              const payload = JSON.parse(ev.payload);
-              if (payload?.proposal_id && isShadowLabel(payload?.label)) {
-                const source = payload?.source === "inferred"
-                  ? "inferred"
-                  : labelSource(db, auth.deviceId, String(payload.proposal_id), payload.label, payload.attestation);
-                applyShadowLabel(db, auth.deviceId, {
-                  proposalId: String(payload.proposal_id),
-                  label: payload.label,
-                  source,
-                  actual: payload.actual,
-                  latencyMs: payload.latency_ms,
-                  emitEvent: false,
-                });
-              }
-            } catch {
-              // Non-fatal label sync
-            }
-          }
-        }
+        res.once("finish", () => ingestConsumerForDatabase(db).wake());
       }
       sendJson(res, 200, {
         ok: true,
@@ -1315,6 +1331,16 @@ export const server = createServer(async (req, res) => {
   }
 
   // --- Integration Channels & Air-Gap API (/v3/channels) ---
+
+  if (url.pathname === "/v3/channels" || url.pathname.startsWith("/v3/channels/")) {
+    const allowed = method === "GET"
+      ? deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:read", "admin:write")
+      : deviceHasScope(getDatabase(), auth.deviceId, "admin:write");
+    if (!allowed) {
+      sendJson(res, 403, { error: method === "GET" ? "forbidden: requires admin, admin:read, or admin:write" : "forbidden: requires admin:write" });
+      return;
+    }
+  }
 
   if (method === "GET" && url.pathname === "/v3/channels") {
     try {
@@ -2024,10 +2050,14 @@ function getUnlabeledShadowProposals(
     try {
       // Default deny. "Not mapped", "missing scope" and "approval action" all return the same 403 so the response does
       // not reveal which actions exist (docs/DELEGATE_CAPABILITIES_DESIGN.md).
-      const denied = () => sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      let attempt: { to?: unknown; action?: unknown } = {};
+      const denied = (reason: DelegateDenialReason) => {
+        recordDelegateDenial(getDatabase(), { deviceId: auth.deviceId, ...attempt, reason });
+        sendJson(res, 403, { error: "forbidden: delegation not permitted" });
+      };
       // Devices with no delegate scope at all are refused before the body is read.
       if (!deviceHasScope(getDatabase(), auth.deviceId, ...ANY_DELEGATE_SCOPES)) {
-        denied();
+        denied("scope");
         return;
       }
       const raw = await readBody(req, 64 * 1024);
@@ -2043,19 +2073,36 @@ function getUnlabeledShadowProposals(
         sendJson(res, 400, { error: parsed.error });
         return;
       }
+      attempt = { to: parsed.to, action: parsed.action };
       // Approve/reject/release carry authority only /network/approve verifies.
-      const capability = isApprovalAction(parsed.action) ? null : resolveDelegate(parsed.to, parsed.action, parsed.payload);
-      if (!capability || !deviceHasScope(getDatabase(), auth.deviceId, ...ADMIN_SCOPES, ...capability.scopes)) {
-        denied();
+      if (isApprovalAction(parsed.action)) {
+        denied("approval_action");
+        return;
+      }
+      const capability = resolveDelegate(parsed.to, parsed.action, parsed.payload);
+      if (!capability) {
+        denied("unmapped");
+        return;
+      }
+      const dev = getDatabase().getDevice(auth.deviceId);
+      if (!dev || dev.revoked_at !== null || !Array.isArray(dev.scopes) || !scopesSatisfy(dev.scopes, capability)) {
+        denied("scope");
+        return;
+      }
+      // The triad classify action is a risk-scanner oracle: 30 per minute per device.
+      if (parsed.to === "autonomous-triad" && parsed.action === "classify" && !classifyBucket.take(auth.deviceId)) {
+        res.setHeader("Retry-After", "2");
+        sendJson(res, 429, { error: "rate limit: classify is limited to 30 per minute per device" });
         return;
       }
       // The caller never names itself: memory.add authorizes on `from`, so the daemon states who is calling.
       parsed.from = GATEWAY_NODE;
       // Shadow mode: propose-only. Anything the map marks "block" is refused while SHADOW is on.
       if (capability.shadow === "block" && process.env.SHADOW !== "0") {
+        recordDelegateDenial(getDatabase(), { deviceId: auth.deviceId, to: parsed.to, action: parsed.action, reason: "shadow" });
         sendJson(res, 423, {
           ok: false,
-          error: "shadow mode: device actuation disabled (set SHADOW=0 to allow delegation to hermes-api)",
+          error: `shadow mode: ${parsed.to}.${parsed.action} is blocked while SHADOW is on (set SHADOW=0 to allow it)`,
           shadow_mode: true,
         });
         return;
@@ -2321,7 +2368,12 @@ if (process.env.NODE_ENV !== "test") {
     warmUpHomeProxyConnection().catch((err) => console.warn("[warmup] unexpected failure:", err));
   }
   // Seed people and projects into the life graph now, so the Brain is complete before the first phone event.
-  ensureShadowRecorder();
+  ensureShadowRecorder(true);
+  startCalibrationSampler(getDatabase);
+  startForecastCardSampler(getDatabase);
+  for (const delayMs of [5_000, 15_000, 45_000]) {
+    setTimeout(() => ensureShadowRecorder(true), delayMs).unref();
+  }
   // Push hook: poll the DB for newly SURFACED proposals (notifyProposalSurfaced() in push-notifier.ts is the in-process hook).
   defaultPushNotifier.start();
   if (process.env.EXOCORTEX_PHONE_WATCH !== "0") {

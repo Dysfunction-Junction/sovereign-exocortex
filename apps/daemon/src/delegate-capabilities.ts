@@ -15,6 +15,8 @@ export interface DelegateCapability {
 export const SCOPE_DELEGATE_READ = "delegate:read";
 export const SCOPE_DELEGATE_MEMORY_READ = "delegate:memory-read";
 export const SCOPE_DELEGATE_WRITE = "delegate:write";
+/** Granted to no device by default. T3 and T4 need it in addition to `admin:write`. */
+export const SCOPE_DELEGATE_ACTUATE = "delegate:actuate";
 export const ADMIN_SCOPES = ["admin", "admin:write"] as const;
 /** A device holding none of these may not delegate at all, so the body is not even read for it. */
 export const ANY_DELEGATE_SCOPES = [...ADMIN_SCOPES, SCOPE_DELEGATE_READ, SCOPE_DELEGATE_MEMORY_READ, SCOPE_DELEGATE_WRITE] as const;
@@ -68,7 +70,8 @@ export function resolveDelegate(to: string, action: string, payload: Record<stri
   if (!CANONICAL.test(to) || !CANONICAL.test(action)) return null;
   if (!Object.hasOwn(DELEGATE_MAP, to)) return null;
   if (to === "pieces-for-all" && action === "memory") {
-    // Mirror the memory node exactly: a non-string payload.action means search; the string is lower-cased, not trimmed.
+    // No sub-action means search (as the memory node does). A present but non-string sub-action is denied.
+    if (payload.action !== undefined && typeof payload.action !== "string") return null;
     const sub = typeof payload.action === "string" ? payload.action.toLowerCase() : "search";
     if (sub === "search") return MEMORY_SEARCH;
     if (sub === "add") return MEMORY_ADD;
@@ -79,6 +82,12 @@ export function resolveDelegate(to: string, action: string, payload: Record<stri
   return Object.hasOwn(table, action) ? table[action]! : null;
 }
 
+/** T3 and T4 act on devices or spawn work: they need BOTH `admin:write` and `delegate:actuate`. */
+export function needsActuate(capability: DelegateCapability): boolean {
+  return capability.tier === "T3" || capability.tier === "T4";
+}
+
 export function scopesSatisfy(deviceScopes: readonly string[], capability: DelegateCapability): boolean {
+  if (needsActuate(capability)) return deviceScopes.includes("admin:write") && deviceScopes.includes(SCOPE_DELEGATE_ACTUATE);
   return [...ADMIN_SCOPES, ...capability.scopes].some((s) => deviceScopes.includes(s));
 }

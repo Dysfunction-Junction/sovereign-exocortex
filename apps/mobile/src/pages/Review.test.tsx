@@ -206,4 +206,75 @@ describe("Review page", () => {
       expect(screen.getByText(/No shadow proposals are currently waiting/i)).toBeTruthy();
     });
   });
+
+  describe("why line on review cards (row N.1)", () => {
+    test("renders full why line when all fields are present", async () => {
+      const threeHoursAgo = Date.now() - 3 * 3600 * 1000;
+      const proposal: PendingProposal = {
+        proposalId: "prop_full_why",
+        candidateId: "cand_full",
+        summary: "Full proposal summary with why line",
+        riskLevel: "low",
+        requiresBiometric: false,
+        approvalNonce: "nonce_1",
+        expiresAt: Date.now() + 60000,
+        state: "gated",
+        tier: 1,
+        efe: 0.42,
+        updatedAt: threeHoursAgo,
+      };
+      mockGetPendingShadowProposals.mockResolvedValueOnce([proposal]);
+
+      render(<Review />);
+
+      await waitFor(() => {
+        const why = screen.getByTestId("review-card-why");
+        expect(why.textContent).toBe("Gated \u00b7 tier T1 \u00b7 EFE 0.42 \u00b7 3h ago");
+      });
+    });
+
+    test("renders why line gracefully when efe is missing", async () => {
+      const proposal: PendingProposal = {
+        proposalId: "prop_no_efe",
+        candidateId: "cand_no_efe",
+        summary: "Proposal without EFE",
+        riskLevel: "medium",
+        requiresBiometric: false,
+        approvalNonce: "nonce_2",
+        expiresAt: Date.now() + 60000,
+        state: "surfaced",
+        tier: 2,
+        updatedAt: Date.now() - 15 * 60 * 1000,
+      };
+      mockGetPendingShadowProposals.mockResolvedValueOnce([proposal]);
+
+      render(<Review />);
+
+      await waitFor(() => {
+        const why = screen.getByTestId("review-card-why");
+        expect(why.textContent).toBe("Surfaced \u00b7 tier T2 \u00b7 15m ago");
+      });
+    });
+
+    test("renders why line omitting missing fields and handles absent fields", async () => {
+      const proposal: PendingProposal = {
+        proposalId: "prop_sparse",
+        candidateId: "cand_sparse",
+        summary: "Sparse proposal",
+        riskLevel: "low",
+        requiresBiometric: false,
+        approvalNonce: "nonce_3",
+        expiresAt: Date.now() + 60000,
+        state: "gated",
+      };
+      mockGetPendingShadowProposals.mockResolvedValueOnce([proposal]);
+
+      render(<Review />);
+
+      await waitFor(() => {
+        const why = screen.getByTestId("review-card-why");
+        expect(why.textContent).toBe("Gated");
+      });
+    });
+  });
 });

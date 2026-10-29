@@ -3,7 +3,9 @@
  * Prints shadow-mode calibration metrics. Opens the database read-only.
  *
  * Exit codes: 0 pass, 1 circuit breaker tripped, 2 usage error,
- * 3 insufficient data, 4 heuristic scorer (baseline not beaten), 70 runtime error.
+ * 3 insufficient data, 4 heuristic scorer (baseline not beaten),
+ * 5 no baseline (supply --baseline or let the db derive one), 70 runtime error.
+ * Pass/fail is judged on gate proposals only; calibration samples feed the breaker, not the verdict.
  */
 
 import { parseArgs } from "node:util";
@@ -11,7 +13,7 @@ import { DatabaseSync } from "node:sqlite";
 import { writeFile } from "node:fs/promises";
 import { computeShadowMetrics, formatShadowReport, loadShadowRows, type ShadowVerdict } from "./shadow-metrics.js";
 
-const EXIT: Record<ShadowVerdict, number> = { pass: 0, fail: 1, insufficient_data: 3, heuristic_scorer: 4 };
+const EXIT: Record<ShadowVerdict, number> = { pass: 0, fail: 1, insufficient_data: 3, heuristic_scorer: 4, no_baseline: 5 };
 
 function usage(msg: string): never {
   console.error(`${msg}\nusage: shadow-report-cli <db-path> [--days N] [--baseline P (0..1)] [--json <output-path>]`);

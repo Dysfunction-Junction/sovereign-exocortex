@@ -18,13 +18,16 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 - Do not push to main. Do not force-push. Do not add servers or change model sizes without asking.
 
 ## Queue
+
+Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md). Builders: agy and Codex. Reviews: section 4 of that file.
+
 | Row | Work | Tool | Status |
 | --- | --- | --- | --- |
 | 0.1 | Triage-label test fix, README limits (PR #18) | any | Done |
 | 3.1-3.2 | Embeddings and vision on llama.cpp (PR #19) | any | Done |
 | 0.4 | Obsidian test builds a temp vault (PR #20) | agy | Done |
 | 0.2 | CI workflow | Claude | Done |
-| - | Move `packages/triad` off Ollama to llama.cpp :8080 (PR #22: merge `main` in, get CI green, then merge) | agy | Ready |
+| - | `packages/triad` off Ollama to llama.cpp :8080 (PR #22); `EXOCORTEX_TRIAD_BACKEND=ollama` restores Ollama | agy | Done |
 | 0.3 | Raise root `engines` to Node >= 24 (PR #23) | agy | Done |
 | 0.5 | `checkout_argv` works on Git < 2.44 (PR #24) | agy | Done |
 | 0.6 | Tag `person:` entities with source channel; purge by tag on Gmail disconnect (PR #25) | agy | Done |
@@ -33,8 +36,19 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 | 3.3 | Inference broker (queue, priority triage > embed > vision) (PR #26) | Claude Code | Done |
 | 2.1-2.2 | Delegate capability map, /network/delegate routed through it (PR #34, Opus-reviewed design) | Claude Code | Done |
 | 3.3a | OS priority for llama-server roles (PR #36). Triage p95 1.30 s quiet, 1.49 s under embed backfill (+14.5%); broker proxy not needed | agy | Done |
-| 2.4a | Container verification on real workspaces. `docker_runner.py` runs as uid 65534, but `mkdtemp` and `git clone --shared` workspaces are 0700, so every run fails closed outside tests. Fix: on Linux run the container as the invoking uid:gid (refuse uid 0), keep every other flag; never chmod 0777 host data. Add a test with a 0700 workspace. Note `--shared` clones keep objects in the host bare repo, which is not mounted: anything calling `git` inside the container breaks. Docker runs in WSL2 (Engine 29.9, image `python:3.12-slim`, `--pull never`) | Claude Code | Ready (before 2.4) |
-| 4.0a | Shadow surfacing volume: Precision@surface counts only surfaced proposals (correct), so the review screen does not speed the gate. Propose a shadow-only surfacing threshold change | Opus | Needs design |
-| 1.1 | Channel event schema and email-body decision | Opus | Needs design |
-| 1.2-1.6, 2.3-2.5 | Ingestion build, scripted executors, kill-switch drill | agy | Blocked on 1.1 / 2.1 |
-| - | Move home proxy `/mobile/ask` off Ollama (other repo: pieces-android-shizuku-monitor) | Claude Code | Blocked (separate repo) |
+| 2.4a | Verification containers run as the invoking uid:gid on Linux, root refused; works on 0700 workspaces (PR #39). No profile runs git in the container | Claude Code | Done |
+| 4.0a | Calibration surfacing in shadow mode (spec R4, PR #57) | Codex | Done |
+| 1.1 | Channel event schema and private content vault (spec R5) | Codex | Done |
+| N.1 | "Why" line on review cards (PR #41) | agy | Done |
+| 2.1b | Tighten map: T3/T4 need `admin:write`, non-string memory sub-action denied (PR #40, Opus-approved) | Claude Code | Done |
+| 2.1c | Delegate follow-ups: `delegate:actuate` scope required for T3/T4 before SHADOW=0 is ever used; write an event for every denied delegation; rate-limit `triad classify`; fix the 423 body text (says hermes-api for every block) | Claude Code | Done |
+| 2.3 | Scripted executors for every T0/T1 action (no LLM in the execute step) (PR #47) | agy | Done |
+| 2.4 | Morphogenetic engine: flag default off, or add the missing gates (no-network container, diff-size cap, static and security scan, reproduction test) (flag default off, diff-size cap and reproduction gate in the 2.4 PR) | Claude Code | Done |
+| 2.4b | Morphogenetic static and security scan gate (spec R3, PR #56) | agy | Done |
+| 2.5 | Kill-switch drill: flipping SHADOW=1 at runtime blocks every actuating route | Claude Code | Done |
+| 2.6 | Scope check on /v3/channels/* (spec R1) | Codex | Done |
+| 2.3a | Re-tier self_heal_restore: it writes local graph state, so it is T2, not T0 (spec R10, PR #59) | agy | Done |
+| 1.2 | Adapters emit channel events (spec R6, PR #61) | agy | Done |
+| 1.3 | World model projects channel events (spec R7, PR #62) | Codex / agy | Done |
+| 1.4-1.6 | Async consumer, replay test, resync (spec R8) | agy | Done |
+| - | Home proxy /mobile/ask off Ollama, then retire Ollama (spec R9, PR #14 in pieces-android-companion-seamless) | Codex / agy | Done |

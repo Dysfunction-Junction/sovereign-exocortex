@@ -12,10 +12,13 @@ import sys
 import os
 import subprocess
 import json
+import re
 import time
 import tempfile
 import shutil
 import threading
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Tuple, Generator
@@ -25,7 +28,10 @@ try:
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
         is_port_open, strip_diff_bloat,
     )
-    from triad.paths import expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH
+    from triad.paths import (
+        expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
+        local_backend, llama_cpp_url, local_llm_port,
+    )
     from triad.circuit import (
         is_circuit_open, circuit_remaining, circuit_reason,
         record_success, record_failure,
@@ -35,7 +41,10 @@ except ImportError:  # flat install (~/.agents/triad) without the package prefix
         kill_process_tree, is_failed_advisor_response, classify_advisor_response,
         is_port_open, strip_diff_bloat,
     )
-    from paths import expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH
+    from paths import (
+        expand_path, PORT_OLLAMA, CLAUDE_PATH, CODEX_PATH, HERMES_PATH, OLLAMA_PATH,
+        local_backend, llama_cpp_url, local_llm_port,
+    )
     from circuit import (
         is_circuit_open, circuit_remaining, circuit_reason,
         record_success, record_failure,
@@ -68,6 +77,20 @@ def is_test_advisor(advisor: Dict[str, Any]) -> bool:
     return name == "mock" or role in TEST_ROLES
 
 
+def effective_advisor(advisor: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply the ``EXOCORTEX_TRIAD_BACKEND=ollama`` override: an advisor that declares an
+    ``ollama_override`` block reverts to its legacy subprocess definition (and drops the
+    HTTP transport). Without the override the advisor is returned unchanged.
+    """
+    override = advisor.get("ollama_override")
+    if not override or local_backend() != "ollama":
+        return advisor
+    merged = {k: v for k, v in advisor.items() if k not in ("transport", "model", "ollama_override")}
+    merged.update(override)
+    return merged
+
+
 def _resolve_readiness_port(advisor: Dict[str, Any]) -> Optional[int]:
     raw = advisor.get("readiness_port")
     if raw is None or raw == "":
@@ -76,6 +99,8 @@ def _resolve_readiness_port(advisor: Dict[str, Any]) -> Optional[int]:
         token = raw.strip()
         if token in ("{port_ollama}", "ollama"):
             return PORT_OLLAMA
+        if token == "{port_local_llm}":
+            return local_llm_port()
         if token.isdigit():
             return int(token)
         return None
@@ -90,9 +115,12 @@ def advisor_is_ready(advisor: Dict[str, Any]) -> Tuple[bool, str]:
     Cheap preflight: skip advisors whose local daemon is down or whose binary
     cannot be resolved, instead of burning the full subprocess timeout.
     """
+    advisor = effective_advisor(advisor)
     port = _resolve_readiness_port(advisor)
     if port is not None and not is_port_open("127.0.0.1", port, timeout=0.2):
         return False, f"port {port} closed"
+    if advisor.get("transport") == "openai_http":
+        return True, ""
     raw = advisor.get("binary_path", "")
     fallback = advisor.get("fallback_binary")
     if not raw and not fallback:
@@ -376,6 +404,45 @@ def remove_advisor(advisor_name: str, config_path: Optional[Union[str, Path]] = 
     return False
 
 
+def _execute_openai_http_advisor(
+    advisor: Dict[str, Any],
+    prompt: str,
+    context: Optional[str],
+    diff: Optional[str],
+    mode: str,
+    timeout: int,
+) -> str:
+    """Query a llama-server over its OpenAI-compatible /v1/chat/completions API (loopback only)."""
+    advisor_name = advisor.get("name", "unknown")
+    display_name = advisor.get("display_name", advisor_name)
+    full_prompt = build_advisor_prompt(prompt, context=context, diff=diff, mode=mode)
+    started = time.monotonic()
+    try:
+        url = llama_cpp_url() + "/v1/chat/completions"
+        body = json.dumps({
+            "model": advisor.get("model", "qwen3:1.7b"),
+            "stream": False,
+            "temperature": 0.2,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "messages": [{"role": "user", "content": full_prompt + " /no_think"}],
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+        # Loopback only: ignore any system proxy so the prompt can never leave the machine.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=timeout) as resp:
+            envelope = json.loads(resp.read().decode("utf-8", errors="replace"))
+        text = str(((envelope.get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "ok" if text else "empty", len(full_prompt))
+        return text
+    except TimeoutError:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "timeout", len(full_prompt))
+        return f"[Error: {display_name} timed out after {timeout}s]"
+    except Exception as e:
+        record_advisor_call(advisor_name, mode, time.monotonic() - started, "error", len(full_prompt))
+        return f"[Error calling {display_name}: {e}]"
+
+
 def _execute_single_advisor_raw(
     advisor: Dict[str, Any],
     prompt: str,
@@ -385,6 +452,9 @@ def _execute_single_advisor_raw(
     timeout: int = 120
 ) -> str:
     """Execute a single advisor using its declared configuration."""
+    advisor = effective_advisor(advisor)
+    if advisor.get("transport") == "openai_http":
+        return _execute_openai_http_advisor(advisor, prompt, context, diff, mode, timeout)
     raw_bin = advisor.get("binary_path", "")
     fallback_bin = advisor.get("fallback_binary")
     bin_path = resolve_binary(raw_bin, fallback_bin, advisor_name=advisor.get("name"))

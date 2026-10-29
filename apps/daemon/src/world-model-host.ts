@@ -1,12 +1,14 @@
+import { ChannelVault } from "./channels/channel-vault.js";
+import type { EntityType, RelationType } from "@exocortex/world-model";
 /**
  * @file world-model-host.ts
  * Unified Host integration for the Living World Model in exocortexd.
- * 
+ *
  * Fuses:
  * 1. LivingLifeGraph (Entities, relations, decay, spreading activation)
  * 2. CognitiveModeGate (Bandwidth classification & attentional filtering)
  * 3. ActiveInferenceEngine (Homeostatic invariants & Expected Free Energy minimization)
- * 
+ *
  * Directly connected to the Exocortex Event Bus and Speculative Dry-Run Cache.
  */
 
@@ -41,6 +43,7 @@ import { mayActuateAutoExecute, type ShadowRecorder } from "./shadow-recorder.js
 import { getDatabase, hasDatabase } from "./db-host.js";
 import type { ExocortexDatabase } from "@exocortex/core/db";
 import { loadProposalPreferences, type PreferenceMetrics } from "./proposal-preferences.js";
+import { defaultAutoExecutor } from "./scripted-executors.js";
 
 const MAX_RECORDER_FAILURES = 5;
 
@@ -109,6 +112,7 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
 }
 
 export class WorldModelHost {
+  private readonly processedEventSeqByDb = new WeakMap<ExocortexDatabase, number>();
   private static instance: WorldModelHost | null = null;
 
   public readonly lifeGraph: LivingLifeGraph;
@@ -139,6 +143,12 @@ export class WorldModelHost {
     this.cognitiveGate = new CognitiveModeGate();
     this.activeInference = new ActiveInferenceEngine(this.lifeGraph);
     this.learnedEngine = new LearnedActiveInferenceEngine();
+    this.autoExecutor = (policy, proposal) => {
+      defaultAutoExecutor(policy, proposal, {
+        lifeGraph: this.lifeGraph,
+        db: this.preferenceDb ?? (hasDatabase() ? getDatabase() : null),
+      });
+    };
 
     if (hasDatabase()) {
       try {
@@ -165,6 +175,10 @@ export class WorldModelHost {
     // Replay events into living life graph to restore projection across restarts
     const recentEvents = db.listEvents({ limit: 1000 });
     for (const ev of recentEvents) {
+      if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
+        this.projectChannelEvent(ev, db);
+        continue;
+      }
       try {
         const autoCreate = this.lifeGraph.entityCount < 20000;
         const linkCtx = linkEventToGraph(
@@ -545,14 +559,186 @@ export class WorldModelHost {
    * Batch ingest newly appended events, updating generative models and persisting
    * belief snapshots and parameters in a single transaction.
    */
+
+  private vault?: ChannelVault | null;
+
+  public setVault(vault: ChannelVault | null): void {
+    this.vault = vault;
+  }
+
+  public getVault(db?: ExocortexDatabase | null): ChannelVault | null {
+    if (this.vault) return this.vault;
+    const targetDb = db ?? this.preferenceDb ?? (hasDatabase() ? getDatabase() : null);
+    if (targetDb) {
+      this.vault = new ChannelVault(targetDb);
+      return this.vault;
+    }
+    return null;
+  }
+
+  private resolveEntityId(key: string): string | null {
+    if (this.lifeGraph.getEntity(key)) return key;
+    if (this.lifeGraph.getEntity(`doc:${key}`)) return `doc:${key}`;
+    if (this.lifeGraph.getEntity(`person:${key}`)) return `person:${key}`;
+    if (this.lifeGraph.getEntity(`project:${key}`)) return `project:${key}`;
+    return null;
+  }
+
+  public purgeChannelEntities(channel: string): number {
+    let removed = 0;
+    const graph = this.lifeGraph;
+    for (const entity of graph.snapshot().entities) {
+      const props = entity.properties as Record<string, unknown> | undefined;
+      if (!props) continue;
+      const isTagged =
+        props.sourceChannel === channel ||
+        props.channelId === channel ||
+        (Array.isArray(props.tags) && (props.tags.includes(`source:${channel}`) || props.tags.includes(channel)));
+      if (isTagged) {
+        if (graph.removeEntity(entity.id)) {
+          removed++;
+        }
+      }
+    }
+    return removed;
+  }
+
+  public projectChannelEvent(ev: EventRecord, db?: ExocortexDatabase | null): void {
+    let payload: Record<string, unknown>;
+    try {
+      payload = typeof ev.payload === "string" ? JSON.parse(ev.payload) : (ev.payload as Record<string, unknown>);
+    } catch {
+      return;
+    }
+    if (!payload || typeof payload !== "object") return;
+
+    const kind = ev.kind;
+    const channel = String(payload.channel ?? "");
+    const observedAt = typeof payload.observed_at === "number" ? payload.observed_at : (ev.ts_device || Date.now());
+
+    if (kind === "channel.entity.upserted") {
+      const entityType = String(payload.entity_type ?? "").toLowerCase();
+      const entityKey = String(payload.entity_key ?? "");
+      const ref = String(payload.ref ?? "");
+      if (!entityKey || !ref) return;
+
+      const vault = this.getVault(db);
+      const content = vault?.get(ref);
+      if (!content) return;
+
+      const entityId = `${entityType}:${entityKey}`;
+      const label = content.display_name ?? entityId;
+      const existing = this.lifeGraph.getEntity(entityId);
+      const activation = existing ? existing.activation : 1.0;
+      const lastActive = existing ? existing.lastActive : observedAt;
+
+      const normalizedType = (entityType === "project" ? "PROJECT" : "PERSON") as EntityType;
+
+      this.lifeGraph.addEntity({
+        id: entityId,
+        type: normalizedType,
+        name: label,
+        properties: {
+          ...(existing?.properties ?? {}),
+          channelId: channel,
+          sourceChannel: channel,
+          tags: [`source:${channel}`, channel],
+        },
+        activation,
+        lastActive,
+      });
+    } else if (kind === "channel.document.upserted") {
+      const docKey = String(payload.doc_key ?? "");
+      const ref = String(payload.ref ?? "");
+      if (!docKey) return;
+
+      const docId = `doc:${docKey}`;
+      const vault = this.getVault(db);
+      const content = ref ? vault?.get(ref) : null;
+      const title = content?.title ?? "(document)";
+
+      const existing = this.lifeGraph.getEntity(docId);
+      const activation = existing ? existing.activation : 1.0;
+      const lastActive = existing ? existing.lastActive : observedAt;
+
+      this.lifeGraph.addEntity({
+        id: docId,
+        type: "DOC",
+        name: title,
+        properties: {
+          ...(existing?.properties ?? {}),
+          channelId: channel,
+          sourceChannel: channel,
+          contentSha256: payload.content_sha256,
+          tags: [`source:${channel}`, channel],
+        },
+        activation,
+        lastActive,
+      });
+    } else if (kind === "channel.link.upserted") {
+      const fromKey = String(payload.from_key ?? "");
+      const toKey = String(payload.to_key ?? "");
+      const relStr = String(payload.rel ?? "links_to");
+      if (!fromKey || !toKey) return;
+
+      let sourceId = this.resolveEntityId(fromKey);
+      if (!sourceId) sourceId = `doc:${fromKey}`;
+
+      let targetId = this.resolveEntityId(toKey);
+      if (!targetId) {
+        targetId = `doc:${toKey}`;
+        this.lifeGraph.addEntity({
+          id: targetId,
+          type: "DOC",
+          name: "(document)",
+          properties: {
+            channelId: channel,
+            sourceChannel: channel,
+            tags: [`source:${channel}`, channel],
+          },
+          activation: 0.5,
+          lastActive: observedAt,
+        });
+      }
+
+      const relMap: Record<string, RelationType> = {
+        mentions: "MENTIONS",
+        links_to: "REFERENCES",
+        authored: "WORKS_ON",
+        member_of: "CARES_ABOUT",
+      };
+      const relation = relMap[relStr] ?? "REFERENCES";
+
+      if (this.lifeGraph.getEntity(sourceId) && this.lifeGraph.getEntity(targetId)) {
+        try {
+          this.lifeGraph.addEdge(sourceId, targetId, relation);
+        } catch {
+          // ignore duplicate
+        }
+      }
+    } else if (kind === "channel.disconnected") {
+      if (channel) {
+        this.purgeChannelEntities(channel);
+      }
+    }
+  }
+
   public onEventsAppended(events: EventRecord[], db?: ExocortexDatabase): BeliefSnapshotRecord | null {
     const targetDb = db ?? (hasDatabase() ? getDatabase() : null);
     if (targetDb) this.preferenceDb = targetDb;
+    const lastProcessed = targetDb ? (this.processedEventSeqByDb.get(targetDb) ?? 0) : 0;
+    const pendingEvents = [...events].sort((a, b) => a.seq - b.seq).filter((ev) => ev.seq > lastProcessed);
+    if (pendingEvents.length === 0) return null;
     const touchedFactors = new Set<string>();
     const batchSnapshots: BeliefSnapshotRecord[] = [];
     let lastObsSeq: number | null = null;
 
-    for (const ev of events) {
+    for (const ev of pendingEvents) {
+      if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
+        this.projectChannelEvent(ev, targetDb);
+        if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
+        continue;
+      }
       try {
         const autoCreate = this.lifeGraph.entityCount < 20000;
         const linkCtx = linkEventToGraph(
@@ -603,6 +789,7 @@ export class WorldModelHost {
       } catch (err) {
         console.warn(`[world-model-host] observation extraction error for seq ${ev.seq}:`, err);
       }
+      if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
     }
 
     if (lastObsSeq !== null && targetDb && batchSnapshots.length > 0) {

@@ -2,8 +2,13 @@
  * @file channel-manager.ts
  * Master Channel Manager for Sovereign Exocortex.
  * Manages Obsidian, Notion, and Gmail adapters, background schedulers, and entity routing.
+ *
+ * Spec R6 / Row 1.2: Channel data ingestion is event-sourced. Direct graph entity/edge
+ * mutations are removed. Adapters store human-readable content in the private
+ * ChannelVault and append validated channel.* events to the event log.
  */
 
+import { createHmac } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,7 +18,18 @@ import { GmailAdapter } from "./gmail-adapter.js";
 import { AirGapPolicy } from "./air-gap.js";
 import type { ChannelAdapter, ChannelId, ChannelStatus, SyncResult, IngestedDocument, IngestedEntity } from "./types.js";
 import type { WorldModelHost } from "../world-model-host.js";
-import { attachDocumentToOwner } from "@exocortex/world-model";
+import type { EventRecord } from "@exocortex/core";
+import type { ExocortexDatabase } from "@exocortex/core/db";
+import { getDatabase, hasDatabase } from "../db-host.js";
+import { scheduleIngestProcessing } from "../ingest-scheduler.js";
+import { ChannelVault } from "./channel-vault.js";
+import {
+  buildDocumentUpserted,
+  buildEntityUpserted,
+  buildLinkUpserted,
+  buildChannelDisconnected,
+  appendChannelEvent,
+} from "./channel-events.js";
 
 // Entity id prefixes each adapter writes (see the adapters' `id:` fields); purge must match them.
 const CHANNEL_ENTITY_PREFIXES: Record<ChannelId, readonly string[]> = {
@@ -22,36 +38,54 @@ const CHANNEL_ENTITY_PREFIXES: Record<ChannelId, readonly string[]> = {
   gmail: ["gmail:"],
 };
 
+export interface ChannelManagerOptions {
+  obsidianVaultPath?: string;
+  /** JSON file remembering the linked vault across restarts (non-secret settings only). */
+  configPath?: string;
+  onDocument?: (doc: IngestedDocument) => void;
+  onEntity?: (entity: IngestedEntity) => void;
+  db?: ExocortexDatabase | null;
+  vault?: ChannelVault | null;
+}
+
 export class ChannelManager {
   private adapters: Map<ChannelId, ChannelAdapter> = new Map();
   private auditSink: ((item: IngestedDocument | IngestedEntity) => void) | null = null;
-  private onDocumentIngested?: (doc: IngestedDocument) => void;
-  private onEntityIngested?: (entity: IngestedEntity) => void;
+  public onDocumentIngested: (doc: IngestedDocument) => void;
+  public onEntityIngested: (entity: IngestedEntity) => void;
+  private customOnDocument?: (doc: IngestedDocument) => void;
+  private customOnEntity?: (entity: IngestedEntity) => void;
   private worldModelHost?: WorldModelHost;
   private readonly configPath?: string;
+  private db?: ExocortexDatabase | null;
+  private vault?: ChannelVault | null;
 
-  constructor(options?: {
-    obsidianVaultPath?: string;
-    /** JSON file remembering the linked vault across restarts (non-secret settings only). */
-    configPath?: string;
-    onDocument?: (doc: IngestedDocument) => void;
-    onEntity?: (entity: IngestedEntity) => void;
-  }) {
-    this.onDocumentIngested = options?.onDocument;
-    this.onEntityIngested = options?.onEntity;
+  constructor(options?: ChannelManagerOptions) {
+    this.customOnDocument = options?.onDocument;
+    this.customOnEntity = options?.onEntity;
     this.configPath = options?.configPath;
+    this.db = options?.db ?? null;
+    this.vault = options?.vault ?? null;
+
+    this.onDocumentIngested = (doc) => {
+      this.handleDocumentIngested(doc);
+    };
+
+    this.onEntityIngested = (entity) => {
+      this.handleEntityIngested(entity);
+    };
 
     // 1. Initialize Obsidian Adapter
     const obsidian = new ObsidianAdapter(options?.obsidianVaultPath, (doc) => {
-      if (this.onDocumentIngested) this.onDocumentIngested(doc);
+      this.onDocumentIngested(doc);
     });
     this.adapters.set("obsidian", obsidian);
 
     // 2. Initialize Notion Adapter
     const notion = new NotionAdapter(undefined, (item) => {
-      if ("body" in item && this.onDocumentIngested) {
+      if ("body" in item) {
         this.onDocumentIngested(item as IngestedDocument);
-      } else if (this.onEntityIngested) {
+      } else {
         this.onEntityIngested(item as IngestedEntity);
       }
     });
@@ -59,13 +93,51 @@ export class ChannelManager {
 
     // 3. Initialize Gmail Adapter
     const gmail = new GmailAdapter(undefined, (item) => {
-      if ("body" in item && this.onDocumentIngested) {
+      if ("body" in item) {
         this.onDocumentIngested(item as IngestedDocument);
-      } else if (this.onEntityIngested) {
+      } else {
         this.onEntityIngested(item as IngestedEntity);
       }
     });
     this.adapters.set("gmail", gmail);
+  }
+
+  setDatabase(db: ExocortexDatabase | null): void {
+    this.db = db;
+    if (db && !this.vault) {
+      this.vault = new ChannelVault(db);
+    }
+  }
+
+  setVault(vault: ChannelVault | null): void {
+    this.vault = vault;
+  }
+
+  private getDb(): ExocortexDatabase | null {
+    if (this.db) return this.db;
+    try {
+      return hasDatabase() ? getDatabase() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private getVault(): ChannelVault | null {
+    if (this.vault) return this.vault;
+    const db = this.getDb();
+    if (db) {
+      this.vault = new ChannelVault(db);
+      return this.vault;
+    }
+    return null;
+  }
+
+  getChannelKey(id: ChannelId): Uint8Array | null {
+    return this.getVault()?.getChannelKey(id) ?? null;
+  }
+
+  getChannelVault(): ChannelVault | null {
+    return this.getVault();
   }
 
   getAdapter(id: ChannelId): ChannelAdapter | undefined {
@@ -79,101 +151,104 @@ export class ChannelManager {
 
   attachToWorldModel(worldModelHost: WorldModelHost): void {
     this.worldModelHost = worldModelHost;
-    const graph = worldModelHost.lifeGraph;
+  }
 
-    this.onDocumentIngested = (doc) => {
-      this.auditSink?.(doc);
-      const existing = graph.getEntity(doc.id);
-      // Preserve existing decay activation rather than inflating to 1.0 on every re-sync
-      const activation = existing ? existing.activation : 1.0;
+  private processInsertedEvent(event: EventRecord | null, db: ExocortexDatabase): void {
+    if (!event) return;
+    if (scheduleIngestProcessing(db)) return;
+    this.worldModelHost?.onEventsAppended([event], db);
+  }
 
-      graph.addEntity({
-        id: doc.id,
-        type: "DOC",
-        name: doc.title,
-        properties: {
-          ...(doc.metadata || {}),
-          sourcePath: doc.sourcePath,
-          tags: doc.tags,
-          channelId: doc.channelId,
-          untrusted: doc.untrusted, // Fixed field placed last to prevent clobbering
-        },
-        activation,
-        lastActive: existing ? existing.lastActive : Date.now(),
-      });
+  private handleDocumentIngested(doc: IngestedDocument): void {
+    this.auditSink?.(doc);
+    if (this.customOnDocument) {
+      this.customOnDocument(doc);
+    }
 
-      // Tags are source metadata; each doc is filed under one project (or the operator), never a tag hub.
-      attachDocumentToOwner(graph, { id: doc.id, name: doc.title, properties: { sourcePath: doc.sourcePath, tags: doc.tags } }, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
+    const db = this.getDb();
+    const vault = this.getVault();
+    if (!db || !vault) return;
 
+    const channelKey = vault.getChannelKey(doc.channelId);
+    if (!channelKey) return;
+
+    // 1. Human-readable fields put into private AES-256-GCM vault
+    const ref = vault.put(doc.channelId, {
+      title: doc.title,
+      body: doc.body,
+      ...(doc.sourcePath ? { url: doc.sourcePath } : {}),
+    });
+
+    // 2. Append channel.document.upserted event with zero plaintext
+    const docEvent = buildDocumentUpserted({
+      channel: doc.channelId,
+      channelKey,
+      naturalId: doc.id,
+      content: doc.body,
+      ref,
+      observedAt: doc.createdAt || Date.now(),
+    });
+    const insertedDoc = appendChannelEvent(db, docEvent);
+    this.processInsertedEvent(insertedDoc, db);
+
+    // 3. Append channel.link.upserted events for outgoing wikilinks
+    if (Array.isArray(doc.wikilinks)) {
       for (const link of doc.wikilinks) {
         const cleanLink = link.toLowerCase().replace(/\\/g, "/");
         const bareLink = link.replace(/\\/g, "/").replace(/\.md$/i, "");
-        const cleanBareLink = cleanLink.replace(/\.md$/i, "");
-
-        let targetId = `doc:${cleanLink}`;
-        const candidateObsidianId = `doc:obsidian:${bareLink}.md`;
-        const candidateObsidianLower = `doc:obsidian:${cleanBareLink}.md`;
-
-        if (graph.getEntity(candidateObsidianId)) {
-          targetId = candidateObsidianId;
-        } else if (graph.getEntity(candidateObsidianLower)) {
-          targetId = candidateObsidianLower;
-        } else {
-          // Check existing entities for a case-insensitive path match
-          for (const ent of graph.snapshot().entities) {
-            if (ent.type === "DOC" && ent.id.toLowerCase() === candidateObsidianLower) {
-              targetId = ent.id;
-              break;
-            }
-          }
-          // Direct project link if referencing Sovereign Exocortex monorepo
-          if (cleanBareLink.includes("sovereign") && cleanBareLink.includes("exocortex") && graph.getEntity("project_sovereign_exocortex")) {
-            targetId = "project_sovereign_exocortex";
-          }
-        }
-
-        // If targetId is not an existing entity, prefer canonical doc:obsidian prefix for vault paths
-        if (!graph.getEntity(targetId)) {
-          if (bareLink.includes("/")) {
-            targetId = `doc:obsidian:${bareLink}.md`;
-          }
-          if (!graph.getEntity(targetId)) {
-            graph.addEntity({
-              id: targetId,
-              type: "DOC",
-              name: link,
-              activation: 0.5,
-              lastActive: Date.now(),
-            });
-          }
-        }
-        try {
-          graph.addEdge(doc.id, targetId, "REFERENCES", 0.9);
-        } catch {
-          // Safe edge insert
-        }
+        const targetNaturalId = bareLink.includes("/") ? `doc:obsidian:${bareLink}.md` : `doc:${cleanLink}`;
+        const toKey = createHmac("sha256", channelKey).update(targetNaturalId, "utf8").digest("hex");
+        const linkEvent = buildLinkUpserted({
+          channel: doc.channelId,
+          fromKey: docEvent.payload.doc_key as string,
+          toKey,
+          rel: "links_to",
+          observedAt: doc.updatedAt || Date.now(),
+        });
+        const insertedLink = appendChannelEvent(db, linkEvent);
+        this.processInsertedEvent(insertedLink, db);
       }
-    };
+    }
+  }
 
-    this.onEntityIngested = (entity) => {
-      this.auditSink?.(entity);
-      const existing = graph.getEntity(entity.id);
-      const activation = existing ? existing.activation : 1.0;
+  private handleEntityIngested(entity: IngestedEntity): void {
+    this.auditSink?.(entity);
+    if (this.customOnEntity) {
+      this.customOnEntity(entity);
+    }
 
-      graph.addEntity({
-        id: entity.id,
-        type: entity.type,
-        name: entity.name,
-        properties: {
-          ...(entity.properties || {}),
-          channelId: entity.channelId,
-          sourceChannel: (entity.properties as Record<string, unknown> | undefined)?.sourceChannel || entity.channelId,
-          untrusted: entity.untrusted, // Fixed field placed last to prevent clobbering
-        },
-        activation,
-        lastActive: existing ? existing.lastActive : Date.now(),
-      });
-    };
+    const db = this.getDb();
+    const vault = this.getVault();
+    if (!db || !vault) return;
+
+    const channelKey = vault.getChannelKey(entity.channelId);
+    if (!channelKey) return;
+
+    const props = (entity.properties || {}) as Record<string, unknown>;
+    const email = typeof props.email === "string" ? props.email : undefined;
+    const url = typeof props.url === "string" ? props.url : undefined;
+
+    // 1. Human-readable fields put into private AES-256-GCM vault
+    const ref = vault.put(entity.channelId, {
+      display_name: entity.name,
+      ...(email ? { email } : {}),
+      ...(url ? { url } : {}),
+    });
+
+    // 2. Append channel.entity.upserted event with zero plaintext
+    const entityType = entity.type.toUpperCase() === "PROJECT" ? "project" : "person";
+    const naturalId = email ? email.toLowerCase() : entity.id;
+
+    const entityEvent = buildEntityUpserted({
+      channel: entity.channelId,
+      channelKey,
+      entityType,
+      naturalId,
+      ref,
+      observedAt: Date.now(),
+    });
+    const insertedEntity = appendChannelEvent(db, entityEvent);
+    this.processInsertedEvent(insertedEntity, db);
   }
 
   async getChannels(): Promise<ChannelStatus[]> {
@@ -237,25 +312,13 @@ export class ChannelManager {
   }
 
   purgeChannel(id: ChannelId): number {
-    if (!this.worldModelHost) return 0;
-    const graph = this.worldModelHost.lifeGraph;
+    const vault = this.getVault();
     let removed = 0;
-    for (const prefix of CHANNEL_ENTITY_PREFIXES[id]) {
-      removed += graph.removeEntitiesByPrefix(prefix);
+    if (vault) {
+      removed += vault.purgeChannel(id);
     }
-    // Also remove any entities tagged with this source channel (e.g. person: entities created by Gmail)
-    for (const entity of graph.snapshot().entities) {
-      const props = entity.properties as Record<string, unknown> | undefined;
-      if (!props) continue;
-      const isTagged =
-        props.sourceChannel === id ||
-        props.channelId === id ||
-        (Array.isArray(props.tags) && (props.tags.includes(`source:${id}`) || props.tags.includes(id)));
-      if (isTagged) {
-        if (graph.removeEntity(entity.id)) {
-          removed++;
-        }
-      }
+    if (this.worldModelHost) {
+      removed += this.worldModelHost.purgeChannelEntities(id);
     }
     return removed;
   }
@@ -285,6 +348,11 @@ export class ChannelManager {
     }
     await adapter.disconnect();
     this.purgeChannel(id);
+    const db = this.getDb();
+    if (db) {
+      const insertedDisc = appendChannelEvent(db, buildChannelDisconnected(id));
+      this.processInsertedEvent(insertedDisc, db);
+    }
   }
 
   setAirGapMode(active: boolean): void {
@@ -304,8 +372,11 @@ export class ChannelManager {
 }
 
 export function getChannelConfigPath(): string {
-  if (process.env.EXOCORTEX_CHANNELS_CONFIG) return process.env.EXOCORTEX_CHANNELS_CONFIG;
-  return join(process.env.LOCALAPPDATA || join(homedir(), ".exocortex"), "channels.json");
+  const base = process.env.LOCALAPPDATA
+    || (process.platform === "darwin"
+      ? join(homedir(), "Library", "Application Support")
+      : join(homedir(), ".config"));
+  return join(base, "exocortex", "channels.json");
 }
 
 export const defaultChannelManager = new ChannelManager({

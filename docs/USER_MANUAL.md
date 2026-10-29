@@ -204,6 +204,20 @@ Every event emitted by the phone uses resilient dual-profile routing:
 | **World Model** | Graph topology & activations | `apps/daemon/src/neo4j-sync` | Synchronizes nodes and relationships into the Neo4j `Exocortex` DBMS. |
 | **World Model** | Active entities & context | `packages/world-model/src/active-inference` | Evaluates generative matrices (A, B, C, D) to compute policy expected free energy. |
 | **User Touch Feedback** | `wanted` / `not_wanted` tap | `POST /v3/proposals/:id/feedback` | Trains proposal ranking weights and updates the precision evaluation baseline. |
+| **Channel Ingestion (Gmail, Notion, Obsidian)** | Encrypted document/entity updates & wikilinks | `POST /v3/events` + `channel_vault` | Emits `channel.*` events with HMAC keyed IDs; projects life graph entities and relations; encrypts plaintext into vault. |
+
+### Privacy-Preserving Channel Ingestion & Durable Ingest Consumer
+
+External document and communication streams from **Gmail**, **Notion**, and **Obsidian** follow a strict zero-plaintext logging policy:
+
+1. **Zero Plaintext in Event Log:** Personal names, email addresses, and document bodies are never appended to the hash-chained `events` table. Instead, the log stores only:
+   - Typed event kinds: `channel.document.upserted`, `channel.entity.upserted`, `channel.link.upserted`, `channel.disconnected`.
+   - Keyed HMAC-SHA256 identifiers (`person:<keyed_id>`, `doc:<doc_key>`).
+   - Content SHA-256 hashes and opaque UUID vault references (`ref`).
+2. **Encrypted `ChannelVault`:** Plaintext titles, email snippets, and bodies are encrypted using AES-256-GCM and stored in the dedicated SQLite table `channel_vault`. Keys are stored locally per channel (`%LOCALAPPDATA%\exocortex\channel-keys\<channel>.key`) with restricted filesystem permissions.
+3. **Crypto-Shredding on Disconnect:** Calling `/v3/channels/:id/disconnect` immediately purges all database records for that channel in `channel_vault` and deletes the channel key from disk. All historical event log references become irreversibly unlinkable.
+4. **Durable Asynchronous `IngestConsumer`:** Post-ingest execution hooks (`world-model`, `precognitive`, `prediction`, `triage`, `shadow-labels`) run decoupled from `POST /v3/events`. The HTTP endpoint returns status 200 immediately, and the `IngestConsumer` processes batches asynchronously using durable, monotonically advancing cursors stored in `consumer_cursors(name, seq)`.
+5. **Replay Parity & Resync CLI:** Wiping in-memory projections and replaying the event log from `seq = 0` deterministically reconstructs identical living life graph entities, relational edges, and belief snapshots (`apps/daemon/src/replay.integration.test.ts`). Existing data can be backfilled into the event log anytime using `pnpm --filter @exocortex/daemon channel-resync`.
 
 ---
 

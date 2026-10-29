@@ -13,6 +13,7 @@ Transforms software from brittle static source code into an evolving digital org
 
 import sys
 import os
+import difflib
 import stat
 import subprocess
 import shutil
@@ -32,6 +33,40 @@ except ModuleNotFoundError:
     from triad.worktree import isolated_worktree, create_worktree, remove_worktree
 
 logger = logging.getLogger("exocortex.morphogenetic")
+
+ENABLE_ENV = "TRIAD_MORPHOGENETIC"
+MAX_CHANGED_LINES_ENV = "TRIAD_MORPHOGENETIC_MAX_CHANGED_LINES"
+DEFAULT_MAX_CHANGED_LINES = 200
+
+
+def _enabled_from_env() -> bool:
+    """The engine is OFF unless TRIAD_MORPHOGENETIC is exactly 1 (or true/yes/on)."""
+    return os.environ.get(ENABLE_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _max_changed_lines_from_env() -> int:
+    raw = os.environ.get(MAX_CHANGED_LINES_ENV, "").strip()
+    try:
+        value = int(raw) if raw else DEFAULT_MAX_CHANGED_LINES
+    except ValueError:
+        return DEFAULT_MAX_CHANGED_LINES
+    return value if value > 0 else DEFAULT_MAX_CHANGED_LINES
+
+
+SCAN_GATE_ENV = "TRIAD_MORPHOGENETIC_SCAN_GATE"
+
+
+def _scan_gate_from_env() -> bool:
+    """The scan gate is ON by default unless explicitly disabled with 0/false/no/off."""
+    return os.environ.get(SCAN_GATE_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def changed_line_count(before: str, after: str) -> int:
+    """Lines removed plus lines added (a one-line edit counts as 2)."""
+    a = before.replace("\r\n", "\n").splitlines()
+    b = after.replace("\r\n", "\n").splitlines()
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return sum((i2 - i1) + (j2 - j1) for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal")
 
 
 @dataclass
@@ -99,9 +134,20 @@ class MorphogeneticEngine:
         repo_root: Optional[Union[str, Path]] = None,
         verification_runner: Optional[VerificationRunner] = None,
         allow_unsafe_host_runner: bool = False,
+        enabled: Optional[bool] = None,
+        max_changed_lines: Optional[int] = None,
+        require_reproduction: bool = True,
+        enable_scan_gate: Optional[bool] = None,
     ):
         if isinstance(verification_runner, UnsafeHostRunner) and not allow_unsafe_host_runner:
             raise ValueError("UnsafeHostRunner requires allow_unsafe_host_runner=True (unsafe for untrusted repairs)")
+        # Default OFF: an explicit enabled=True or TRIAD_MORPHOGENETIC=1 is needed before any candidate is evaluated.
+        self.enabled = _enabled_from_env() if enabled is None else bool(enabled)
+        self.max_changed_lines = max_changed_lines if max_changed_lines and max_changed_lines > 0 else _max_changed_lines_from_env()
+        # A repair must come with a test that fails before the patch and passes after it.
+        self.require_reproduction = require_reproduction
+        # Static and security scan gate (ruff check and bandit -q -lll): ON by default.
+        self.enable_scan_gate = _scan_gate_from_env() if enable_scan_gate is None else bool(enable_scan_gate)
         self.repo_root = Path(repo_root or os.getcwd()).resolve()
         self.verification_runner = verification_runner
 
@@ -176,6 +222,76 @@ class MorphogeneticEngine:
     })
     _HARNESS_CONFIG_PREFIXES = ("vitest.config.", "vitest.workspace.", "jest.config.", "tsconfig.")
 
+    def _run_scan_gate(self, sandbox: Path, changed_files: List[Path]) -> tuple[bool, str]:
+        """
+        Runs static and security scans (ruff check and bandit -q -lll) on changed Python files.
+        Returns (passed, error_message).
+        """
+        py_files = [f for f in changed_files if f.suffix.lower() == ".py"]
+        if not py_files:
+            return True, ""
+
+        ruff_bin = shutil.which("ruff")
+        if not ruff_bin:
+            return False, "Darwinian Rejection: static scan tool 'ruff' is missing"
+
+        bandit_bin = shutil.which("bandit")
+        if not bandit_bin:
+            return False, "Darwinian Rejection: static scan tool 'bandit' is missing"
+
+        for py_file in py_files:
+            rel = py_file.relative_to(sandbox).as_posix()
+
+            # 1. Ruff check (syntax, lint errors)
+            try:
+                ruff_res = subprocess.run(
+                    [ruff_bin, "check", "--select", "E9,F", "--no-cache", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'ruff' crashed: {str(e)}"
+
+            if ruff_res.returncode != 0:
+                output = (ruff_res.stdout + "\n" + ruff_res.stderr).strip()
+                return False, f"Darwinian Rejection: ruff check failed:\n{output}"
+
+            # 2. Bandit security scan (-q -lll for high severity)
+            try:
+                bandit_res = subprocess.run(
+                    [bandit_bin, "-q", "-lll", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'bandit' crashed: {str(e)}"
+
+            if bandit_res.returncode != 0:
+                output = (bandit_res.stdout + "\n" + bandit_res.stderr).strip()
+                return False, f"Darwinian Rejection: bandit security scan failed:\n{output}"
+
+            # Also verify B307 (eval) in case -lll (high-severity only) filtered it out
+            try:
+                b307_res = subprocess.run(
+                    [bandit_bin, "-q", "-t", "B307", rel],
+                    cwd=str(sandbox),
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+            except Exception as e:
+                return False, f"Darwinian Rejection: static scan tool 'bandit' crashed: {str(e)}"
+
+            if b307_res.returncode != 0:
+                output = (b307_res.stdout + "\n" + b307_res.stderr).strip()
+                return False, f"Darwinian Rejection: bandit security scan failed (eval detected):\n{output}"
+
+        return True, ""
+
     def _is_protected_target(self, root: Path, target: Path) -> bool:
         """Policy on the canonical (resolved) path: tests, CI/harness config and invariants are immutable."""
         rel = target.relative_to(root.resolve())
@@ -202,15 +318,24 @@ class MorphogeneticEngine:
         candidate: MutationCandidate,
         verification_profile: str,
         base_commit: str = "HEAD",
+        reproduction_profile: Optional[str] = None,
     ) -> bool:
         """
         Spawns an isolated git worktree, applies the candidate mutation,
         and executes Darwinian survival tests. If tests fail, the mutation undergoes
         apoptosis (immediate discard). If 100% pass, the mutation survives.
+
+        Gates, in order: engine enabled; isolated runner present; target validity; diff-size cap
+        (max_changed_lines, removed + added); reproduction (reproduction_profile must FAIL on the unpatched
+        base); forbidden tokens; verification_profile must pass on the patched tree; unchanged-tree checks.
         """
         candidate.survival_passed = False
         candidate.unified_diff = ""
         candidate.verification_output = ""
+
+        if not self.enabled:
+            candidate.verification_output = f"Darwinian Rejection: morphogenetic engine is disabled (set {ENABLE_ENV}=1)"
+            return False
 
         # Fail closed: without an isolated runner nothing derived from a candidate is ever executed.
         if self.verification_runner is None:
@@ -230,6 +355,11 @@ class MorphogeneticEngine:
                 prefix=f"morpho_{candidate.candidate_id}",
             ) as sandbox_path:
                 sandbox = Path(sandbox_path).resolve()
+                # The host runs git in this directory afterwards. A worktree's .git is a pointer file the
+                # verified code can rewrite to make the host git read attacker-controlled config (fsmonitor,
+                # hooks, filters), so pin it before anything runs and compare after.
+                git_pointer = sandbox / ".git"
+                pointer_before = git_pointer.read_bytes() if git_pointer.is_file() else None
 
                 target_file_path, err = self._resolve_within(sandbox, candidate.target_file)
 
@@ -262,6 +392,48 @@ class MorphogeneticEngine:
                     candidate.verification_output = "Darwinian Rejection: mutation is a no-op"
                     return False
 
+                # Diff-size cap: a repair is a small, surgical change. Checked before anything runs.
+                orig_lines = orig_norm.count("\n") + 1
+                mut_lines = mut_norm.count("\n") + 1
+                changed = (
+                    abs(orig_lines - mut_lines) + 1
+                    if abs(orig_lines - mut_lines) > self.max_changed_lines
+                    else changed_line_count(orig_norm, mut_norm)
+                )
+                if changed > self.max_changed_lines:
+                    candidate.verification_output = (
+                        f"Darwinian Rejection: mutation changes {changed}+ lines (cap {self.max_changed_lines})"
+                    )
+                    return False
+
+                # Reproduction gate: the failing test must fail on the unpatched base. A test that already
+                # passes proves nothing about the repair.
+                if self.require_reproduction:
+                    if not reproduction_profile:
+                        candidate.verification_output = "Darwinian Rejection: a reproduction test profile is required"
+                        return False
+                    try:
+                        repro = self.verification_runner.run(workspace=sandbox, profile=reproduction_profile, timeout=120)
+                    except subprocess.TimeoutExpired:
+                        candidate.verification_output = "Darwinian Rejection: reproduction run timed out"
+                        return False
+                    except OutputLimitExceeded:
+                        candidate.verification_output = "Darwinian Rejection: reproduction output exceeded the host limit"
+                        return False
+                    if repro.returncode == 0:
+                        candidate.verification_output = (
+                            "Darwinian Rejection: reproduction test passes before the patch (it does not reproduce the failure)"
+                        )
+                        return False
+                    repro_pointer = git_pointer.read_bytes() if git_pointer.is_file() else None
+                    repro_status = subprocess.run(
+                        ["git", "status", "--porcelain", "--untracked-files=all"],
+                        cwd=str(sandbox), capture_output=True, text=True,
+                    )
+                    if pointer_before is None or repro_pointer != pointer_before or repro_status.returncode != 0 or repro_status.stdout.strip():
+                        candidate.verification_output = "Darwinian Rejection: the reproduction run changed the workspace"
+                        return False
+
                 # Write bytes verbatim: write_text() translates LF to CRLF on Windows, turning
                 # every line of an LF file into a spurious change in the verified diff.
                 pinned_bytes = candidate.mutated_code.encode("utf-8")
@@ -276,13 +448,15 @@ class MorphogeneticEngine:
                         candidate.verification_output = f"Darwinian Rejection: Mutation violated architectural invariant (found forbidden token '{token}')"
                         return False
 
+                # 2.5 Static and security scan gate: ruff and bandit on changed Python files
+                if self.enable_scan_gate:
+                    passed, scan_err = self._run_scan_gate(sandbox, [target_file_path])
+                    if not passed:
+                        candidate.verification_output = scan_err
+                        return False
+
                 # 3. Darwinian Survival Gate: run the trusted profile through the isolated runner
                 rel = target_file_path.relative_to(sandbox).as_posix()
-                # The host runs git in this directory afterwards. A worktree's .git is a pointer file the
-                # verified code can rewrite to make the host git read attacker-controlled config (fsmonitor,
-                # hooks, filters), so pin it before and compare after.
-                git_pointer = sandbox / ".git"
-                pointer_before = git_pointer.read_bytes() if git_pointer.is_file() else None
                 try:
                     res = self.verification_runner.run(workspace=sandbox, profile=verification_profile, timeout=120)
                 except subprocess.TimeoutExpired:
@@ -381,6 +555,7 @@ class MorphogeneticEngine:
         candidates: List[MutationCandidate],
         verification_profile: str,
         base_commit: str = "HEAD",
+        reproduction_profile: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Runs Darwinian survival gates across a pool of mutation candidates in isolated worktrees.
@@ -395,6 +570,7 @@ class MorphogeneticEngine:
                 candidate,
                 verification_profile,
                 base_commit=base_commit,
+                reproduction_profile=reproduction_profile,
             )
             results.append({
                 "candidate_id": candidate.candidate_id,
@@ -468,7 +644,7 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
         docker_runner = DockerRunner({"unittest-target-calc": ["python", "-m", "unittest", "test_target_calc.py"]})
         if docker_runner.available()[0]:
             docker_runner.ensure_image()
-            engine = MorphogeneticEngine(temp_repo, verification_runner=docker_runner)
+            engine = MorphogeneticEngine(temp_repo, verification_runner=docker_runner, enabled=True)
         else:
             print("[morphogenetic] container runtime unavailable; using UnsafeHostRunner for this local trial")
             engine = MorphogeneticEngine(
@@ -477,6 +653,7 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
                     {"unittest-target-calc": [sys.executable, "-m", "unittest", "test_target_calc.py"]}
                 ),
                 allow_unsafe_host_runner=True,
+                enabled=True,
             )
 
         # 1. Intercept simulated runtime friction
@@ -534,6 +711,7 @@ def run_simulated_darwinian_trial() -> Dict[str, Any]:
             friction,
             [cand_forbidden, cand_broken, cand_healed],
             "unittest-target-calc",
+            reproduction_profile="unittest-target-calc",
         )
 
         trial_result["error_type"] = friction.error_type

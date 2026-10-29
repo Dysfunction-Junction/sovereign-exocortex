@@ -220,4 +220,76 @@ describe("PredictionHost", () => {
     assert.ok(rows.some((r) => r.context_key.startsWith("Productivity|")));
     assert.ok(rows.some((r) => r.actual === "Social"));
   });
+
+  it("logs pre-registered baselines on every prediction; cold start is flagged, then clears", () => {
+    const h = host();
+    const evs = [];
+    for (let i = 0; i < 14; i++) evs.push(view(i % 3 === 0 ? "ask" : "status", i * 1000));
+    h.onEventsAppended(ingest(evs).events, db);
+    const rows = loadPredictionRows(db.raw);
+    assert.ok(rows.length >= 12);
+    type B = { avg_usage: { n: number; cell: string; cold_start: boolean; cands: unknown[] }; persistence: { repeat_rate: number } };
+    for (const r of rows) assert.ok((r.context as { baselines?: B }).baselines, "baselines present");
+    const bl = rows.map((r) => (r.context as { baselines: B }).baselines);
+    assert.equal(bl[0].avg_usage.cold_start, true);
+    assert.ok(bl[0].avg_usage.n < 10);
+    assert.equal(bl.at(-1)!.avg_usage.cold_start, false);
+    assert.equal(bl.at(-1)!.avg_usage.cell, "overall");
+    assert.ok(bl.at(-1)!.persistence.repeat_rate > 0 && bl.at(-1)!.persistence.repeat_rate < 1);
+  });
+
+  it("baseline for guess k has seen only actions up to k (not the next one)", () => {
+    const h = host();
+    const evs = [];
+    for (let i = 0; i < 12; i++) evs.push(view("status", i * 1000));
+    evs.push(view("ask", 12_000));
+    h.onEventsAppended(ingest(evs).events, db);
+    const rows = loadPredictionRows(db.raw);
+    const before = rows.find((r) => r.made_seq === rows.at(-2)!.made_seq)!;
+    const b = (before.context as { baselines: { avg_usage: { cands: Array<{ value: string }>; n: number } } }).baselines.avg_usage;
+    assert.equal(before.actual, "ask");
+    assert.equal(b.n, 12);
+    assert.ok(!b.cands.some((c) => c.value === "ask"), "the not-yet-seen answer is not in the baseline");
+  });
+
+  it("rebuilds the baseline on restart so it matches an uninterrupted host", () => {
+    const first = [];
+    for (let i = 0; i < 12; i++) first.push(view(i % 2 ? "ask" : "status", i * 1000));
+    const a = host();
+    a.onEventsAppended(ingest(first).events, db);
+    const b = host(); // fresh process
+    b.onEventsAppended(ingest([view("status", 12_000)]).events, db);
+    const last = loadPredictionRows(db.raw).at(-1)!;
+    const avg = (last.context as { baselines: { avg_usage: { n: number; cold_start: boolean; cands: Array<{ value: string; prob: number }> } } }).baselines.avg_usage;
+    assert.equal(avg.n, 13);
+    assert.equal(avg.cold_start, false);
+    // 7 status + 6 ask, alpha 0.5, 2 seen + OTHER
+    assert.ok(Math.abs(avg.cands.find((c) => c.value === "status")!.prob - 7.5 / 14.5) < 1e-9);
+  });
+
+  it("re-exports actionOf and passiveCapturePackage with playCategories injected", async () => {
+    const mod = await import("./prediction-host.js");
+    const ev = { seq: 1, device_id: DEVICE, kind: "telemetry", ts_device: T0, payload: JSON.stringify({ type: "passive_capture", package: "com.instagram.barcelona" }) };
+    assert.equal(mod.passiveCapturePackage(ev), "com.instagram.barcelona");
+    assert.equal(mod.actionOf(ev), "Social");
+  });
+
+  it("checkpoints the app stream under its own key and hydrates it with counts and late rule intact", () => {
+    const fg = (dt: number, to: string): Omit<EventIn, "event_id" | "schema_ver"> => ({
+      kind: "telemetry",
+      ts_device: T0 + dt,
+      payload: { type: "app_foreground", event: "APP_TRANSITION", to, category: "Audio", excluded: false },
+    });
+    const h1 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    h1.onEventsAppended(ingest([view("status", 0), ...[1, 2, 3, 4, 5].map((i) => fg(i * 1000, "com.a"))]).events, db);
+    assert.ok(loadProbEngineCheckpoint(db, DEVICE + "#app"), "app stream has its own checkpoint row");
+    assert.equal(loadProbEngineCheckpoint(db, DEVICE), null, "screen stream has not reached its interval");
+
+    const h2 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    assert.deepEqual(h2.onEventsAppended(ingest([fg(2500, "com.a")]).events, db), { guesses: 0, resolved: 0 }, "late after restart");
+    h2.onEventsAppended(ingest([fg(6000, "com.a")]).events, db);
+    const last = loadPredictionRows(db.raw).filter((r) => r.context.stream === "app").pop()!;
+    assert.ok(last.context_key.startsWith("pkg:com.a|"), `6th arrival is labelled by package: ${last.context_key}`);
+  });
 });
+

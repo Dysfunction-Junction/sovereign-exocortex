@@ -36,6 +36,9 @@ android {
         // stored uncompressed in the APK.
         noCompress 'tflite'
     }
+    testOptions {
+        unitTests.returnDefaultValues = true // Log.* etc. become no-ops in pure-logic tests
+    }
     packaging {
         jniLibs {
             // Package native .so files uncompressed and page-aligned so the
@@ -79,6 +82,8 @@ dependencies {
     // BiometricPrompt + CryptoObject for device-bound approval signatures (ApprovalKeyPlugin).
     implementation 'androidx.biometric:biometric:1.1.0'
     testImplementation "junit:junit:$junitVersion"
+    // Real org.json for JVM unit tests (the android.jar stubs have no behaviour).
+    testImplementation 'org.json:json:20250517'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
