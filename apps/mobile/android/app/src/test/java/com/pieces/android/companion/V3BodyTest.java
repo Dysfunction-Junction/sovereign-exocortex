@@ -92,6 +92,58 @@ public class V3BodyTest {
         assertEquals(1000L, sent.getJSONObject(0).getLong("ts_device"));
     }
 
+    private static JSONObject sensitive(String type) throws Exception {
+        JSONObject p = new JSONObject().put("type", type);
+        switch (type) {
+            case "mic_window":
+                p.put("window_start", 0).put("window_end", 300000).put("dur_ms", 300000).put("vad", "ezc-1")
+                    .put("samples", 2).put("speech_samples", 1).put("speech_frac", 0.5)
+                    .put("skipped", new JSONObject().put("pocket", 1));
+                break;
+            case "place_window":
+                p.put("window_start", 0).put("window_end", 300000).put("place_id", "pl_1").put("label", "home")
+                    .put("dwell_ms", 300000).put("conf", 0.9).put("src", "wifi_connected");
+                break;
+            case "place_event":
+                p.put("event", "arrive").put("place_id", "pl_1").put("label", "home").put("ts", 5);
+                break;
+            default:
+                p.put("window_start", 0).put("window_end", 300000).put("dur_ms", 300000).put("events", 40)
+                    .put("chars_added", 120).put("chars_deleted", 8).put("bursts", 3).put("active_ms", 41000)
+                    .put("median_gap_ms", 180);
+        }
+        return p;
+    }
+
+    @Test
+    public void sensitiveTypesPassWithTheirOwnKeys() throws Exception {
+        List<String> rows = new ArrayList<>();
+        for (String t : new String[]{"mic_window", "place_window", "place_event", "typing_window"}) {
+            rows.add(v3Row("x-" + t, 1000, sensitive(t)));
+        }
+        NativeTelemetrySync.V3Build b = NativeTelemetrySync.buildV3Body(rows, "t");
+        assertTrue(b.invalid.isEmpty());
+        assertEquals(4, new JSONObject(b.bodies.get(0)).getJSONArray("events").length());
+    }
+
+    @Test
+    public void contentKeysQuarantineSensitiveEvents() throws Exception {
+        List<String> rows = new ArrayList<>();
+        rows.add(v3Row("pw-ssid", 1000, sensitive("place_window").put("ssid", "HomeWifi")));
+        rows.add(v3Row("pw-bssid", 1000, sensitive("place_window").put("bssid", "aa:bb:cc:dd:ee:ff")));
+        rows.add(v3Row("pw-text", 1000, sensitive("place_window").put("text", "hi")));
+        rows.add(v3Row("tw-text", 1000, sensitive("typing_window").put("text", "hello")));
+        rows.add(v3Row("tw-summary", 1000, sensitive("typing_window").put("summary", "asked about X")));
+        rows.add(v3Row("mw-audio", 1000, sensitive("mic_window").put("transcript", "hey")));
+        rows.add(v3Row("pw-ok", 1000, sensitive("place_window")));
+        NativeTelemetrySync.V3Build b = NativeTelemetrySync.buildV3Body(rows, "t");
+        assertEquals(6, b.invalid.size());
+        for (String[] bad : b.invalid) assertTrue(bad[1], bad[1].startsWith("key not allowed"));
+        JSONArray sent = new JSONObject(b.bodies.get(0)).getJSONArray("events");
+        assertEquals(1, sent.length());
+        assertEquals("pw-ok", sent.getJSONObject(0).getString("event_id"));
+    }
+
     @Test
     public void usageSummariesStillConvertAndLegacyRowsAreIgnored() throws Exception {
         List<String> rows = new ArrayList<>();

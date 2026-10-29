@@ -7,6 +7,7 @@ import Ask from "./pages/Ask";
 import Recent from "./pages/Recent";
 import Search from "./pages/Search";
 import Review from "./pages/Review";
+import TypedTextAudit from "./pages/TypedTextAudit";
 import { flushUsageEvents } from "./lib/flush";
 import { logRejection } from "./lib/fireAndForget";
 import { triageQueueSafe } from "./lib/triageQueue";
@@ -159,6 +160,7 @@ export default function App() {
           <Route path="/recent" element={<Recent />} />
           <Route path="/search" element={<Search />} />
           <Route path="/review" element={<Review />} />
+          <Route path="/typed-text" element={<TypedTextAudit />} />
         </Route>
       </Routes>
     </HashRouter>

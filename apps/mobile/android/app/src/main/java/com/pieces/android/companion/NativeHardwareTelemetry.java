@@ -557,6 +557,27 @@ public final class NativeHardwareTelemetry {
         }
     }
 
+    /** Pure: proximity reads "near". Binary sensors (maxRange <= 10) are near below maxRange, others below 1 cm. */
+    static boolean isNear(float proxVal, float maxRange) {
+        boolean binary = maxRange <= 10.0f;
+        return proxVal >= 0 && (binary ? proxVal < maxRange : proxVal < 1.0f);
+    }
+
+    /** Pure: ambient light reads "dark" (below 5 lux). A negative lux means no reading. */
+    static boolean isDark(float lux) {
+        return lux >= 0 && lux < 5.0f;
+    }
+
+    /**
+     * Pure pocket check for samplers that must not listen in a pocket: near AND dark is a pocket; a missing reading
+     * (known == false) is "unknown", never "ok", so the sample is skipped. Unlike classifyState it ignores the
+     * screen state, which always reads "handheld" while the screen is on.
+     */
+    static String pocketGate(boolean near, boolean dark, boolean known) {
+        if (!known) return "unknown";
+        return near && dark ? "pocket" : "ok";
+    }
+
     /**
      * Pure deterministic classifier for physical surface & pocket placement.
      */
@@ -569,9 +590,8 @@ public final class NativeHardwareTelemetry {
             boolean inCall,
             boolean isInteractive
     ) {
-        boolean binary = maxRange <= 10.0f;
-        boolean isNear = proxVal >= 0 && (binary ? proxVal < maxRange : proxVal < 1.0f);
-        boolean isDark = lux >= 0 && lux < 5.0f;
+        boolean isNear = isNear(proxVal, maxRange);
+        boolean isDark = isDark(lux);
 
         if (isNear && inCall) {
             return "at_ear";

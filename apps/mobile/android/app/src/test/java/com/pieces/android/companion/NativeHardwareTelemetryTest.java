@@ -6,6 +6,36 @@ import static org.junit.Assert.*;
 public class NativeHardwareTelemetryTest {
 
     @Test
+    public void testPocketGate_nearAndDarkIsPocket() {
+        assertEquals("pocket", NativeHardwareTelemetry.pocketGate(true, true, true));
+    }
+
+    @Test
+    public void testPocketGate_otherwiseOk() {
+        assertEquals("ok", NativeHardwareTelemetry.pocketGate(true, false, true));
+        assertEquals("ok", NativeHardwareTelemetry.pocketGate(false, true, true));
+        assertEquals("ok", NativeHardwareTelemetry.pocketGate(false, false, true));
+    }
+
+    @Test
+    public void testPocketGate_missingReadingIsUnknownNeverOk() {
+        assertEquals("unknown", NativeHardwareTelemetry.pocketGate(true, true, false));
+        assertEquals("unknown", NativeHardwareTelemetry.pocketGate(false, false, false));
+    }
+
+    @Test
+    public void testIsNearIsDark_matchClassifierThresholds() {
+        assertTrue(NativeHardwareTelemetry.isNear(0.0f, 5.0f));    // binary sensor: below maxRange
+        assertFalse(NativeHardwareTelemetry.isNear(5.0f, 5.0f));
+        assertFalse(NativeHardwareTelemetry.isNear(-1f, 5.0f));    // no reading
+        assertTrue(NativeHardwareTelemetry.isNear(0.5f, 20.0f));   // continuous sensor: below 1 cm
+        assertFalse(NativeHardwareTelemetry.isNear(3.0f, 20.0f));
+        assertTrue(NativeHardwareTelemetry.isDark(0.0f));
+        assertFalse(NativeHardwareTelemetry.isDark(5.0f));
+        assertFalse(NativeHardwareTelemetry.isDark(-1f));
+    }
+
+    @Test
     public void testClassifyState_inPocket() {
         // Non-interactive, proximity near (0cm), dark (0 lux), gravity down in pocket
         String state = NativeHardwareTelemetry.classifyState(
