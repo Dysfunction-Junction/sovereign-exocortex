@@ -34,6 +34,8 @@ Events travel up in batches over HTTPS and the tailnet; proposals come back down
 
 Each step reads only from the log or the step before it, so any projection can be rebuilt by replaying events. In shadow mode the pipeline runs up to Execute, which is blocked and logged instead; the label step still runs from your taps and observed behaviour.
 
+Post-ingest execution is completely decoupled from the synchronous ingestion path: `POST /v3/events` returns HTTP 200 immediately, and a durable worker (`IngestConsumer`) reads appended events off-turn via monotonically advanced cursors in `consumer_cursors(name, seq)`. External channel content (Gmail, Notion, Obsidian) never enters the raw event log; instead, plaintext titles and bodies are encrypted via AES-256-GCM in `channel_vault`, while the event log records only HMAC-SHA256 keyed IDs (`person:<keyed_id>`), content SHA256 hashes, and UUID vault references. Disconnecting a channel crypto-shreds its per-channel key and deletes all vault rows, making event log hashes permanently unlinkable while full projection replay remains hermetic.
+
 ## World model: a real generative model
 
 The discrete generative model learns from supported observations in the event log. `active-inference.ts` retains deterministic invariant checks and candidate generation as the baseline; the host's adaptive layer ranks those candidates using learned scores and verified proposal preferences. Baseline ordering is retained when neither usable learned scores nor verified preferences distinguish candidates. The default model has three hidden factors (`user_mode`, `repo_health`, and `link_health`); this is a small probabilistic model, not a trained neural network.
@@ -214,6 +216,18 @@ CREATE TABLE mutations (
   gates          TEXT NOT NULL CHECK (json_valid(gates)),
   state          TEXT NOT NULL CHECK (state IN ('REJECTED','PASSED','MERGED','DISCARDED')),
   created_at     INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE channel_vault (
+  ref         TEXT PRIMARY KEY,
+  channel     TEXT NOT NULL,
+  ciphertext  BLOB NOT NULL,
+  created_at  INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE consumer_cursors (
+  name TEXT PRIMARY KEY,
+  seq  INTEGER NOT NULL
 ) STRICT;
 ```
 
