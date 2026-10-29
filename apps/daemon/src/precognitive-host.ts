@@ -384,11 +384,16 @@ export class PreCognitiveHost {
         try {
           // App Transitions -> Markov Model & Speculative Action Pre-Warming (supports transitions, app_transitions, appTransitions)
           const rawTransitions = [payload?.appTransitions, payload?.transitions, payload?.app_transitions].find(Array.isArray);
-          const transitions = Array.isArray(rawTransitions)
-            ? rawTransitions.slice(0, 500)
-            : (payload?.event === "APP_TRANSITION" || payload?.event === "APP_TRANSITIONS") && typeof payload?.from === "string" && typeof payload?.to === "string"
-              ? [{ from: payload.from, to: payload.to, dwell_ms: payload.dwell_ms }]
-              : [];
+          // app_foreground arrivals are the only v3 carrier of per-app transitions (the usage summary's
+          // `transitions` array is legacy-only), and an excluded arrival names no app at all.
+          const excludedArrival = payload?.type === "app_foreground" && (payload.excluded === true || payload.category === "excluded");
+          const transitions = excludedArrival
+            ? []
+            : Array.isArray(rawTransitions)
+              ? rawTransitions.slice(0, 500)
+              : (payload?.event === "APP_TRANSITION" || payload?.event === "APP_TRANSITIONS") && typeof payload?.from === "string" && typeof payload?.to === "string"
+                ? [{ from: payload.from, to: payload.to, dwell_ms: payload.dwell_ms ?? payload.dwell_prev_ms }]
+                : [];
 
           const markov = this.getMarkovModel(deviceId);
           for (const t of transitions) {

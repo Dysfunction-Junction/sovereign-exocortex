@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { ContextTracker, buildScreenExamples, screenOf, type RawEvent } from "./prediction-events.js";
+import { ContextTracker, SENSOR_WINDOW_TTL_MS, buildScreenExamples, screenOf, type RawEvent } from "./prediction-events.js";
+import { EXPECTED_CONTEXT_FIELDS, finalizeContext } from "./prediction-log.js";
 
 const T0 = Date.UTC(2026, 9, 10, 15, 0, 0);
 let seq = 0;
@@ -346,3 +347,85 @@ describe("buildScreenExamples", () => {
   });
 });
 
+
+describe("device-signal events (app_foreground, sensor_window, sensor_caps, sensor_consent)", () => {
+  const T = T0 + 3_600_000;
+  const win = (end: number, sensors: Record<string, unknown>) =>
+    ev("p", "telemetry", { type: "sensor_window", window_start: end - 300_000, window_end: end, dur_ms: 300_000, sensors }, end);
+
+  it("a late older sensor_window does not overwrite a newer one", () => {
+    const t = new ContextTracker(utc);
+    t.update(win(T + 300_000, { motion: { energy_rms: 1, energy_class: "vigorous" } }));
+    t.update(win(T, { motion: { energy_rms: 0, energy_class: "still" } }));
+    expect(t.snapshot("p", T + 310_000).sensors).toEqual({ window_end: T + 300_000, motion_energy: "vigorous" });
+  });
+
+  it("sensor_window and app_foreground never set ambient.temp_c or clobber app.package", () => {
+    const t = new ContextTracker(utc);
+    t.update(ev("p", "telemetry", { package: "com.real", app_label: "Real", temp_c: 21 }, T));
+    t.update(
+      ev("p", "telemetry", { type: "app_foreground", event: "APP_TRANSITION", to: "com.spotify.music", category: "Audio", from: "com.real", temp_c: 99, package: "com.clobber" }, T + 1),
+    );
+    t.update(win(T + 300_000, { battery: { pct: 55, plugged: "usb", batt_temp_c: 33 }, ambient_temp: { c: 44 } }));
+    const snap = t.snapshot("p", T + 301_000);
+    expect(snap.app).toEqual({ package: "com.real", label: "Real" });
+    expect(snap.ambient?.temp_c).toBe(21);
+    expect(snap.battery_micro).toEqual({ temp_c: 33, plugged: "usb" });
+    expect(snap.device).toMatchObject({ battery_pct: 55, charging: true });
+    // Without any phone temperature at all, a sensor window still leaves ambient empty.
+    const t2 = new ContextTracker(utc);
+    t2.update(win(T, { battery: { pct: 50, plugged: "unplugged", batt_temp_c: 30 } }));
+    expect(t2.snapshot("p", T + 1).ambient).toBeUndefined();
+  });
+
+  it("expires a window after the 10 minute TTL and never shows one from the future", () => {
+    const t = new ContextTracker(utc);
+    t.update(win(T, { light: { bucket: "dim" } }));
+    expect(t.snapshot("p", T + SENSOR_WINDOW_TTL_MS).sensors?.light).toBe("dim");
+    expect(t.snapshot("p", T + SENSOR_WINDOW_TTL_MS + 1).sensors).toBeUndefined();
+    expect(t.snapshot("p", T - 1).sensors).toBeUndefined();
+  });
+
+  it("feeds activity into motion with the sensor TTL", () => {
+    const t = new ContextTracker(utc);
+    t.update(win(T, { activity: { state: "walking", conf: 0.8, src: "heuristic" } }));
+    expect(t.snapshot("p", T + 120_000).motion).toEqual({ state: "walking", confidence: 0.8 });
+  });
+
+  it("ignores windows for a revoked key, drops what it already fed, and honours EXO_SENSOR_CONTEXT=0", () => {
+    const t = new ContextTracker(utc);
+    t.update(win(T, { motion: { energy_class: "light" }, pressure: { trend: "rising" } }));
+    t.update(ev("p", "telemetry", { type: "sensor_consent", key: "pressure", enabled: false }, T + 1));
+    expect(t.snapshot("p", T + 2).sensors).toEqual({ window_end: T, motion_energy: "light" });
+    t.update(win(T + 300_000, { motion: { energy_class: "still" }, pressure: { trend: "falling" } }));
+    expect(t.snapshot("p", T + 300_001).sensors).toEqual({ window_end: T + 300_000, motion_energy: "still" });
+    const off = new ContextTracker(utc, { sensorContext: false });
+    off.update(win(T, { motion: { energy_class: "light" } }));
+    expect(off.snapshot("p", T + 1).sensors).toBeUndefined();
+  });
+
+  it("lists sensors.<key> as missing only when present, toggled on and stale", () => {
+    const t = new ContextTracker(utc);
+    t.update(
+      ev("p", "telemetry", {
+        type: "sensor_caps",
+        sensors: { motion: { present: true }, pressure: { present: true }, light: { present: true }, ambient_temp: { present: false } },
+        toggles: { motion: true, pressure: true, light: false, ambient_temp: true },
+      }, T),
+    );
+    t.update(win(T + 300_000, { motion: { energy_class: "still" } }));
+    // pressure is on and present but absent from the fresh window; light is off; ambient_temp is absent.
+    expect(t.snapshot("p", T + 301_000).missing).toEqual(["sensors.pressure"]);
+    // Window expired: every present+on sensor is stale.
+    expect(t.snapshot("p", T + 300_000 + SENSOR_WINDOW_TTL_MS + 1).missing).toEqual(["sensors.motion", "sensors.pressure"]);
+    t.update(ev("p", "telemetry", { type: "sensor_consent", key: "pressure", enabled: false }, T + 400_000));
+    expect(t.snapshot("p", T + 401_000).missing).toBeUndefined();
+  });
+
+  it("keeps missing sensors.<key> through finalizeContext without touching EXPECTED_CONTEXT_FIELDS", () => {
+    const out = finalizeContext({ missing: ["sensors.motion", "ambient.temp_c"] });
+    expect(out.missing).toContain("sensors.motion");
+    expect(out.missing).toContain("ambient.temp_c"); // recomputed because it is genuinely absent
+    expect(EXPECTED_CONTEXT_FIELDS.some((f) => f.startsWith("sensors"))).toBe(false);
+  });
+});

@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
+  DEFAULT_EXPERTS,
   ProbEngine,
+  candidateExperts,
   contextFeatures,
   ContextTracker,
   type FeatureMap,
@@ -106,5 +108,75 @@ describe("ProbEngine Checkpointing & Serialization", () => {
     const engine = new ProbEngine();
     const dist = engine.predict("status", features);
     expect(dist.active).toContain("cur+triage");
+  });
+
+  describe("expert set changes", () => {
+    const trained = (n = 60): ProbEngine => {
+      const e = new ProbEngine();
+      const acts = ["status", "ask", "setup"];
+      for (let i = 0; i < n; i++) e.observe(acts[i % 3], { daypart: i % 2 ? "morning" : "evening", app: "com.slack" }, acts[(i + 1) % 3]);
+      return e;
+    };
+    const sane = (d: { probs: Array<{ prob: number }>; weights: Record<string, number> }) => {
+      expect(d.probs.every((p) => Number.isFinite(p.prob) && p.prob >= 0)).toBe(true);
+      expect(d.probs.reduce((a, p) => a + p.prob, 0)).toBeCloseTo(1, 9);
+      expect(Object.values(d.weights).every(Number.isFinite)).toBe(true);
+    };
+
+    it("loads a checkpoint saved with N experts into N+1 without NaN, via SQLite", () => {
+      const old = trained();
+      saveProbEngineCheckpoint(db, "dev", 7, "status", { daypart: "morning" }, old);
+      const state = JSON.parse(loadProbEngineCheckpoint(db, "dev")!.engine_json);
+      expect(state.logW.length).toBe(DEFAULT_EXPERTS.length);
+
+      const next = ProbEngine.fromJSON(state, { experts: [...DEFAULT_EXPERTS, ...candidateExperts(["light"])] });
+      const f: FeatureMap = { daypart: "morning", app: "com.slack", light: "dim" };
+      const d = next.predict("status", f);
+      sane(d);
+      expect(d.active).toContain("cur+light");
+      // The new expert starts at the uniform prior (before renormalising with the saved weights).
+      const n = DEFAULT_EXPERTS.length + 1;
+      const lw = next.toJSON().logW;
+      const norm = Math.log(state.logW.reduce((a: number, v: number) => a + Math.exp(v), 0) + 1 / n);
+      expect(lw[n - 1]).toBeCloseTo(-Math.log(n) - norm, 10);
+      expect(lw[0]).toBeCloseTo(state.logW[0] - norm, 10);
+      const r = next.observe("status", f, "ask");
+      expect(Number.isFinite(r.logLoss)).toBe(true);
+      sane(next.predict("ask", f));
+      expect(next.toJSON().logW.every(Number.isFinite)).toBe(true);
+    });
+
+    it("leaves predictions unchanged when the expert set is identical", () => {
+      const old = trained();
+      const same = ProbEngine.fromJSON(old.toJSON());
+      const f: FeatureMap = { daypart: "evening", app: "com.slack" };
+      expect(same.predict("ask", f)).toEqual(old.predict("ask", f));
+      expect(same.toJSON().logW).toEqual(old.toJSON().logW);
+    });
+
+    it("maps weights by name when experts are reordered or dropped", () => {
+      const old = trained();
+      const st = old.toJSON();
+      const reordered = [...DEFAULT_EXPERTS].reverse();
+      const rev = ProbEngine.fromJSON(st, { experts: reordered });
+      const f: FeatureMap = { daypart: "morning", app: "com.slack" };
+      const wOld = old.predict("status", f).weights;
+      const wRev = rev.predict("status", f).weights;
+      for (const k of Object.keys(wOld)) expect(wRev[k]).toBeCloseTo(wOld[k], 10);
+
+      const dropped = ProbEngine.fromJSON(st, { experts: DEFAULT_EXPERTS.slice(0, 5) });
+      sane(dropped.predict("status", f));
+      const lw = dropped.toJSON().logW;
+      expect(lw.reduce((a, v) => a + Math.exp(v), 0)).toBeCloseTo(1, 9);
+    });
+
+    it("tolerates a short or non-finite logW by falling back to the uniform prior", () => {
+      const st = trained().toJSON();
+      st.logW = st.logW.slice(0, 3);
+      st.logW[1] = Number.NaN;
+      const e = ProbEngine.fromJSON(st);
+      sane(e.predict("status", { daypart: "morning", app: "com.slack" }));
+      expect(e.toJSON().logW.every(Number.isFinite)).toBe(true);
+    });
   });
 });

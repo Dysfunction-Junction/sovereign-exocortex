@@ -90,6 +90,9 @@ export interface ObservedAction {
   context?: PredictionContext;
 }
 
+/** Screen views (and passive captures) form the "screen" stream; per-app foreground arrivals form "app". */
+export type PredictionStream = "screen" | "app";
+
 export type Daypart = "night" | "morning" | "afternoon" | "evening";
 
 /**
@@ -174,6 +177,23 @@ export interface PredictionContext {
   }>;
   /** Local LLM or on-device triage category (urgent / routine / noise) */
   triage?: "urgent" | "routine" | "noise" | string;
+  /**
+   * Latest opt-in sensor window (5-minute aggregates, see android-sensor spec). Logged from day one;
+   * the fields are candidate features and stay out of the live model until the admission rule is met.
+   */
+  sensors?: {
+    window_end: number;
+    motion_energy?: string;
+    orient?: string;
+    steps_delta?: number;
+    sig_motion?: boolean;
+    pressure_trend?: string;
+    light?: string;
+    near_frac?: number;
+    activity?: string;
+  };
+  /** Which prediction stream this guess belongs to. Rows without it are "screen". */
+  stream?: PredictionStream;
   /** Expected signals that were not available when this snapshot was taken, e.g. "ambient.temp_c". */
   missing?: string[];
   [extra: string]: unknown;
@@ -221,7 +241,8 @@ export function finalizeContext(ctx: PredictionContext | undefined): PredictionC
     if (typeof out.location.lat === "number") out.location.lat = round2(out.location.lat);
     if (typeof out.location.lon === "number") out.location.lon = round2(out.location.lon);
   }
-  const missing = new Set<string>();
+  // `sensors.<key>` entries (present, toggled on, stale) come from the tracker; keep them.
+  const missing = new Set<string>((out.missing ?? []).filter((m) => typeof m === "string" && m.startsWith("sensors.")));
   for (const f of EXPECTED_CONTEXT_FIELDS) {
     const v = getPath(out, f);
     const empty = v === undefined || v === null || (typeof v === "object" && Object.keys(v as object).length === 0);
@@ -305,17 +326,19 @@ interface OpenRow {
  * answer key. HIT = top-1 guess matched; MISS = something else happened inside the horizon (the real
  * action is kept, with `hit_rank` when it was a lower-ranked candidate); EXPIRED = the next action
  * came after the horizon or never came (the late action is still recorded when known).
- * Returns the number resolved.
+ * Only predictions of the same `stream` are resolved (rows without context.stream count as "screen"),
+ * so an app arrival never answers a screen guess. Returns the number resolved.
  */
-export function resolveWithAction(raw: DatabaseSync, deviceId: string, actual: ObservedAction): number {
+export function resolveWithAction(raw: DatabaseSync, deviceId: string, actual: ObservedAction, stream: PredictionStream = "screen"): number {
   const open = raw
     .prepare(
       `SELECT p.prediction_id, p.made_seq, p.made_at, p.horizon_ms, p.candidates
          FROM predictions p LEFT JOIN prediction_outcomes o ON o.prediction_id = p.prediction_id
         WHERE p.device_id = ? AND o.prediction_id IS NULL AND p.made_seq < ?
+          AND COALESCE(json_extract(p.context, '$.stream'), 'screen') = ?
         ORDER BY p.made_seq`,
     )
-    .all(deviceId, actual.seq) as unknown as OpenRow[];
+    .all(deviceId, actual.seq, stream) as unknown as OpenRow[];
   if (open.length === 0) return 0;
   const insert = raw.prepare(
     `INSERT OR IGNORE INTO prediction_outcomes (prediction_id, outcome, actual, actual_seq, hit_rank, latency_ms, resolved_at, actual_context)
@@ -349,15 +372,17 @@ export function expireStale(raw: DatabaseSync, nowMs: number): number {
   return Number(res.changes);
 }
 
-export function loadPredictionRows(raw: DatabaseSync, sinceMs = 0): PredictionRow[] {
+/** All rows since `sinceMs`, or only one stream's rows (legacy rows without context.stream are "screen"). */
+export function loadPredictionRows(raw: DatabaseSync, sinceMs = 0, stream?: PredictionStream): PredictionRow[] {
   const rows = raw
     .prepare(
       `SELECT p.prediction_id, p.device_id, p.made_seq, p.made_at, p.horizon_ms, p.context_key, p.candidates, p.context,
               o.outcome, o.actual, o.actual_seq, o.hit_rank, o.latency_ms, o.actual_context
          FROM predictions p LEFT JOIN prediction_outcomes o ON o.prediction_id = p.prediction_id
-        WHERE p.made_at >= ? ORDER BY p.made_seq`,
+        WHERE p.made_at >= ? AND (? IS NULL OR COALESCE(json_extract(p.context, '$.stream'), 'screen') = ?)
+        ORDER BY p.made_seq`,
     )
-    .all(sinceMs) as unknown as Array<Record<string, unknown>>;
+    .all(sinceMs, stream ?? null, stream ?? null) as unknown as Array<Record<string, unknown>>;
   return rows.map((r) => ({
     prediction_id: r.prediction_id as string,
     device_id: r.device_id as string,

@@ -273,4 +273,23 @@ describe("PredictionHost", () => {
     assert.equal(mod.passiveCapturePackage(ev), "com.instagram.barcelona");
     assert.equal(mod.actionOf(ev), "Social");
   });
+
+  it("checkpoints the app stream under its own key and hydrates it with counts and late rule intact", () => {
+    const fg = (dt: number, to: string): Omit<EventIn, "event_id" | "schema_ver"> => ({
+      kind: "telemetry",
+      ts_device: T0 + dt,
+      payload: { type: "app_foreground", event: "APP_TRANSITION", to, category: "Audio", excluded: false },
+    });
+    const h1 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    h1.onEventsAppended(ingest([view("status", 0), ...[1, 2, 3, 4, 5].map((i) => fg(i * 1000, "com.a"))]).events, db);
+    assert.ok(loadProbEngineCheckpoint(db, DEVICE + "#app"), "app stream has its own checkpoint row");
+    assert.equal(loadProbEngineCheckpoint(db, DEVICE), null, "screen stream has not reached its interval");
+
+    const h2 = new PredictionHost({ horizonMs: 60_000, tzOffsetMin: () => 0, checkpointInterval: 3 });
+    assert.deepEqual(h2.onEventsAppended(ingest([fg(2500, "com.a")]).events, db), { guesses: 0, resolved: 0 }, "late after restart");
+    h2.onEventsAppended(ingest([fg(6000, "com.a")]).events, db);
+    const last = loadPredictionRows(db.raw).filter((r) => r.context.stream === "app").pop()!;
+    assert.ok(last.context_key.startsWith("pkg:com.a|"), `6th arrival is labelled by package: ${last.context_key}`);
+  });
 });
+

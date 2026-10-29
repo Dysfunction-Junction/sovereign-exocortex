@@ -277,3 +277,29 @@ describe("report: calibration intervals and pre-registered baselines", () => {
     expect(r.unconditional.top1WilsonUpper!).toBeGreaterThan(r.unconditional.top1WilsonLower!);
   });
 });
+
+describe("streams", () => {
+  it("a stream-filtered resolve leaves screen predictions open when an app action arrives", () => {
+    const raw = fresh();
+    logPrediction(raw, guess({ made_seq: 1 })); // legacy row: no context.stream, counts as "screen"
+    logPrediction(raw, guess({ made_seq: 2, context: { stream: "app" } }));
+    expect(resolveWithAction(raw, "d1", { seq: 3, ts: T0 + 1000, value: "ask" }, "app")).toBe(1);
+    let rows = loadPredictionRows(raw);
+    expect(rows.find((r) => r.made_seq === 1)!.outcome).toBeNull();
+    expect(rows.find((r) => r.made_seq === 2)!.outcome).toBe("HIT");
+    // The default stream is "screen": it resolves the legacy row and leaves nothing app-side to touch.
+    expect(resolveWithAction(raw, "d1", { seq: 4, ts: T0 + 2000, value: "setup" })).toBe(1);
+    rows = loadPredictionRows(raw);
+    expect(rows.find((r) => r.made_seq === 1)!.outcome).toBe("MISS");
+  });
+
+  it("loads one stream's rows on request and keeps the stream in the stored context", () => {
+    const raw = fresh();
+    logPrediction(raw, guess({ made_seq: 1 }));
+    logPrediction(raw, guess({ made_seq: 2, context: { stream: "app" } }));
+    expect(loadPredictionRows(raw).length).toBe(2);
+    expect(loadPredictionRows(raw, 0, "app").map((r) => r.made_seq)).toEqual([2]);
+    expect(loadPredictionRows(raw, 0, "screen").map((r) => r.made_seq)).toEqual([1]);
+    expect(loadPredictionRows(raw, 0, "app")[0].context.stream).toBe("app");
+  });
+});
