@@ -34,6 +34,7 @@ import {
   type SensorKey, type SensorPermission, type SensorState,
 } from "../lib/sensorConsent";
 import { CONTROL_LABELS, getPreferredControl, setPreferredControl, type KillSwitchControl } from "../lib/typedText";
+import { LABELS, describePlace, forgetPlaces, getCurrentPlace, labelPlace, type CurrentPlace, type PlaceLabelName } from "../lib/places";
 import { requestPermission } from "../lib/devicePermissions";
 import { Switch } from "../components/Switch";
 import { ScanIcon, CheckIcon, WifiIcon, CloudIcon } from "../components/Icons";
@@ -73,6 +74,7 @@ export default function Setup() {
   const [sensorState, setSensorState] = useState<SensorState | null>(null);
   const [sensorBusy, setSensorBusy] = useState(false);
   const [killControl, setKillControl] = useState<KillSwitchControl>("accessibility_button");
+  const [place, setPlace] = useState<CurrentPlace | null>(null);
 
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyMsg, setKeyMsg] = useState<string | null>(null);
@@ -91,6 +93,7 @@ export default function Setup() {
   async function refreshSensorState() {
     setSensorState(await getSensorState());
     setKillControl(await getPreferredControl());
+    setPlace(await getCurrentPlace().catch(() => null));
   }
 
   // Each change is applied on the phone before the switch moves, so the UI never shows "off" for a running sensor.
@@ -108,6 +111,23 @@ export default function Setup() {
 
   async function handleAllowSensorPermission(name: SensorPermission) {
     await changeSensors(() => requestSensorPermission(name));
+  }
+
+  async function handleLabelPlace(placeId: string, label: PlaceLabelName) {
+    try {
+      setPlace(await labelPlace(placeId, label));
+    } catch (e) {
+      logRejection("setup.labelPlace")(e);
+    }
+  }
+
+  async function handleForgetPlaces() {
+    try {
+      await forgetPlaces();
+      setPlace(await getCurrentPlace());
+    } catch (e) {
+      logRejection("setup.forgetPlaces")(e);
+    }
   }
 
   async function handleKillControl(control: KillSwitchControl) {
@@ -826,6 +846,30 @@ export default function Setup() {
                       </div>
                     );
                   })()}
+                  {info.key === "places" && sensorState.toggles.places === true && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <p className="hint" style={{ margin: 0 }}>{describePlace(place)}</p>
+                      {place?.placeId && (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {LABELS.map((l) => (
+                            <button
+                              key={l.value}
+                              className="secondary"
+                              disabled={sensorBusy}
+                              onClick={() => void handleLabelPlace(place.placeId as string, l.value)}
+                            >
+                              {l.title}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div>
+                        <button className="secondary" disabled={sensorBusy} onClick={() => void handleForgetPlaces()}>
+                          Forget places
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {needsActivityPermissionNow(sensorState, info) && (
                     <div>
                       <p className="status-error" style={{ fontSize: 13, margin: "0 0 8px" }}>
