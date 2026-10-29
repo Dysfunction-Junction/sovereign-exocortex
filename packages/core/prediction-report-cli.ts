@@ -1,5 +1,9 @@
 /**
- * Usage: tsx prediction-report-cli.ts <db-path> [--days N] [--guide-by <context.path>] [--eval]
+ * Usage: tsx prediction-report-cli.ts <db-path> [--days N] [--guide-by <context.path>] [--stream screen|app] [--eval]
+ *
+ * The ledger holds two prediction streams (companion-app screens and foreground-app arrivals). They are
+ * scored separately, so the report covers one stream at a time; the default, screen, keeps the
+ * existing ledger comparable. --eval always replays the screen-view events.
  *
  * Prints the next-action prediction log: hit rates against the frequency baseline, calibration, and the
  * probability guide (what really happened after each guess, misses included). Opens the database
@@ -20,7 +24,7 @@ const pct = (v: number | null): string => (v === null ? "n/a" : `${(v * 100).toF
 const num = (v: number | null, d = 4): string => (v === null ? "n/a" : v.toFixed(d));
 
 function usage(msg: string): never {
-  console.error(`${msg}\nusage: prediction-report-cli <db-path> [--days N] [--guide-by context.path] [--eval]`);
+  console.error(`${msg}\nusage: prediction-report-cli <db-path> [--days N] [--guide-by context.path] [--stream screen|app] [--eval]`);
   process.exit(2);
 }
 
@@ -28,9 +32,9 @@ function line(label: string, s: EvaluationSummary): string {
   return `  ${label.padEnd(10)} n=${s.n}  log loss ${num(s.meanLogLoss)}  Brier ${num(s.meanBrier)}  top-1 ${pct(s.top1)}  top-3 ${pct(s.top3)}  ECE ${num(s.ece)}`;
 }
 
-let parsed: ReturnType<typeof parseArgs<{ options: { days: { type: "string" }; "guide-by": { type: "string" }; eval: { type: "boolean" } }; allowPositionals: true }>>;
+let parsed: ReturnType<typeof parseArgs<{ options: { days: { type: "string" }; "guide-by": { type: "string" }; stream: { type: "string" }; eval: { type: "boolean" } }; allowPositionals: true }>>;
 try {
-  parsed = parseArgs({ options: { days: { type: "string" }, "guide-by": { type: "string" }, eval: { type: "boolean" } }, allowPositionals: true });
+  parsed = parseArgs({ options: { days: { type: "string" }, "guide-by": { type: "string" }, stream: { type: "string" }, eval: { type: "boolean" } }, allowPositionals: true });
 } catch (e) {
   usage(e instanceof Error ? e.message : String(e));
 }
@@ -41,6 +45,8 @@ if (parsed.values.days !== undefined) {
   days = Number(parsed.values.days);
   if (!Number.isFinite(days) || days <= 0) usage("--days must be a positive number");
 }
+const stream = parsed.values.stream ?? "screen";
+if (stream !== "screen" && stream !== "app") usage("--stream must be screen or app");
 
 try {
   const raw = new DatabaseSync(dbPath, { readOnly: true });
@@ -49,7 +55,8 @@ try {
 
   if (has("predictions")) {
     const since = days !== undefined ? Date.now() - days * 86_400_000 : 0;
-    const rows = loadPredictionRows(raw, since);
+    const rows = loadPredictionRows(raw, since, stream);
+    console.log(`Prediction stream: ${stream}`);
     console.log(formatPredictionReport(computePredictionReport(rows, { guideBy: parsed.values["guide-by"] })));
   } else {
     console.log("Next-action prediction log: no predictions recorded yet (the daemon creates the table on the first screen view).");
