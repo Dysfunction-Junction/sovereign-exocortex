@@ -160,6 +160,11 @@ export class WorldModelHost {
   }
 
   /** Restore learned params, belief snapshot and graph projection. Runs once; retried when a recorder attaches after a cold start. */
+  public rehydrate(db: ExocortexDatabase): void {
+    this.hydrated = false;
+    this.hydrateFromDatabase(db);
+  }
+
   private hydrateFromDatabase(db: ExocortexDatabase): void {
     if (this.hydrated) return;
     this.preferenceDb = db;
