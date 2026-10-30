@@ -20,6 +20,7 @@ import { defaultPredictionHost } from "./prediction-host.js";
 import { defaultTriageHost } from "./triage-host.js";
 import { IngestConsumer } from "./ingest-consumer.js";
 import { registerIngestWakeHandler } from "./ingest-scheduler.js";
+import { getServicesStatus, requestServiceRestart, isWorldModelRestarting, waitForWorldModelReady, setOpsIngestConsumer } from "./ops-services.js";
 
 // Wire local LLM triage category stream into next-action prediction context
 defaultTriageHost.onVerdictStored = (deviceId, verdict) => {
@@ -94,6 +95,7 @@ export function ingestConsumerForDatabase(db: ExocortexDatabase): IngestConsumer
   consumer = new IngestConsumer({ db, hooks });
   ingestConsumers.set(db, consumer);
   registerIngestWakeHandler(db, () => consumer?.wake());
+  setOpsIngestConsumer(ingestConsumerForDatabase);
   return consumer;
 }
 
@@ -660,6 +662,20 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  // Workstation Node service operations: loopback only
+  if (url.pathname.startsWith("/ops/")) {
+    const remoteIp = req.socket?.remoteAddress ?? "";
+    const isLoopback =
+      remoteIp === "127.0.0.1" ||
+      remoteIp === "::1" ||
+      remoteIp === "::ffff:127.0.0.1" ||
+      remoteIp === "localhost";
+    if (!isLoopback) {
+      sendJson(res, 403, { error: "forbidden: ops endpoints are only accessible from loopback interface" });
+      return;
+    }
+  }
+
   const secret = JWT_SECRET ?? process.env.GATEWAY_JWT_SECRET;
   if (!secret) {
     sendJson(res, 503, { error: "gateway authentication is not configured" });
@@ -669,6 +685,46 @@ export const server = createServer(async (req, res) => {
 
   if (!auth.ok) {
     sendJson(res, 401, { error: "unauthorized", reason: auth.reason });
+    return;
+  }
+
+  if (method === "GET" && url.pathname === "/ops/services") {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: ops inspection requires admin or admin:read scope" });
+        return;
+      }
+      const services = await getServicesStatus();
+      sendJson(res, 200, services);
+    } catch (err) {
+      sendInternalError(res, "failed to get services status", err);
+    }
+    return;
+  }
+
+  if (method === "POST" && url.pathname.startsWith("/ops/services/") && url.pathname.endsWith("/restart")) {
+    try {
+      const db = getDatabase();
+      if (!deviceHasScope(db, auth.deviceId, "admin", "admin:write")) {
+        sendJson(res, 403, { error: "forbidden: service restart requires admin or admin:write scope" });
+        return;
+      }
+      const parts = url.pathname.split("/");
+      if (parts.length !== 5 || parts[1] !== "ops" || parts[2] !== "services" || parts[4] !== "restart") {
+        sendJson(res, 404, { error: "unknown service" });
+        return;
+      }
+      const id = parts[3];
+      const result = await requestServiceRestart(id, auth.deviceId);
+      if (result.status === 202) {
+        sendJson(res, 202, result.data);
+      } else {
+        sendJson(res, result.status, { error: result.error });
+      }
+    } catch (err) {
+      sendInternalError(res, "failed to process service restart", err);
+    }
     return;
   }
 
@@ -755,6 +811,14 @@ export const server = createServer(async (req, res) => {
       if (!deviceHasScope(getDatabase(), auth.deviceId, "telemetry:write", "admin", "admin:write")) {
         sendJson(res, 403, { error: "forbidden: event ingestion requires telemetry:write, admin, or admin:write scope" });
         return;
+      }
+      if (isWorldModelRestarting()) {
+        try {
+          await waitForWorldModelReady(5000);
+        } catch {
+          sendJson(res, 503, { error: "database restart in progress, retry shortly" });
+          return;
+        }
       }
       const raw = await readBody(req, 1024 * 1024);
       let decoded: unknown;

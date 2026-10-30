@@ -60,7 +60,8 @@ async function authedFetch(path: string, init?: RequestInit): Promise<Response> 
   const isExocortexRoute =
     path.startsWith("/v3/") ||
     path.startsWith("/world-model/") ||
-    path.startsWith("/network/");
+    path.startsWith("/network/") ||
+    path.startsWith("/ops/");
   if (isExocortexRoute) {
     const isDesktop = isDesktopApp();
     const daemonTarget = targets.find((t) => t.baseUrl.includes(":8788")) || {
@@ -1008,4 +1009,46 @@ export async function configureChannel(
   return res.json() as Promise<{ ok: boolean; status: ChannelClientStatus }>;
 }
 
+export type ServiceId = "daemon" | "proxy" | "piecesos" | "worldmodel";
+export type ServiceStatus = "healthy" | "unhealthy" | "unknown";
+
+export interface ServiceRestartInfo {
+  available: boolean;
+  in_progress: boolean;
+  last_at: number | null;
+  last_result: "ok" | "failed" | null;
+}
+
+export interface ServiceInfo {
+  id: ServiceId;
+  label: string;
+  status: ServiceStatus;
+  detail: string;
+  latency_ms: number | null;
+  checked_at: number;
+  port?: number;
+  pid?: number;
+  uptime_s?: number;
+  restart: ServiceRestartInfo;
+}
+
+export async function getServices(): Promise<ServiceInfo[]> {
+  const res = await authedFetch("/ops/services");
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Failed to fetch services status: ${errText || res.status}`);
+  }
+  return res.json() as Promise<ServiceInfo[]>;
+}
+
+export async function restartService(id: ServiceId | string): Promise<{ accepted: boolean; id: string }> {
+  const res = await authedFetch(`/ops/services/${encodeURIComponent(id)}/restart`, {
+    method: "POST",
+  });
+  if (res.status === 202) {
+    return res.json() as Promise<{ accepted: boolean; id: string }>;
+  }
+  const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+  throw new Error(body?.error || `Restart rejected with HTTP ${res.status}`);
+}
 
