@@ -644,6 +644,16 @@ public class PiecesAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         isRunning = true;
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            try {
+                Class.forName("com.pieces.android.companion.SpeechApiSpike")
+                    .getMethod("register", android.content.Context.class).invoke(null, this);
+            } catch (ClassNotFoundException ignored) {
+                // Spike exists only in debug builds.
+            } catch (ReflectiveOperationException e) {
+                android.util.Log.w("SpeechApiSpike", e.getClass().getSimpleName());
+            }
+        }
         initClipboardListener();
         NativeHardwareTelemetry.initSensors(this); // consent-gated
         SensorWindowSampler.start(this);

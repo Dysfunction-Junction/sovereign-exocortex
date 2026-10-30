@@ -91,6 +91,7 @@ dependencies {
     // it's sent to PiecesOS — same dependency confirmed working in
     // bear-house-classic's OnDeviceGenAIPlugin.java.
     implementation 'com.google.mlkit:genai-prompt:1.0.0-beta1'
+    debugImplementation 'com.google.mlkit:genai-speech-recognition:1.0.0-alpha1'
     // MediaPipe Text Embedder for local semantic search — bundled tflite,
     // L2-normalized 100-dim embeddings, fully offline. Not GenAI, so not
     // subject to AICore's foreground-app inference restriction.
