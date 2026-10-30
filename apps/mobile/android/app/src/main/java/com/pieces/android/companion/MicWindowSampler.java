@@ -358,6 +358,11 @@ final class MicWindowSampler {
                 boolean p = gotProx.await(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
                 boolean g = gotLight.await(Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
                 boolean known = p && g;
+                if ((ctx.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    // Debug builds only, numbers only (never audio, never emitted): to tune the pocket gate on a phone.
+                    android.util.Log.d("PocketGate", "prox=" + (p ? proxVal[0] : "none") + " max=" + prox.getMaximumRange()
+                        + " lux=" + (g ? lux[0] : "none"));
+                }
                 return NativeHardwareTelemetry.pocketGate(
                     known && NativeHardwareTelemetry.isNear(proxVal[0], prox.getMaximumRange()),
                     known && NativeHardwareTelemetry.isDark(lux[0]),
