@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { getStatus, getCachedStatus, getPendingShadowProposals, ProxyNotConfiguredError, HomeNodeUnreachableError } from "../lib/api";
+import { getStatus, getCachedStatus, getPendingShadowProposals, ProxyNotConfiguredError, HomeNodeUnreachableError, getServices, type ServiceInfo } from "../lib/api";
+import { ServiceRow } from "../components/ServiceRow";
 import { recordEvent } from "../lib/usage";
 import { fireAndForget, logRejection, recordEventSafe } from "../lib/fireAndForget";
 import { flushUsageEvents } from "../lib/flush";
@@ -34,6 +35,49 @@ export default function Status() {
   const [state, setState] = useState<State>({ kind: "loading" });
   const [contextEnabled, setContextEnabled] = useState(false);
   const [accessibilityGranted, setAccessibilityGranted] = useState(true);
+  const [services, setServices] = useState<ServiceInfo[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(true);
+  const [daemonUnreachable, setDaemonUnreachable] = useState(false);
+  const [isDaemonRestarting, setIsDaemonRestarting] = useState(false);
+
+  const fetchServices = async () => {
+    if (Capacitor.isNativePlatform()) return;
+    try {
+      const data = await getServices();
+      setServices(data);
+      setDaemonUnreachable(false);
+      setServicesLoading(false);
+    } catch {
+      if (!isDaemonRestarting) {
+        setDaemonUnreachable(true);
+      }
+      setServicesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) return;
+
+    fetchServices();
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") {
+        fetchServices();
+      }
+    }, 10_000);
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchServices();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [isDaemonRestarting]);
   const [apps, setApps] = useState<AppEntry[]>([]);
   const [allowlist, setAllowlistState] = useState<Set<string>>(new Set());
   // Picker working copy. Nothing reaches the native allowlist until the user taps "Save";
@@ -432,25 +476,55 @@ export default function Status() {
                     Host daemon, vector databanks, and living world model active on this PC.
                   </p>
                 </div>
-                <span className="badge success">Localhost Online</span>
+                {daemonUnreachable ? (
+                  <span className="badge danger">Daemon unreachable</span>
+                ) : servicesLoading || services.length === 0 ? (
+                  <span className="badge">Checking</span>
+                ) : services.some((s) => s.status === "unhealthy") ? (
+                  <span className="badge danger">
+                    {services.filter((s) => s.status === "unhealthy").length} unhealthy
+                  </span>
+                ) : services.every((s) => s.status === "healthy") ? (
+                  <span className="badge success">All services healthy</span>
+                ) : (
+                  <span className="badge">Checking</span>
+                )}
               </div>
-              <div className="metrics-grid">
-                <div className="metric-box">
-                  <div className="metric-label">Daemon API</div>
-                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:8788</div>
-                </div>
-                <div className="metric-box">
-                  <div className="metric-label">Proxy Bus</div>
-                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:8787</div>
-                </div>
-                <div className="metric-box">
-                  <div className="metric-label">PiecesOS Engine</div>
-                  <div className="metric-val" style={{ fontSize: 13, fontFamily: "monospace" }}>:39300</div>
-                </div>
-                <div className="metric-box">
-                  <div className="metric-label">World Model Store</div>
-                  <div className="metric-val" style={{ fontSize: 13 }}>SQLite (WAL)</div>
-                </div>
+
+              <div className="service-rows-container">
+                <ServiceRow
+                  id="daemon"
+                  label="Daemon API"
+                  descriptor=":8788"
+                  service={services.find((s) => s.id === "daemon")}
+                  daemonUnreachable={daemonUnreachable}
+                  onRefresh={fetchServices}
+                  onDaemonRestarting={setIsDaemonRestarting}
+                />
+                <ServiceRow
+                  id="proxy"
+                  label="Proxy Bus"
+                  descriptor=":8787"
+                  service={services.find((s) => s.id === "proxy")}
+                  daemonUnreachable={daemonUnreachable}
+                  onRefresh={fetchServices}
+                />
+                <ServiceRow
+                  id="piecesos"
+                  label="PiecesOS Engine"
+                  descriptor=":39300"
+                  service={services.find((s) => s.id === "piecesos")}
+                  daemonUnreachable={daemonUnreachable}
+                  onRefresh={fetchServices}
+                />
+                <ServiceRow
+                  id="worldmodel"
+                  label="World Model Store"
+                  descriptor="SQLite (WAL)"
+                  service={services.find((s) => s.id === "worldmodel")}
+                  daemonUnreachable={daemonUnreachable}
+                  onRefresh={fetchServices}
+                />
               </div>
             </div>
           )}
