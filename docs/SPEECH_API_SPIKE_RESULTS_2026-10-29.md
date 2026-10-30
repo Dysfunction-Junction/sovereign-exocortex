@@ -24,3 +24,10 @@ Stopped after the one-shot calls. Part 2 is blocked on the user choosing a fallb
 - https://developers.google.com/ml-kit/genai/speech-recognition/android — advanced-mode supported devices and audio input.
 - https://developers.google.com/ml-kit/genai/prompt/android/get-started — prompt API.
 - https://developers.google.com/ml-kit/genai — foreground inference restrictions.
+
+## User decisions, 2026-10-30
+
+- D1 (final): the summarizer is a **bundled Gemma model** because Nano is background-blocked. This reverses the Nano choice. Raw input is still summarized on the phone and deleted, no audio or text backup. Applies to speech sessions and typed text (A5) through the `Summarizer` interface.
+- WP-A (per-app foreground transitions on Android): approved, keep the existing exclusions (Messenger, Discord, social apps, dialer).
+- WP8 (opt-in typing-cadence logging): approved, do not skip. Must stay opt-in with its own consent key.
+- Pocket gate: user notes lux is unreliable with the screen on, so the rule should not depend on lux while the screen is lit.
