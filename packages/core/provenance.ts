@@ -113,6 +113,7 @@ export function provenanceOf(event: ProvenanceEvent, opts: ProvenanceOptions = {
     case "telemetry":
     case "touch":
     case "wake":
+    case "vibration":
       return result("observed", kind);
     case "observation":
       return result("observed", source ? `observation:${source}` : "observation");
