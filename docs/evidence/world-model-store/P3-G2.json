@@ -1,0 +1,49 @@
+{
+  "gate": "P3-G2",
+  "git_sha": "28047bd07c7026ca177bb4c2135a8c4e3694fd50",
+  "command": "pnpm typecheck && pnpm test",
+  "ran_at": "2026-10-31T23:44:02.000Z",
+  "host_state": {
+    "commit_used_gb": 31.17,
+    "llama_server_running": true,
+    "llama_server_processes": 3
+  },
+  "measured": {
+    "typecheck_errors": 0,
+    "typecheck_projects": 12,
+    "suites": {
+      "core": { "passed": 267, "failed": 0 },
+      "memory": { "passed": 118, "failed": 0 },
+      "mesh": { "passed": 379, "failed": 0 },
+      "triad": { "passed": 478, "failed": 0, "skipped": 13 },
+      "world_model": { "passed": 136, "failed": 0 },
+      "daemon": { "passed": 385, "failed": 0 },
+      "mobile": { "passed": 281, "failed": 0 }
+    },
+    "revert_tag": "pre-world-model-store-cutover",
+    "curation_import_dry_run": {
+      "vocab": {
+        "sha256": "6c3c1842fd47b16a9f572295e0a2f4d987e3c51f0d3ca3871950e6cf7a6ee703",
+        "count": 8157
+      },
+      "entity_rule": {
+        "sha256": "d1fbe83b8486c25b88753ef730e2cf8c3162b4cb9e0bf0a899bc4f777145bb66",
+        "count": 44
+      },
+      "path_rule": {
+        "sha256": "22f23021a6f743723f35cd499ebdb801cd4e7bc8090734a1db693226d354bc8b",
+        "count": 1743
+      },
+      "file_tree": {
+        "sha256": "06a003a620b278b1b59df4e9a633b7265c1b86097ac528311b1e674285abfa53",
+        "count": 1003
+      }
+    }
+  },
+  "threshold": {
+    "typecheck_errors": 0,
+    "test_failures": 0
+  },
+  "pass": true,
+  "notes": "Phase 3.1 daemon route cutover, Phase 3.2 mobile LivingBrain cutover (PR #80), Phase 3.3 Neo4jSyncService removal from server.ts, and curation-import admin CLI verified across workspace typecheck and test suites."
+}

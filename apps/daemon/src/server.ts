@@ -44,7 +44,6 @@ import { defaultPhoneLinkWatchdog } from "./phone-link-watchdog.js";
 import { defaultRepoHealthWatcher } from "./repo-health.js";
 import { applyShadowLabel, InferredOutcomeScheduler } from "./inferred-outcomes.js";
 import { defaultDatabankArchivalHost, PRUNE_DISABLED_REASON } from "./databank-archival-host.js";
-import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.js";
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
@@ -178,9 +177,6 @@ if (process.env.NODE_ENV !== "test") {
   }
 
   ingestConsumerForDatabase(getDatabase()).start();
-
-  // Attach automated Neo4j Living Brain real-time sync
-  defaultNeo4jSyncService.attachToHost(defaultWorldModelHost);
 
   // Attach integration channels master manager
   defaultChannelManager.attachToWorldModel(defaultWorldModelHost);
@@ -1150,6 +1146,16 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  const sendGraphNotServing = () => {
+    sendJson(res, 503, {
+      ...defaultWorldModelHost.graphStore.status(),
+      ok: false,
+      serving: false,
+      error: "world model is not serving: a curation artifact referenced by the ledger is missing or altered",
+      store: defaultWorldModelHost.getStoreStatus(),
+    });
+  };
+
   if (
     method === "GET" &&
     (url.pathname === "/v3/world-model/graph" || url.pathname.startsWith("/v3/world-model/graph/")) &&
@@ -1160,10 +1166,7 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 403, { error: "forbidden: graph inspection requires admin:read scope" });
         return;
       }
-      sendJson(res, 503, {
-        error: "world model is not serving: a curation artifact referenced by the ledger is missing or altered",
-        store: defaultWorldModelHost.getStoreStatus(),
-      });
+      sendGraphNotServing();
     } catch (err) {
       sendInternalError(res, "failed to query world model graph", err);
     }
@@ -1258,67 +1261,101 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
-  if (method === "GET" && url.pathname === "/v3/world-model/neo4j/status") {
+  if (
+    method === "GET" &&
+    (url.pathname === "/v3/world-model/graph/status" || url.pathname === "/v3/world-model/neo4j/status")
+  ) {
     try {
       const db = getDatabase();
       if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
-        sendJson(res, 403, { error: "forbidden: neo4j status inspection requires admin:read scope" });
+        sendJson(res, 403, { error: "forbidden: graph status inspection requires admin:read scope" });
         return;
       }
-      await defaultNeo4jSyncService.checkHealth();
+      if (!defaultWorldModelHost.graphServing) {
+        sendGraphNotServing();
+        return;
+      }
       sendJson(res, 200, {
         ok: true,
-        ...defaultNeo4jSyncService.getStatus(),
+        ...defaultWorldModelHost.graphStore.status(),
       });
     } catch (err) {
-      sendInternalError(res, "failed to query neo4j sync status", err);
+      sendInternalError(res, "failed to query world model graph status", err);
     }
     return;
   }
 
-  if (method === "POST" && url.pathname === "/v3/world-model/neo4j/sync") {
+  if (
+    method === "POST" &&
+    (url.pathname === "/v3/world-model/graph/sync" || url.pathname === "/v3/world-model/neo4j/sync")
+  ) {
     try {
       const db = getDatabase();
       if (!deviceHasScope(db, auth.deviceId, "admin", "admin:write")) {
-        sendJson(res, 403, { error: "forbidden: neo4j synchronization requires admin:write scope" });
+        sendJson(res, 403, { error: "forbidden: graph synchronization requires admin:write scope" });
         return;
       }
-      const snapshot = defaultWorldModelHost.lifeGraph.snapshot();
-      const result = await defaultNeo4jSyncService.syncGraph(snapshot);
+      if (!defaultWorldModelHost.graphServing) {
+        sendGraphNotServing();
+        return;
+      }
+      const storeStatus = defaultWorldModelHost.graphStore.status();
       sendJson(res, 200, {
         ok: true,
-        result,
-        status: defaultNeo4jSyncService.getStatus(),
+        ...storeStatus,
+        message: "Graph is rebuilt automatically from the ledger at boot.",
+        result: {
+          entities: storeStatus.nodeCount,
+          edges: storeStatus.edgeCount,
+        },
+        status: {
+          ok: true,
+          ...storeStatus,
+        },
       });
     } catch (err) {
-      sendInternalError(res, "failed to trigger neo4j synchronization", err);
+      sendInternalError(res, "failed to query world model graph sync status", err);
     }
     return;
   }
 
-  if (method === "GET" && url.pathname === "/v3/world-model/neo4j/analytics") {
+  if (
+    method === "GET" &&
+    (url.pathname === "/v3/world-model/graph/analytics" || url.pathname === "/v3/world-model/neo4j/analytics")
+  ) {
     try {
       const db = getDatabase();
       if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
-        sendJson(res, 403, { error: "forbidden: neo4j analytics requires admin:read scope" });
+        sendJson(res, 403, { error: "forbidden: graph analytics requires admin:read scope" });
         return;
       }
-      const analytics = await defaultNeo4jSyncService.getGraphAnalytics();
+      if (!defaultWorldModelHost.graphServing) {
+        sendGraphNotServing();
+        return;
+      }
+      const analytics = defaultWorldModelHost.graphStore.analytics();
       sendJson(res, 200, {
         ok: true,
         analytics,
       });
     } catch (err) {
-      sendInternalError(res, "failed to compute neo4j analytics", err);
+      sendInternalError(res, "failed to compute world model graph analytics", err);
     }
     return;
   }
 
-  if (method === "POST" && url.pathname === "/v3/world-model/neo4j/query") {
+  if (
+    method === "POST" &&
+    (url.pathname === "/v3/world-model/graph/query" || url.pathname === "/v3/world-model/neo4j/query")
+  ) {
     try {
       const db = getDatabase();
       if (!deviceHasScope(db, auth.deviceId, "admin", "admin:read")) {
-        sendJson(res, 403, { error: "forbidden: neo4j querying requires admin:read scope" });
+        sendJson(res, 403, { error: "forbidden: graph querying requires admin:read scope" });
+        return;
+      }
+      if (!defaultWorldModelHost.graphServing) {
+        sendGraphNotServing();
         return;
       }
       const raw = await readBody(req, 64 * 1024);
@@ -1329,27 +1366,32 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "invalid JSON body" });
         return;
       }
-      const qObj = decoded as { query?: string; mode?: "nl" | "cypher" };
-      if (!qObj || typeof qObj.query !== "string" || !qObj.query.trim()) {
+      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
         sendJson(res, 400, { error: "missing or empty query string" });
         return;
       }
-      const mode = qObj.mode ?? "nl";
-      if (mode !== "nl" && mode !== "cypher") {
-        sendJson(res, 400, { error: "invalid query mode: must be 'nl' or 'cypher'" });
+      const qObj = decoded as { query?: unknown; mode?: unknown };
+      if (typeof qObj.query !== "string" || !qObj.query.trim()) {
+        sendJson(res, 400, { error: "missing or empty query string" });
         return;
       }
-      const result = await defaultNeo4jSyncService.queryLivingGraph(qObj.query, mode);
+      if (qObj.mode === "cypher") {
+        sendJson(res, 400, {
+          error: "Cypher mode is retired; use mode 'nl' (natural language) against the world-model graph store.",
+        });
+        return;
+      }
+      if (qObj.mode !== undefined && qObj.mode !== "nl") {
+        sendJson(res, 400, { error: "invalid query mode: only 'nl' (natural language) is supported" });
+        return;
+      }
+      const result = defaultWorldModelHost.graphStore.queryNaturalLanguage(qObj.query);
       sendJson(res, 200, {
         ok: true,
         result,
       });
     } catch (err) {
-      if (err instanceof GraphQueryRejectedError) {
-        sendJson(res, 400, { error: err.message });
-        return;
-      }
-      sendInternalError(res, "failed to execute neo4j query", err);
+      sendInternalError(res, "failed to execute world model graph query", err);
     }
     return;
   }
