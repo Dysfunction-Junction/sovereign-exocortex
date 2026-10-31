@@ -124,6 +124,38 @@ public class TypedTextSummaryQueueTest {
     }
 
     @Test
+    public void shutdownClosesEngineWithoutWaitingForInferenceLock() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1), cancelled = new CountDownLatch(1);
+        class BlockingSummarizer implements Summarizer, AutoCloseable {
+            volatile boolean closed;
+            public boolean isReady() { return !closed; }
+            public void release() { fail("Kill switch must use terminal close"); }
+            public void close() { closed = true; cancelled.countDown(); }
+            public String summarize(String prompt, long timeout) throws SummarizerException {
+                entered.countDown();
+                try {
+                    if (!cancelled.await(2, TimeUnit.SECONDS)) throw new SummarizerException(SummarizerException.Reason.TIMEOUT);
+                } catch (InterruptedException e) { throw new SummarizerException(SummarizerException.Reason.BLOCKED); }
+                return "{}";
+            }
+        }
+        BlockingSummarizer blocking = new BlockingSummarizer();
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        ExecutorService shutdown = Executors.newSingleThreadExecutor();
+        try {
+            TypedTextSummaryQueue activeQueue = new TypedTextSummaryQueue(blocking, hardware, null, worker::execute);
+            activeQueue.enqueue("notes", "Planning a trip".toCharArray(), System.currentTimeMillis());
+            assertTrue(entered.await(1, TimeUnit.SECONDS));
+            TypedTextGate.on = false;
+            shutdown.submit(activeQueue::releaseSummarizer).get(1, TimeUnit.SECONDS);
+            assertTrue(blocking.closed);
+            worker.shutdown();
+            assertTrue(worker.awaitTermination(1, TimeUnit.SECONDS));
+            assertEquals(0, TypedTextCounters.get("stored"));
+        } finally { worker.shutdownNow(); shutdown.shutdownNow(); }
+    }
+
+    @Test
     public void turnOffPreventsCommitEvenIfInferenceWasRunning() throws Exception {
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch proceed = new CountDownLatch(1);

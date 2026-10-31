@@ -127,7 +127,8 @@ final class TypedTextSummaryQueue {
         synchronized (summarizerLock) {
             if (summarizer != null) {
                 try {
-                    summarizer.release();
+                    if (summarizer instanceof AutoCloseable) ((AutoCloseable) summarizer).close();
+                    else summarizer.release();
                 } catch (Exception ignored) {}
                 summarizer = null;
             }
@@ -195,23 +196,25 @@ final class TypedTextSummaryQueue {
                 }
             }
 
-            // 4. Summarizer availability & serialized inference execution
+            // 4. Snapshot the summarizer; shutdown must remain able to cancel inference.
             String prompt = SummaryPrompt.build(item.appCategory, item.textChars);
             String modelOutput;
+            Summarizer current;
             synchronized (summarizerLock) {
                 if (summarizer == null || !summarizer.isReady() || !TypedTextGate.isOn() || item.generation != TypedTextGate.getGeneration()) {
                     TypedTextCounters.bumpDropped("summarizer_unavailable");
                     return;
                 }
-                try {
-                    modelOutput = summarizer.summarize(prompt, TIMEOUT_MS);
-                } catch (SummarizerException se) {
-                    TypedTextCounters.bumpDropped(se.reason != null ? se.reason.name() : "FAILED");
-                    return;
-                } catch (Throwable t) {
-                    TypedTextCounters.bumpDropped("FAILED");
-                    return;
-                }
+                current = summarizer;
+            }
+            try {
+                modelOutput = current.summarize(prompt, TIMEOUT_MS);
+            } catch (SummarizerException se) {
+                TypedTextCounters.bumpDropped(se.reason != null ? se.reason.name() : "FAILED");
+                return;
+            } catch (Throwable t) {
+                TypedTextCounters.bumpDropped("FAILED");
+                return;
             }
 
             // Check generation again after inference before running guard

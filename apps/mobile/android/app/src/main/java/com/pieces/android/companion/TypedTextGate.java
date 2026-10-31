@@ -66,7 +66,7 @@ final class TypedTextGate {
             SummaryStore.zeroFillActiveKek();
             TypedTextPlugin.lockAuditSession();
 
-            // (7) Release summarizer / engine if present
+            // (7) Terminally close the summarizer / engine if present
             if (TypedTextSummaryQueue.getInstance() != null) {
                 TypedTextSummaryQueue.getInstance().releaseSummarizer();
             }

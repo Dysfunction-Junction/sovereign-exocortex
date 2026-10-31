@@ -1,0 +1,333 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "system_id": "sovereign_exocortex",
+  "version": "3.0.0",
+  "spec_revision": "2026-10-31T11:10:00Z",
+  "monorepo": {
+    "path": "C:\\Users\\micha\\projects\\sovereign-exocortex",
+    "package_manager": "pnpm@9+",
+    "workspaces": {
+      "apps": [
+        {
+          "name": "@exocortex/daemon",
+          "path": "apps/daemon",
+          "runtime": "node@22+",
+          "port": 8788,
+          "entry": "src/server.ts",
+          "role": "Central cognitive daemon, event ingestion, active inference, shadow metrics, mesh supervisor"
+        },
+        {
+          "name": "@exocortex/cli",
+          "path": "apps/cli",
+          "runtime": "node",
+          "entry": "src/index.ts",
+          "role": "Administrative and forensic CLI"
+        },
+        {
+          "name": "@exocortex/mobile",
+          "path": "apps/mobile",
+          "framework": "Capacitor 6 / Android SDK 34+",
+          "target": "Samsung Galaxy S24 Ultra (SM-S948U1)",
+          "role": "Sensor telemetry capture, accessibility watcher, on-device LLM summarizer"
+        },
+        {
+          "name": "@exocortex/desktop",
+          "path": "apps/desktop",
+          "framework": "Electron / Vite",
+          "role": "Local monitoring cockpit"
+        },
+        {
+          "name": "@exocortex/neo4j-import",
+          "path": "apps/neo4j-import",
+          "role": "Historical PiecesOS export loader to Neo4j"
+        }
+      ],
+      "packages": [
+        {
+          "name": "@exocortex/core",
+          "path": "packages/core",
+          "role": "Immutable SQLite WAL event store, SHA-256 hash chaining, Dirichlet active inference, shadow metrics"
+        },
+        {
+          "name": "@exocortex/world-model",
+          "path": "packages/world-model",
+          "role": "LivingLifeGraph in-memory causal graph, activation spreading, exponential half-life decay"
+        },
+        {
+          "name": "@exocortex/databank",
+          "path": "packages/databank",
+          "role": "FTS5 text index, Int8 quantized nomic-embed-text vector index (768-dim), encrypted blobstore"
+        },
+        {
+          "name": "@exocortex/memory",
+          "path": "packages/memory",
+          "role": "LocalLTM BM25 + cosine hybrid associative memory, fail-soft graph client, Pieces LTM bridge"
+        },
+        {
+          "name": "@exocortex/mesh",
+          "path": "packages/mesh",
+          "role": "Agent Mesh MCP connector, 9-node supervisor client"
+        },
+        {
+          "name": "@exocortex/triad",
+          "path": "packages/triad",
+          "role": "Zero-cost advisor routing client to Claude Pro / OpenAI Codex bridge"
+        },
+        {
+          "name": "@exocortex/allowlist",
+          "path": "packages/allowlist",
+          "role": "Accessibility package filter and security guards"
+        }
+      ]
+    }
+  },
+  "invariants": {
+    "cost": {
+      "incremental_cloud_tokens": 0.0,
+      "allowed_providers": ["local_on_device", "subscription_cli_triad_pro", "free_tier_byo"]
+    },
+    "privacy": {
+      "mechanically_enforced_zero_raw_text_egress": true,
+      "canary_verification": "Automated synthetic canary string must have 0 occurrences in logs, bugreports, SQLite WAL, daemon payloads, or Neo4j",
+      "speech_capture": "User-initiated foreground service with visible system indicator only; zero raw audio bytes written to disk; RAM ring buffer only"
+    },
+    "security": {
+      "shadow_mode_default": "SHADOW=1",
+      "proposals_require_actuation_lock": true,
+      "sqlite_triggers": "Strictly abort UPDATE and DELETE operations on append-only tables"
+    }
+  },
+  "current_abilities": {
+    "epistemic_ledger": {
+      "engine": "node:sqlite DatabaseSync (WAL mode)",
+      "integrity": "Cryptographic SHA-256 hash chaining: hash = sha256(prev_hash + seq + ts + stream + kind + payload)",
+      "concurrency": "busy_timeout = 5000, PRAGMA synchronous = NORMAL",
+      "immutability": "BEFORE UPDATE and BEFORE DELETE triggers RAISE(ABORT)"
+    },
+    "active_inference_predictive_engine": {
+      "framework": "Discrete Learned Generative Model (Karl Friston Active Inference)",
+      "matrices": {
+        "A": "Observation likelihood P(o|s) Dirichlet count table",
+        "B": "Transition model P(s'|s,a) Dirichlet count table",
+        "C": "Prior preference distribution P(o) (negative surprisal for preferred states)",
+        "D": "Initial state distribution P(s)"
+      },
+      "objective": "Minimization of Expected Free Energy G(pi) = Epistemic Value (information gain) + Pragmatic Value (preference realization)",
+      "learning": "Single-step conjugate Dirichlet updates (alpha <- alpha + 1) with bounded exponential decay forgetting",
+      "calibration": "Pre-registered baseline comparison against 14-day trailing daypart usage"
+    },
+    "hot_cognitive_salience": {
+      "engine": "LivingLifeGraph (packages/world-model)",
+      "representation": "In-memory multi-relational causal graph",
+      "dynamics": "Continuous exponential energy decay: w = w0 * exp(-lambda * delta_t); spreading activation across weighted edges",
+      "latency": "< 0.5 ms in-process"
+    },
+    "associative_retrieval": {
+      "engine": "packages/databank + packages/memory",
+      "fts": "SQLite FTS5 Porter stemmer + unicode61 tokenizer",
+      "vectors": "Int8 quantized nomic-embed-text (768 dimensions + 4-byte scale factor = 772 bytes/chunk)",
+      "index": "In-memory contiguous Int8 buffer with brute-force SIMD cosine search",
+      "hybrid_scoring": "score = (0.3 * bm25_overlap) + (0.7 * cosine_similarity)"
+    },
+    "mesh_supervision": {
+      "nodes": {
+        "hermes_api": { "port": 3000, "stack": "tsx" },
+        "daemon": { "port": 8788, "stack": "tsx node:sqlite" },
+        "autonomous_triad": { "port": 8789, "stack": "python 3.14 fastapi" },
+        "pieces_for_all": { "port": 39400, "stack": "tsx" },
+        "agent_mesh_mcp": { "port": 39401, "stack": "tsx node 24" },
+        "pattern_analyzer": { "port": 39402, "stack": "tsx" },
+        "registry_app": { "port": 39403, "stack": "tsx" },
+        "gut_instinct": { "port": 39404, "stack": "node" },
+        "tool_registry_heartbeat": { "port": 39405, "stack": "node powershell" }
+      }
+    },
+    "shadow_evaluation": {
+      "precision_at_surface": "Ratio of accepted proposals with Wilson 95% confidence interval lower bound >= 0.90",
+      "focus_regret": "Penalty for interrupting high-focus states",
+      "circuit_breaker": "Automatic HTTP 423 lock on actuation if rolling 14-day precision < 0.90"
+    }
+  },
+  "current_state_today": {
+    "date": "2026-10-31",
+    "active_git_branches": {
+      "sovereign_exocortex": "feat/forecast-cards (commits: 30df516, 273a046, fb58bd4, 8f23fb1, a002aa7, 0f3768d)",
+      "active_spikes": "spike/gemma-litertlm",
+      "companion_installed_build": "7d7fcf0 on SM-S948U1"
+    },
+    "persistent_graph_state": {
+      "engine": "Neo4j 5.x Community (JVM 21, bolt:7687, http:7474)",
+      "counts": {
+        "topics": 8168,
+        "non_topic_entities": 581,
+        "has_topic_edges": 4191,
+        "entity_tagging_coverage": "100.0%"
+      },
+      "memory_cap": "heap=1024m, pagecache=1024m (~2 GB total RSS)"
+    },
+    "active_telemetry": {
+      "source": "Samsung Galaxy S24 Ultra -> pieces-android proxy :8787 -> exocortexd :8788",
+      "batching": "100-event batch envelopes via POST /v3/events"
+    }
+  },
+  "future_roadmap": {
+    "milestone_1_hardware_spike": {
+      "id": "A5-2_M1",
+      "branch": "spike/gemma-litertlm",
+      "target": "Samsung Galaxy S24 Ultra",
+      "gates": {
+        "G1_Integrity": "Tamper rejection & valid file acceptance (4/4 rejected, 1/1 accepted)",
+        "G2_Init": "Cold init latency p95 <= 10s",
+        "G3_Memory": "Peak process PSS <= 1.8 GB",
+        "G3b_Leak": "Retained PSS after release <= baseline + 100 MB",
+        "G4_Latency": "256-tok in / 64-tok out p95 <= 20s",
+        "G5_Stability": "0 crashes, 0 ANRs, 0 LMKD kills over 200 runs",
+        "G6_Thermal": "Tok/s degradation <= 40%, thermal never >= SEVERE",
+        "G7_Privacy": "0 canary leaks across logcat/disk/egress",
+        "G8_Utility": "Harmless prompt schema pass rate >= 90%"
+      }
+    },
+    "milestone_2_production_gemma": {
+      "id": "A5-3_M2",
+      "branch": "feat/a5-gemma-summarizer",
+      "components": [
+        "ModelProvisioner (sideload staging, SHA-256 verify, atomic chmod)",
+        "LiteRtEngine (single-flight mutex, 60s idle unload, 30s deadline)",
+        "BundledSummarizer (data-delimiter framing, SummaryGuard schema validator)",
+        "TypedTextSummaryQueue (bounded capacity 4, immediate raw text zeroing)"
+      ]
+    },
+    "milestone_3_speech_summaries": {
+      "id": "SP-2_M3",
+      "branch": "feat/speech-session-summaries",
+      "spec": "Foreground mic service, streaming recognizer (evaluating sherpa-onnx vs whisper.cpp), RAM ring buffer only, encrypted speech_session table with biometric KEK"
+    },
+    "graph_store_transition": {
+      "id": "GS-1",
+      "goal": "Decommission external Neo4j JVM; deploy embedded in-process packages/graph-store",
+      "primary_candidate": "LadybugDB / Kuzu C++ core via Node-API native bindings",
+      "fallback_candidate": "SQLite edge tables inside primary exocortex.db (same-transaction projection)",
+      "concurrency_policy": "exocortexd daemon is sole RW owner; CLI and tools query via HTTP :8788",
+      "resource_bounds": "bufferManagerSize = 768 MB, maxNumThreads = 2-4"
+    },
+    "counterfactual_error_mining": {
+      "id": "CEM-1",
+      "pipeline": "Ledger -> Outbox Tailer -> Read-Only Graph Query -> Error Cluster Detection -> Proposal Event -> Active Inference Learner",
+      "target_query": "MATCH (p:Prediction)-[:IN_CONTEXT]->(c:Context) WHERE p.conf_cal >= tau AND p.resid_z >= z AND p.delta_vs_baseline > 0 RETURN c, count(*), avg(p.surprisal)"
+    }
+  },
+  "schemas": {
+    "sqlite_v3_core": {
+      "dialect": "SQLite 3 Strict Mode (WAL)",
+      "tables": [
+        {
+          "name": "devices",
+          "ddl": "CREATE TABLE devices (device_id TEXT PRIMARY KEY, name TEXT NOT NULL, platform TEXT NOT NULL CHECK (platform IN ('android','windows','linux')), pubkey_spki BLOB NOT NULL, key_attested INTEGER NOT NULL DEFAULT 0, scopes TEXT NOT NULL CHECK (json_valid(scopes)), enrolled_at INTEGER NOT NULL, revoked_at INTEGER) STRICT;"
+        },
+        {
+          "name": "events",
+          "ddl": "CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, device_id TEXT NOT NULL REFERENCES devices(device_id), kind TEXT NOT NULL, ts_device INTEGER NOT NULL, ts_server INTEGER NOT NULL, schema_ver INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL CHECK (json_valid(payload)), prev_hash BLOB NOT NULL, hash BLOB NOT NULL) STRICT;",
+          "indexes": [
+            "CREATE INDEX events_kind_ts ON events(kind, ts_server);",
+            "CREATE UNIQUE INDEX events_prev_hash ON events(prev_hash);",
+            "CREATE INDEX events_device_seq ON events(device_id, seq);"
+          ],
+          "triggers": [
+            "CREATE TRIGGER events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events table is append-only'); END;",
+            "CREATE TRIGGER events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events table is append-only'); END;"
+          ]
+        },
+        {
+          "name": "invariants",
+          "ddl": "CREATE TABLE invariants (invariant_id TEXT PRIMARY KEY, name TEXT NOT NULL, expression TEXT NOT NULL, level TEXT NOT NULL CHECK (level IN ('soft','hard')), enqueued_at INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1) STRICT;"
+        },
+        {
+          "name": "model_params",
+          "ddl": "CREATE TABLE model_params (param_id TEXT PRIMARY KEY, matrix TEXT NOT NULL CHECK (matrix IN ('A','B','C','D')), row_idx INTEGER NOT NULL, col_idx INTEGER NOT NULL, alpha REAL NOT NULL CHECK (alpha > 0), updated_at INTEGER NOT NULL, UNIQUE (matrix, row_idx, col_idx)) STRICT;"
+        },
+        {
+          "name": "belief_snapshots",
+          "ddl": "CREATE TABLE belief_snapshots (snap_id TEXT PRIMARY KEY, ts INTEGER NOT NULL, posterior_s BLOB NOT NULL, free_energy REAL NOT NULL, surprisal REAL NOT NULL) STRICT;"
+        },
+        {
+          "name": "proposals",
+          "ddl": "CREATE TABLE proposals (proposal_id TEXT PRIMARY KEY, seq INTEGER NOT NULL REFERENCES events(seq), kind TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('pending','approved','rejected','executed','rolled_back')), efe_score REAL NOT NULL, pragmatic_val REAL NOT NULL, epistemic_val REAL NOT NULL, payload TEXT NOT NULL CHECK (json_valid(payload)), created_at INTEGER NOT NULL, decided_at INTEGER) STRICT;"
+        },
+        {
+          "name": "gate_decisions",
+          "ddl": "CREATE TABLE gate_decisions (decision_id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id), allowed INTEGER NOT NULL, shadow_mode INTEGER NOT NULL, reason TEXT NOT NULL, evaluated_at INTEGER NOT NULL) STRICT;"
+        },
+        {
+          "name": "shadow_labels",
+          "ddl": "CREATE TABLE shadow_labels (label_id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id), user_action TEXT NOT NULL CHECK (user_action IN ('executed_manually','ignored','contradicted')), latency_ms INTEGER NOT NULL, recorded_at INTEGER NOT NULL) STRICT;"
+        },
+        {
+          "name": "mutations",
+          "ddl": "CREATE TABLE mutations (mutation_id TEXT PRIMARY KEY, branch TEXT NOT NULL, commit_hash TEXT NOT NULL, diff_stat TEXT NOT NULL, test_status TEXT NOT NULL CHECK (test_status IN ('passed','failed','aborted')), applied_at INTEGER NOT NULL, rolled_back_at INTEGER) STRICT;"
+        }
+      ]
+    },
+    "sqlite_databank": {
+      "dialect": "SQLite 3 Strict Mode",
+      "tables": [
+        {
+          "name": "items",
+          "ddl": "CREATE TABLE items (item_id TEXT PRIMARY KEY, source TEXT NOT NULL, kind TEXT NOT NULL CHECK (kind IN ('memory','document','photo','video','audio','text','other')), title TEXT NOT NULL, path TEXT NOT NULL DEFAULT '', mime TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, ts INTEGER NOT NULL, blob_id TEXT, meta TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta)), tier TEXT NOT NULL DEFAULT 'archived' CHECK (tier IN ('hot','archived')), ingested_at INTEGER NOT NULL) STRICT;"
+        },
+        {
+          "name": "chunks",
+          "ddl": "CREATE TABLE chunks (chunk_id INTEGER PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(item_id) ON DELETE CASCADE, ord INTEGER NOT NULL, text TEXT NOT NULL, UNIQUE (item_id, ord)) STRICT;"
+        },
+        {
+          "name": "chunks_fts",
+          "ddl": "CREATE VIRTUAL TABLE chunks_fts USING fts5(text, content='chunks', content_rowid='chunk_id', tokenize='porter unicode61');"
+        },
+        {
+          "name": "vectors",
+          "ddl": "CREATE TABLE vectors (chunk_id INTEGER PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE, model TEXT NOT NULL, dim INTEGER NOT NULL CHECK (dim > 0), scale REAL NOT NULL, q8 BLOB NOT NULL) STRICT;"
+        },
+        {
+          "name": "ingest_log",
+          "ddl": "CREATE TABLE ingest_log (seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, action TEXT NOT NULL, item_id TEXT NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL) STRICT;"
+        }
+      ]
+    },
+    "living_life_graph": {
+      "entity_types": ["PERSON", "PROJECT", "DEVICE", "LOCATION", "GOAL", "ROUTINE", "CONTEXT_STATE", "TOPIC", "DOC", "TASK", "INTENT", "FILE", "CODE_MODULE"],
+      "relation_types": ["WORKS_ON", "DEPENDS_ON", "LOCATED_AT", "TRIGGERS", "BLOCKS", "CARES_ABOUT", "INTERACTS_WITH", "TRANSITIONS_TO", "HAS_TOPIC", "REFERENCES", "MENTIONS", "CONTAINS"],
+      "entity_schema": {
+        "id": "string (canonical prefix, e.g. topic_<slug>, person_<name>)",
+        "type": "EntityType",
+        "name": "string",
+        "activation": "float64 (0.0 to 1.0, cognitive salience)",
+        "lastActive": "int64 (epoch ms)",
+        "properties": "Record<string, unknown>"
+      },
+      "edge_schema": {
+        "id": "string",
+        "sourceId": "string",
+        "targetId": "string",
+        "relation": "RelationType",
+        "weight": "float64 (0.0 to 1.0)",
+        "observedCount": "int32",
+        "lastObserved": "int64 (epoch ms)",
+        "halfLifeDays": "float64 (default 30.0)"
+      }
+    },
+    "android_encrypted_summaries": {
+      "db_name": "typed_summaries.db",
+      "encryption": "AES-256-GCM data encryption key wrapped with RSA-2048/OAEP biometric/auth key in Android Keystore",
+      "tables": [
+        {
+          "name": "typed_summary",
+          "columns": ["id TEXT PRIMARY KEY", "created_at INTEGER", "ct BLOB (ciphertext)", "app_id TEXT", "topic_ids TEXT (json)", "ttl INTEGER"]
+        },
+        {
+          "name": "speech_session",
+          "columns": ["id TEXT PRIMARY KEY", "start_time INTEGER", "end_time INTEGER", "duration INTEGER", "ct BLOB (ciphertext)", "app_category TEXT", "topic_ids TEXT (json)"],
+          "invariant": "Zero raw audio or transcript columns allowed"
+        }
+      ]
+    }
+  }
+}

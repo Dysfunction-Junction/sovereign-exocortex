@@ -16,7 +16,8 @@ interface Summarizer {
 }
 
 final class SummarizerException extends Exception {
-    enum Reason { UNAVAILABLE, BUSY, TIMEOUT, BLOCKED, OOM, THERMAL, FAILED }
+    enum Reason { UNAVAILABLE, BUSY, TIMEOUT, BLOCKED, OOM, THERMAL, FAILED,
+        WARMING, CLOSED, WEDGED, POWER, PROMPT_TOO_LONG }
     final Reason reason;
 
     SummarizerException(Reason reason) {
