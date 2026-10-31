@@ -7,6 +7,7 @@
  * neighbor inspection, and predictive action recommendations.
  */
 
+import type { VocabularyIndex } from './graph-store.js';
 import type {
   GraphEdge,
   GraphEntity,
@@ -80,6 +81,7 @@ export interface EventGraphContext {
 
 export interface GraphLinkerOptions {
   autoCreate?: boolean;
+  vocabIndex?: VocabularyIndex;
   createMissingTopics?: boolean;
   stimulationAmount?: number;
   initialEnergy?: number;
@@ -262,6 +264,11 @@ export function linkEventToGraph(
         tEntity = ent;
         break;
       }
+    }
+
+    if (!tEntity && autoCreate && options.vocabIndex) {
+      tEntity = options.vocabIndex.materializeTopic(graph, tag, timestamp)
+        ?? options.vocabIndex.materializeTopic(graph, `topic_${s}`, timestamp);
     }
 
     if (!tEntity && autoCreate && createMissingTopics) {

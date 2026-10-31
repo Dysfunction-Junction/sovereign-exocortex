@@ -247,10 +247,15 @@ export class LivingLifeGraph {
     const activationLevels = new Map<string, number>();
     const queue: Array<{ id: string; energy: number; depth: number }> = [];
 
+    const isGenericTopic = (ent: GraphEntity | undefined): boolean =>
+      ent?.type === 'TOPIC' && ent.properties?.generic === true;
+
     for (const id of sourceIds) {
-      if (this.entities.has(id)) {
-        activationLevels.set(id, safeEnergy);
-        queue.push({ id, energy: safeEnergy, depth: 0 });
+      const resolved = this.resolveEntityId(id);
+      const ent = this.entities.get(resolved);
+      if (ent && !isGenericTopic(ent)) {
+        activationLevels.set(resolved, safeEnergy);
+        queue.push({ id: resolved, energy: safeEnergy, depth: 0 });
       }
     }
 
@@ -267,8 +272,9 @@ export class LivingLifeGraph {
         const edge = this.edges.get(edgeId);
         if (!edge) continue;
 
-        const transferredEnergy = current.energy * edge.weight * safeRetention;
         const targetId = edge.targetId;
+        if (isGenericTopic(this.entities.get(targetId))) continue;
+        const transferredEnergy = current.energy * edge.weight * safeRetention;
         const prevLevel = activationLevels.get(targetId) ?? 0;
         const newLevel = Math.min(1.0, prevLevel + transferredEnergy);
 

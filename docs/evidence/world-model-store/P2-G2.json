@@ -1,0 +1,53 @@
+{
+  "gate": "P2-G2",
+  "git_sha": "738314c8b4c0cc90960d92aa40398fb07a33275b",
+  "command": "pnpm --filter @exocortex/daemon exec node --import tsx src/world-model-p2-bench-cli.ts",
+  "ran_at": "2026-10-31T22:50:23.501Z",
+  "host_state": {
+    "commit_used_gb": 32.66,
+    "llama_server_running": true,
+    "llama_server_count": 3
+  },
+  "measured": {
+    "events_10x": 175394,
+    "entities_10x": 2293,
+    "edges_10x": 10468,
+    "operations": {
+      "status": {
+        "p50_ms": 0.011,
+        "p95_ms": 0.028,
+        "max_ms": 0.037
+      },
+      "analytics": {
+        "p50_ms": 6.98,
+        "p95_ms": 13.334,
+        "max_ms": 13.709
+      },
+      "search": {
+        "p50_ms": 5.486,
+        "p95_ms": 10.153,
+        "max_ms": 11.627
+      },
+      "byType": {
+        "p50_ms": 5.228,
+        "p95_ms": 9.695,
+        "max_ms": 13.79
+      },
+      "stale": {
+        "p50_ms": 5.186,
+        "p95_ms": 10.256,
+        "max_ms": 11.007
+      },
+      "neighbors": {
+        "p50_ms": 6.33,
+        "p95_ms": 12.464,
+        "max_ms": 15.071
+      }
+    }
+  },
+  "threshold": {
+    "p95_ms_max": 50
+  },
+  "pass": true,
+  "notes": "50 iterations of each §5.1 GraphStore port operation measured at 10x ledger volume."
+}
