@@ -3,7 +3,11 @@
  * SQLite schema for the databank index. See docs/DATABANK_ARCHITECTURE.md.
  */
 
-export const SCHEMA_VERSION = 1;
+import { ITEM_KINDS } from "./text.js";
+
+export const SCHEMA_VERSION = 2;
+
+export const KINDS_SQL = ITEM_KINDS.map((k) => `'${k}'`).join(",");
 
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -14,7 +18,7 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS items (
   item_id     TEXT PRIMARY KEY,
   source      TEXT NOT NULL,
-  kind        TEXT NOT NULL CHECK (kind IN ('memory','document','photo','video','audio','text','other')),
+  kind        TEXT NOT NULL CHECK (kind IN (${KINDS_SQL})),
   title       TEXT NOT NULL,
   path        TEXT NOT NULL DEFAULT '',
   mime        TEXT NOT NULL DEFAULT '',

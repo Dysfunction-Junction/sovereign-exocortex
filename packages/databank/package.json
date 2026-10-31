@@ -6,11 +6,12 @@
   "main": "databank.ts",
   "exports": {
     ".": "./databank.ts",
-    "./server": "./server.ts"
+    "./server": "./server.ts",
+    "./parsers": "./parsers/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/crypto.test.ts test/blobstore.test.ts test/databank.test.ts test/server.test.ts",
+    "test": "tsx --test test/crypto.test.ts test/blobstore.test.ts test/databank.test.ts test/server.test.ts test/parsers.test.ts",
     "cli": "tsx cli.ts",
     "bundle": "esbuild cli.ts --bundle --platform=node --format=esm --target=node24 --banner:js=\"import{createRequire as __cr}from\\\"node:module\\\";const require=__cr(import.meta.url);\" --outfile=dist/databank.mjs"
   },

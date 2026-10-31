@@ -11,7 +11,24 @@ import { promisify } from "node:util";
 
 const execFileP = promisify(execFile);
 
-export type ItemKind = "memory" | "document" | "photo" | "video" | "audio" | "text" | "other";
+export const ITEM_KINDS = [
+  "memory",
+  "document",
+  "photo",
+  "video",
+  "audio",
+  "text",
+  "other",
+  "event",
+  "conversation",
+  "note",
+] as const;
+
+export type ItemKind = (typeof ITEM_KINDS)[number];
+
+export function isItemKind(kind: unknown): kind is ItemKind {
+  return typeof kind === "string" && (ITEM_KINDS as readonly string[]).includes(kind);
+}
 
 const EXT_KIND: Record<string, ItemKind> = {
   jpg: "photo", jpeg: "photo", png: "photo", gif: "photo", heic: "photo", webp: "photo", bmp: "photo", tif: "photo", tiff: "photo",

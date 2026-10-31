@@ -12,8 +12,8 @@ import { Readable } from "node:stream";
 import { DatabaseSync } from "node:sqlite";
 import { BlobStore } from "./blobstore.js";
 import { DatabankKeys } from "./crypto.js";
-import { SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
-import { chunkText, describeFile, extractText, kindOf, mimeOf, type ItemKind } from "./text.js";
+import { KINDS_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
+import { chunkText, describeFile, extractText, isItemKind, kindOf, mimeOf, type ItemKind } from "./text.js";
 import { VectorIndex, normalize, quantize, type VectorRow } from "./vectors.js";
 
 export type { ItemKind } from "./text.js";
@@ -114,6 +114,7 @@ export class Databank {
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
     this.db.exec(SCHEMA_SQL);
     this.db.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
+    this.migrate();
     this.blobs = new BlobStore(opts.root, opts.keys);
   }
 
@@ -129,6 +130,38 @@ export class Databank {
   static provision(root: string, vaultId: string): void {
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, VAULT_MARKER), vaultId + "\n", { flag: "wx", mode: 0o600 });
+  }
+
+  private migrate(): void {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string } | undefined;
+    const currentVersion = row ? Number(row.value) : 1;
+    if (currentVersion < 2) {
+      this.db.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE IF NOT EXISTS items_v2 (
+          item_id     TEXT PRIMARY KEY,
+          source      TEXT NOT NULL,
+          kind        TEXT NOT NULL CHECK (kind IN (${KINDS_SQL})),
+          title       TEXT NOT NULL,
+          path        TEXT NOT NULL DEFAULT '',
+          mime        TEXT NOT NULL DEFAULT '',
+          size        INTEGER NOT NULL DEFAULT 0,
+          ts          INTEGER NOT NULL,
+          blob_id     TEXT,
+          meta        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta)),
+          tier        TEXT NOT NULL DEFAULT 'archived' CHECK (tier IN ('hot','archived')),
+          ingested_at INTEGER NOT NULL
+        ) STRICT;
+        INSERT OR IGNORE INTO items_v2 SELECT * FROM items;
+        DROP TABLE items;
+        ALTER TABLE items_v2 RENAME TO items;
+        CREATE INDEX IF NOT EXISTS items_kind_ts ON items(kind, ts);
+        CREATE INDEX IF NOT EXISTS items_source ON items(source);
+        CREATE INDEX IF NOT EXISTS items_blob ON items(blob_id);
+        INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+        PRAGMA foreign_keys = ON;
+      `);
+    }
   }
 
   close(): void {
@@ -228,6 +261,9 @@ export class Databank {
     meta: Record<string, unknown>;
     text: string;
   }): Promise<IngestResult> {
+    if (!isItemKind(it.kind)) {
+      throw new Error(`invalid item kind: ${it.kind}`);
+    }
     const itemId = createHash("sha256")
       .update(`${it.source}\n${it.path || it.title}\n${it.blobId ?? createHash("sha256").update(it.text).digest("hex")}`)
       .digest("hex")

@@ -17,7 +17,9 @@ import { isBlobId } from "./blobstore.js";
 import type { Databank, ItemKind } from "./databank.js";
 import { UI_HTML } from "./ui.js";
 
-const KINDS = new Set(["memory", "document", "photo", "video", "audio", "text", "other"]);
+import { ITEM_KINDS } from "./text.js";
+
+const KINDS = new Set<string>(ITEM_KINDS);
 const MAX_BODY = 4 * 1024 * 1024;
 
 export interface ServerOptions {
