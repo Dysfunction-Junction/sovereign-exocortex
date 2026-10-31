@@ -14,6 +14,10 @@ import {
   getPrecognitiveStatus,
   sendPrecognitiveTelemetry,
   calibratePrecognitive,
+  getNeo4jStatus,
+  getNeo4jAnalytics,
+  queryNeo4jLivingGraph,
+  triggerNeo4jSync,
 } from "./api";
 
 const fetchMock = vi.fn();
@@ -176,6 +180,53 @@ describe("api contracts", () => {
       expect(init.method).toBe("POST");
       expect(JSON.parse(init.body)).toEqual({ min_samples: 5 });
       expect(res).toEqual(mockResult);
+    });
+  });
+
+  describe("world-model graph routes (Living Brain cutover)", () => {
+    const status = { ok: true, enabled: true, connected: true, lastSyncAt: null, nodeCount: 7, edgeCount: 9, lastError: null };
+
+    it("getNeo4jStatus reads /v3/world-model/graph/status first", async () => {
+      fetchMock.mockResolvedValue(json(status));
+      const res = await getNeo4jStatus();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/world-model/graph/status");
+      expect(res.nodeCount).toBe(7);
+    });
+
+    it("falls back to the /v3/world-model/neo4j alias only when the graph route answers 404", async () => {
+      fetchMock.mockResolvedValueOnce(json({ error: "not found" }, 404)).mockResolvedValueOnce(json(status));
+      const res = await getNeo4jStatus();
+      expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+        "http://pc:1/v3/world-model/graph/status",
+        "http://pc:1/v3/world-model/neo4j/status",
+      ]);
+      expect(res.connected).toBe(true);
+    });
+
+    it("does not fall back on other errors and reports them as Graph errors", async () => {
+      fetchMock.mockResolvedValue(json({ error: "forbidden" }, 403));
+      await expect(getNeo4jAnalytics()).rejects.toThrow(/Graph analytics: HTTP 403/);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/world-model/graph/analytics");
+    });
+
+    it("queryNeo4jLivingGraph always sends a natural-language query", async () => {
+      const result = { mode: "nl", columns: ["id"], rows: [{ id: "topic_hermes" }], matchedEntityIds: ["topic_hermes"] };
+      fetchMock.mockResolvedValue(json({ ok: true, result }));
+      const res = await queryNeo4jLivingGraph("hermes");
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe("http://pc:1/v3/world-model/graph/query");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body)).toEqual({ query: "hermes", mode: "nl" });
+      expect(res.result.matchedEntityIds).toEqual(["topic_hermes"]);
+    });
+
+    it("triggerNeo4jSync POSTs to the graph sync route and surfaces errors with the Graph label", async () => {
+      fetchMock.mockResolvedValue(json({ error: "boom" }, 500));
+      await expect(triggerNeo4jSync()).rejects.toThrow(/Graph sync: HTTP 500/);
+      expect(fetchMock.mock.calls[0][0]).toBe("http://pc:1/v3/world-model/graph/sync");
+      expect(fetchMock.mock.calls[0][1].method).toBe("POST");
     });
   });
 });

@@ -855,21 +855,32 @@ export interface Neo4jSyncStatusResponse {
   lastError: string | null;
 }
 
+/**
+ * World-model graph routes (PLAN_WORLD_MODEL_STORE §6.1). The daemon serves them at /v3/world-model/graph/*;
+ * a daemon from before the cutover answers 404 there, so the legacy /v3/world-model/neo4j/* alias is tried next.
+ */
+async function graphFetch(suffix: string, init?: RequestInit): Promise<Response> {
+  const res = await authedFetch(`/v3/world-model/graph/${suffix}`, init);
+  if (res.status !== 404) return res;
+  return authedFetch(`/v3/world-model/neo4j/${suffix}`, init);
+}
+
 export async function getNeo4jStatus(): Promise<Neo4jSyncStatusResponse> {
-  const res = await authedFetch("/v3/world-model/neo4j/status");
+  const res = await graphFetch("status");
   if (!res.ok) {
-    throw new Error(`Failed to query Neo4j status: HTTP ${res.status}`);
+    throw new Error(`Failed to query Graph status: HTTP ${res.status}`);
   }
   return res.json() as Promise<Neo4jSyncStatusResponse>;
 }
 
+/** Ask the daemon to rebuild the graph. Post-cutover the graph is rebuilt at boot and this only reports status. */
 export async function triggerNeo4jSync(): Promise<{ ok: boolean; status: Neo4jSyncStatusResponse }> {
-  const res = await authedFetch("/v3/world-model/neo4j/sync", {
+  const res = await graphFetch("sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) {
-    throw new Error(`Failed to trigger Neo4j sync: HTTP ${res.status}`);
+    throw new Error(`Failed to trigger Graph sync: HTTP ${res.status}`);
   }
   return res.json() as Promise<{ ok: boolean; status: Neo4jSyncStatusResponse }>;
 }
@@ -914,8 +925,9 @@ export interface GraphAnalyticsResponse {
 export interface GraphQueryResponse {
   ok: boolean;
   result: {
-    mode: "nl" | "cypher";
-    cypher: string;
+    mode: "nl";
+    /** Legacy field from the Neo4j alias; the graph port does not return one. */
+    cypher?: string;
     columns: string[];
     rows: Array<Record<string, unknown>>;
     matchedEntityIds: string[];
@@ -923,22 +935,23 @@ export interface GraphQueryResponse {
 }
 
 export async function getNeo4jAnalytics(): Promise<GraphAnalyticsResponse> {
-  const res = await authedFetch("/v3/world-model/neo4j/analytics");
+  const res = await graphFetch("analytics");
   if (!res.ok) {
-    throw new Error(`Failed to query Neo4j analytics: HTTP ${res.status}`);
+    throw new Error(`Failed to query Graph analytics: HTTP ${res.status}`);
   }
   return res.json() as Promise<GraphAnalyticsResponse>;
 }
 
-export async function queryNeo4jLivingGraph(query: string, mode: "nl" | "cypher" = "nl"): Promise<GraphQueryResponse> {
-  const res = await authedFetch("/v3/world-model/neo4j/query", {
+/** Natural-language query against the world-model graph. Raw Cypher is retired with Neo4j. */
+export async function queryNeo4jLivingGraph(query: string): Promise<GraphQueryResponse> {
+  const res = await graphFetch("query", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, mode }),
+    body: JSON.stringify({ query, mode: "nl" }),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    throw new Error(`Failed to execute Neo4j query (HTTP ${res.status}): ${errText}`);
+    throw new Error(`Failed to execute Graph query (HTTP ${res.status}): ${errText}`);
   }
   return res.json() as Promise<GraphQueryResponse>;
 }

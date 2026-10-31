@@ -70,7 +70,6 @@ export default function LivingBrain() {
   const [selectedFilter, setSelectedFilter] = useState<string>("ALL");
   const [searchQuery, setSearchQuery] = useState("");
   const [autoRotate, setAutoRotate] = useState(true);
-  const [copiedQuery, setCopiedQuery] = useState(false);
   const [neo4jStatus, setNeo4jStatus] = useState<Neo4jSyncStatusResponse | null>(null);
   const [syncingNeo4j, setSyncingNeo4j] = useState(false);
   const [analytics, setAnalytics] = useState<GraphAnalyticsResponse["analytics"] | null>(null);
@@ -78,7 +77,6 @@ export default function LivingBrain() {
   const [analyticsError, setAnalyticsError] = useState<string | null>(null);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [nlQueryInput, setNlQueryInput] = useState("");
-  const [nlQueryMode, setNlQueryMode] = useState<"nl" | "cypher">("nl");
   const [nlQueryRunning, setNlQueryRunning] = useState(false);
   const [nlQueryResult, setNlQueryResult] = useState<GraphQueryResponse["result"] | null>(null);
   const [nlQueryError, setNlQueryError] = useState<string | null>(null);
@@ -226,7 +224,7 @@ export default function LivingBrain() {
       const res = await getNeo4jStatus();
       setNeo4jStatus(res);
     } catch {
-      // Quiet fail if gateway/Neo4j offline
+      // Quiet fail if the gateway or graph store is offline
     }
   }, []);
 
@@ -248,7 +246,7 @@ export default function LivingBrain() {
       setNeo4jStatus(res.status);
       await loadGraph();
     } catch (err) {
-      console.error("Failed to sync Neo4j:", err);
+      console.error("Failed to refresh graph:", err);
     } finally {
       setSyncingNeo4j(false);
     }
@@ -262,22 +260,23 @@ export default function LivingBrain() {
       setAnalytics(res.analytics);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn("Failed to load Neo4j analytics:", msg);
+      console.warn("Failed to load graph analytics:", msg);
       setAnalyticsError(msg);
     } finally {
       setAnalyticsLoading(false);
     }
   }, []);
 
-  const handleRunNlQuery = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!nlQueryInput.trim()) return;
+  /** Run a natural-language graph query. `queryText` overrides the input box (used by the node inspection action). */
+  const runGraphQuery = async (queryText: string, focusMatch = true) => {
+    const query = queryText.trim();
+    if (!query) return;
     setNlQueryRunning(true);
     setNlQueryError(null);
     try {
-      const res = await queryNeo4jLivingGraph(nlQueryInput, nlQueryMode);
+      const res = await queryNeo4jLivingGraph(query);
       setNlQueryResult(res.result);
-      if (res.result.matchedEntityIds.length > 0 && graphData) {
+      if (focusMatch && res.result.matchedEntityIds.length > 0 && graphData) {
         const firstId = res.result.matchedEntityIds[0];
         const match = graphData.entities.find((ent) => ent.id === firstId);
         if (match) {
@@ -289,6 +288,20 @@ export default function LivingBrain() {
     } finally {
       setNlQueryRunning(false);
     }
+  };
+
+  const handleRunNlQuery = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    void runGraphQuery(nlQueryInput);
+  };
+
+  /** Node inspection: query the selected entity's neighborhood in the in-app panel instead of an external browser. */
+  const handleInspectSubgraph = (node: GraphNode) => {
+    const query = node.name || node.id;
+    setNlQueryInput(query);
+    setShowAnalytics(true);
+    // The node is already selected, so do not re-run the camera flight to the first match.
+    void runGraphQuery(query, false);
   };
 
   // Connect live SSE streaming
@@ -765,19 +778,6 @@ export default function LivingBrain() {
     }
   };
 
-  // Neo4j Cypher copy
-  const cypherQuery = useMemo(() => {
-    if (!selectedNode) return "";
-    return `MATCH (n:Entity {id: "${selectedNode.id}"})-[r]-(m)\nRETURN n, r, m\nLIMIT 50;`;
-  }, [selectedNode]);
-
-  const handleCopyCypher = () => {
-    if (!cypherQuery) return;
-    void navigator.clipboard.writeText(cypherQuery);
-    setCopiedQuery(true);
-    setTimeout(() => setCopiedQuery(false), 2000);
-  };
-
   const categories = ["ALL", "PROJECT", "PERSON", "GOAL", "DEVICE", "ROUTINE", "TOPIC"];
 
   return (
@@ -939,7 +939,7 @@ export default function LivingBrain() {
             </span>
           )}
 
-          {/* Neo4j Continuous Sync Badge */}
+          {/* World-model graph store badge */}
           <div style={{
             display: "flex",
             alignItems: "center",
@@ -961,14 +961,14 @@ export default function LivingBrain() {
             }} />
             <span>
               {neo4jStatus?.connected
-                ? `Neo4j: ${neo4jStatus.nodeCount} nodes`
-                : "Neo4j Offline"}
+                ? `Graph: ${neo4jStatus.nodeCount} nodes`
+                : "Graph Offline"}
             </span>
             <button
               type="button"
               onClick={handleTriggerNeo4jSync}
               disabled={syncingNeo4j}
-              title="Force sync to Neo4j"
+              title="Refresh Graph status"
               style={{
                 background: "transparent",
                 border: "none",
@@ -1138,12 +1138,12 @@ export default function LivingBrain() {
             </div>
           )}
 
-          {/* NL / Cypher Query Form */}
+          {/* Natural Language Query Form */}
           <form onSubmit={handleRunNlQuery} style={{ marginBottom: 16 }}>
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               <input
                 type="text"
-                placeholder={nlQueryMode === "nl" ? "Ask brain (e.g. 'hermes', 'stale')..." : "MATCH (n:Entity) RETURN n LIMIT 10"}
+                placeholder="Ask brain (e.g. 'hermes', 'stale')..."
                 value={nlQueryInput}
                 onChange={(e) => setNlQueryInput(e.target.value)}
                 style={{
@@ -1175,38 +1175,9 @@ export default function LivingBrain() {
               </button>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => setNlQueryMode("nl")}
-                  style={{
-                    background: nlQueryMode === "nl" ? "rgba(56, 189, 248, 0.2)" : "transparent",
-                    border: `1px solid ${nlQueryMode === "nl" ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                    color: nlQueryMode === "nl" ? "#38bdf8" : "#94a3b8",
-                    padding: "2px 8px",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "10px",
-                  }}
-                >
-                  Natural Language
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNlQueryMode("cypher")}
-                  style={{
-                    background: nlQueryMode === "cypher" ? "rgba(56, 189, 248, 0.2)" : "transparent",
-                    border: `1px solid ${nlQueryMode === "cypher" ? "#38bdf8" : "rgba(255,255,255,0.1)"}`,
-                    color: nlQueryMode === "cypher" ? "#38bdf8" : "#94a3b8",
-                    padding: "2px 8px",
-                    borderRadius: "6px",
-                    cursor: "pointer",
-                    fontSize: "10px",
-                  }}
-                >
-                  Cypher
-                </button>
-              </div>
+              <span style={{ color: "#64748b", fontSize: "10px" }}>
+                Natural language, answered by the world-model graph
+              </span>
               <button
                 type="button"
                 onClick={() => void loadAnalytics()}
@@ -1530,7 +1501,7 @@ export default function LivingBrain() {
             </div>
           </div>
 
-          {/* Neo4j Deep Inspection Panel */}
+          {/* Graph Subgraph Inspection */}
           <div style={{
             background: "rgba(99, 102, 241, 0.08)",
             border: "1px solid rgba(99, 102, 241, 0.2)",
@@ -1539,64 +1510,30 @@ export default function LivingBrain() {
             marginTop: 14,
           }}>
             <div style={{ fontSize: "12px", fontWeight: 700, color: "#ffffff", marginBottom: 4 }}>
-              Neo4j Query Integration
+              Graph Subgraph Inspection
             </div>
-            <div style={{ fontSize: "11px", color: "var(--text-dim)", marginBottom: 8 }}>
-              Query this node's full subgraph in Neo4j Desktop:
+            <div style={{ fontSize: "11px", color: "var(--text-dim)", marginBottom: 10 }}>
+              Query this node's neighborhood in the world-model graph.
             </div>
-            <pre style={{
-              background: "rgba(0,0,0,0.4)",
-              padding: "8px",
-              borderRadius: "8px",
-              fontSize: "10px",
-              color: "#38bdf8",
-              fontFamily: "monospace",
-              overflowX: "auto",
-              margin: "0 0 10px 0",
-            }}>
-              {cypherQuery}
-            </pre>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <a
-                href={`http://127.0.0.1:7474/browser/?cmd=edit&arg=${encodeURIComponent(cypherQuery)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  display: "block",
-                  textAlign: "center",
-                  textDecoration: "none",
-                  background: "rgba(16, 185, 129, 0.2)",
-                  border: "1px solid rgba(16, 185, 129, 0.4)",
-                  color: "#34d399",
-                  padding: "7px 10px",
-                  borderRadius: "8px",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 160ms ease",
-                }}
-              >
-                ↗ Open in Neo4j Browser
-              </a>
-              <button
-                type="button"
-                onClick={handleCopyCypher}
-                style={{
-                  width: "100%",
-                  background: copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.3)",
-                  border: `1px solid ${copiedQuery ? "#10b981" : "rgba(99, 102, 241, 0.5)"}`,
-                  color: "#ffffff",
-                  padding: "6px 10px",
-                  borderRadius: "8px",
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 160ms ease",
-                }}
-              >
-                {copiedQuery ? "\u2713 Copied to Clipboard" : "Copy Cypher Query"}
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => handleInspectSubgraph(selectedNode)}
+              disabled={nlQueryRunning}
+              style={{
+                width: "100%",
+                background: "rgba(16, 185, 129, 0.2)",
+                border: "1px solid rgba(16, 185, 129, 0.4)",
+                color: "#34d399",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                fontSize: "11px",
+                fontWeight: 600,
+                cursor: nlQueryRunning ? "wait" : "pointer",
+                transition: "all 160ms ease",
+              }}
+            >
+              {nlQueryRunning ? "Querying\u2026" : `\u2192 Inspect "${selectedNode.name || selectedNode.id}" subgraph`}
+            </button>
           </div>
         </div>
       )}
