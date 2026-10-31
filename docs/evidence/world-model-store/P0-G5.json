@@ -1,0 +1,32 @@
+{
+  "gate": "P0-G5",
+  "git_sha": "f89cdda253caeef2044524145688cac83434ee0b + branch fix/world-model-graph-durability",
+  "command": "node --import tsx --test src/replay.integration.test.ts (test: restart hydration rebuilds the same graph as live ingest (P0-G5)); full-ledger replay of a scratch copy of the P0-1 snapshot via rehydrate()",
+  "ran_at": "2026-10-31T19:00:00Z",
+  "host_state": { "commit_used_gb": 35.5, "llama_server_running": true },
+  "measured": {
+    "unit_test": {
+      "events": 1500,
+      "kinds": ["telemetry", "touch", "observation", "label", "proposal", "query", "channel_ingest"],
+      "compared": ["entity id", "type", "name", "edge id (source:relation:target)", "observedCount", "lastObserved"],
+      "result": "pass",
+      "redelivery_after_cursor_is_noop": "pass",
+      "lagging_cursor_700_of_1500_then_consumer": "pass",
+      "live_delivery_before_hydrate_counts_each_event_once": "pass",
+      "fails_with_wall_clock_lastObserved": true
+    },
+    "full_ledger_replay": {
+      "events": 17539,
+      "world_model_cursor": 17539,
+      "hydrate_ms": 175,
+      "hydrate_heap_mb": 1,
+      "after_hydrate": { "entities": 740, "edges": 969 },
+      "two_independent_restarts_identical": true,
+      "after_boot_seed_and_normalize": { "entities": 165, "edges": 167 },
+      "graph_full_response_bytes": 80654
+    }
+  },
+  "threshold": { "canonical_dump_equal": true },
+  "pass": true,
+  "notes": "Mutation check: restoring lastObserved = Date.now() in addEdge makes the test fail. Constructor-time ecosystem seeds are pinned to one fixed time in the test; event projection runs on the real clock, so any remaining wall-clock read in the projection path would show as a diff. Out of scope and left for Phase 1 (P1-G3): boot-time seedFromPastEvents/seedCommsFromPastEvents and the category normalization still read the wall clock and run at a point in time, so a long-running daemon and a restarted one still differ by the topics created since boot (normalization removes TOPIC nodes at boot by design, commit 291d9df). Entity lastActive/activation and edge weight are outside this gate: the live path also decays on the wall clock in ingestObservation. Graph time is device time capped at the stored server time, so a skewed device clock cannot pin it in the future."
+}

@@ -111,6 +111,47 @@ test("Neo4jSyncService: syncGraph sends chunked Cypher MERGE statements with Bas
   }
 });
 
+test("Neo4jSyncService: syncGraph only upserts, so curated vocab topics and HAS_TOPIC links survive (P0-G4)", async () => {
+  const origFetch = globalThis.fetch;
+  const statements: string[] = [];
+  try {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { statements?: Array<{ statement: string }> };
+      for (const s of body.statements ?? []) statements.push(s.statement);
+      return { ok: true, json: async () => ({ results: [], errors: [] }) } as Response;
+    }) as typeof fetch;
+
+    const sync = new Neo4jSyncService({ url: "http://127.0.0.1:7474", user: "neo4j", password: "x" });
+    await sync.syncGraph({
+      entities: [
+        { id: "topic_typescript", type: "TOPIC", name: "typescript", activation: 0.4, lastActive: 100 },
+        { id: "person_michael_hebert", type: "PERSON", name: "Michael", activation: 1, lastActive: 100 },
+        { id: "doc_a", type: "DOC", name: "Doc A", activation: 1, lastActive: 100 },
+      ],
+      edges: [
+        { id: "doc_a:HAS_TOPIC:topic_typescript", sourceId: "doc_a", targetId: "topic_typescript", relation: "HAS_TOPIC", weight: 0.8, observedCount: 1, lastObserved: 100 },
+      ],
+    });
+
+    assert.ok(statements.length > 0);
+    for (const s of statements) {
+      assert.doesNotMatch(s, /\b(DELETE|DETACH|REMOVE|DROP)\b/i, `syncGraph sent a destructive statement: ${s}`);
+      // `SET n = {...}` would wipe curated properties such as vocab, source and aliases; only `+=` merges.
+      assert.doesNotMatch(s, /\bSET\s+[nr]\s*=/i, `syncGraph replaces properties: ${s}`);
+    }
+    const entityUpserts = statements.filter((s) => s.includes("MERGE (n:Entity {id: $id})"));
+    assert.equal(entityUpserts.length, 3);
+    for (const s of entityUpserts) {
+      // Name and type are written only on nodes without curation markers.
+      assert.match(s, /SET n:\w+, n \+= \{\s*activation: \$activation,\s*lastActive: \$lastActive,\s*propertiesJson: \$propertiesJson\s*\}/);
+      assert.match(s, /WITH n\s+WHERE n\.vocab IS NULL AND n\.source IS NULL\s+SET n\.name = \$name, n\.type = \$type/);
+    }
+    assert.ok(statements.some((s) => /MERGE \(a\)-\[r:HAS_TOPIC \{id: \$id\}\]->\(b\)[\s\S]*SET r \+= \{/.test(s)));
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
 test("GET /v3/world-model/neo4j/status enforces scope and returns status", async () => {
   const db = new ExocortexDatabase({ path: ":memory:" });
   db.registerDevice(deviceRow("dev_admin_read", ["admin:read"]));

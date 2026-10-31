@@ -111,8 +111,13 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
   }
 }
 
+const HYDRATE_PAGE_SIZE = 1000;
+const WORLD_MODEL_CONSUMER = "world-model";
+
 export class WorldModelHost {
   private readonly processedEventSeqByDb = new WeakMap<ExocortexDatabase, number>();
+  // First seq applied live in this process; hydration must stop before it or those events would be applied twice.
+  private readonly firstLiveSeqByDb = new WeakMap<ExocortexDatabase, number>();
   private static instance: WorldModelHost | null = null;
 
   public readonly lifeGraph: LivingLifeGraph;
@@ -177,33 +182,57 @@ export class WorldModelHost {
       this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
     }
 
-    // Replay events into living life graph to restore projection across restarts
-    const recentEvents = db.listEvents({ limit: 1000 });
-    for (const ev of recentEvents) {
-      if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
-        this.projectChannelEvent(ev, db);
-        continue;
+    // Rebuild the graph from every event the world-model consumer has already delivered. Later events arrive
+    // through onEventsAppended, so each event reaches the graph exactly once and with the same linker options.
+    const firstLive = this.firstLiveSeqByDb.get(db);
+    const cursor = db.getConsumerCursor(WORLD_MODEL_CONSUMER);
+    const toSeq = firstLive !== undefined ? Math.min(cursor, firstLive - 1) : cursor;
+    let lastSeq = 0;
+    while (lastSeq < toSeq) {
+      const page = db.listEvents({ sinceSeq: lastSeq, to_seq: toSeq, limit: HYDRATE_PAGE_SIZE });
+      if (page.length === 0) break;
+      for (const ev of page) {
+        try {
+          this.projectEventToGraph(ev, db);
+        } catch {
+          // Ignore unparsable legacy payloads during replay
+        }
       }
-      try {
-        const autoCreate = this.lifeGraph.entityCount < 20000;
-        const linkCtx = linkEventToGraph(
-          {
-            event_id: ev.event_id,
-            kind: ev.kind,
-            ts_device: ev.ts_device,
-            ts_server: ev.ts_server,
-            payload: ev.payload,
-          },
-          this.lifeGraph,
-          { autoCreate, createMissingTopics: false },
-        );
-        this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
-      } catch {
-        // Ignore unparsable legacy payloads during replay
-      }
+      const pageEnd = page[page.length - 1].seq;
+      if (pageEnd <= lastSeq) break;
+      lastSeq = pageEnd;
     }
-    normalizeProjectCategories(this.lifeGraph, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
+    if (toSeq > (this.processedEventSeqByDb.get(db) ?? 0)) {
+      this.processedEventSeqByDb.set(db, toSeq);
+    }
     this.hydrated = true;
+  }
+
+  /** Project one event into the life graph. Live ingest and restart hydration both go through here. */
+  private projectEventToGraph(ev: EventRecord, db: ExocortexDatabase | null): EventGraphContext | null {
+    if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
+      this.projectChannelEvent(ev, db);
+      return null;
+    }
+    const autoCreate = this.lifeGraph.entityCount < 20000;
+    const linkCtx = linkEventToGraph(
+      {
+        event_id: ev.event_id,
+        kind: ev.kind,
+        ts_device: ev.ts_device,
+        ts_server: ev.ts_server,
+        payload: ev.payload,
+      },
+      this.lifeGraph,
+      { autoCreate, createMissingTopics: autoCreate },
+    );
+    this.lastGraphContextByDevice.delete(ev.device_id);
+    this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
+    if (this.lastGraphContextByDevice.size > 100) {
+      const firstKey = this.lastGraphContextByDevice.keys().next().value;
+      if (firstKey !== undefined) this.lastGraphContextByDevice.delete(firstKey);
+    }
+    return linkCtx;
   }
 
   public static getInstance(): WorldModelHost {
@@ -291,12 +320,30 @@ export class WorldModelHost {
   private pastSeeded = false;
 
   /**
-   * Seed the life graph from past events (Pieces backfill, kind "past"). Runs at most once per process and never
-   * throws; past events are history, so this changes only entity activation and edge weights, not the event log.
+   * Seed the life graph from past events (Pieces backfill, kind "past"), then apply the boot-time category
+   * normalization. Runs at most once per process and never throws; past events are history, so this changes only
+   * entity activation and edge weights, not the event log.
    */
   public seedFromPastEvents(db: ExocortexDatabase): PastSeedResult | null {
     if (this.pastSeeded) return null;
     this.pastSeeded = true;
+    try {
+      return this.seedPastSessions(db);
+    } finally {
+      this.normalizeCategories();
+    }
+  }
+
+  /** Boot-time category normalization: drop tag hubs and file each document under one owner. Never throws. */
+  public normalizeCategories(): void {
+    try {
+      normalizeProjectCategories(this.lifeGraph, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
+    } catch (err) {
+      console.error("[life-graph] category normalization skipped:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  private seedPastSessions(db: ExocortexDatabase): PastSeedResult | null {
     try {
       const sessions = db.listEvents({ kind: "past" }).flatMap((e) => {
         try {
@@ -309,9 +356,7 @@ export class WorldModelHost {
         }
       });
       if (!sessions.length) return null;
-      const result = seedFromPastSessions(this.lifeGraph, sessions);
-      normalizeProjectCategories(this.lifeGraph, process.env.EXOCORTEX_OPERATOR_ID || "person_operator");
-      return result;
+      return seedFromPastSessions(this.lifeGraph, sessions);
     } catch (err) {
       console.error("[life-graph] past seeding skipped:", err instanceof Error ? err.message : err);
       return null;
@@ -716,7 +761,7 @@ export class WorldModelHost {
 
       if (this.lifeGraph.getEntity(sourceId) && this.lifeGraph.getEntity(targetId)) {
         try {
-          this.lifeGraph.addEdge(sourceId, targetId, relation);
+          this.lifeGraph.addEdge(sourceId, targetId, relation, 1.0, undefined, observedAt);
         } catch {
           // ignore duplicate
         }
@@ -734,35 +779,19 @@ export class WorldModelHost {
     const lastProcessed = targetDb ? (this.processedEventSeqByDb.get(targetDb) ?? 0) : 0;
     const pendingEvents = [...events].sort((a, b) => a.seq - b.seq).filter((ev) => ev.seq > lastProcessed);
     if (pendingEvents.length === 0) return null;
+    if (targetDb && !this.firstLiveSeqByDb.has(targetDb)) this.firstLiveSeqByDb.set(targetDb, pendingEvents[0].seq);
     const touchedFactors = new Set<string>();
     const batchSnapshots: BeliefSnapshotRecord[] = [];
     let lastObsSeq: number | null = null;
 
     for (const ev of pendingEvents) {
       if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
-        this.projectChannelEvent(ev, targetDb);
+        this.projectEventToGraph(ev, targetDb);
         if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
         continue;
       }
       try {
-        const autoCreate = this.lifeGraph.entityCount < 20000;
-        const linkCtx = linkEventToGraph(
-          {
-            event_id: ev.event_id,
-            kind: ev.kind,
-            ts_device: ev.ts_device,
-            ts_server: ev.ts_server,
-            payload: ev.payload,
-          },
-          this.lifeGraph,
-          { autoCreate, createMissingTopics: autoCreate },
-        );
-        this.lastGraphContextByDevice.delete(ev.device_id);
-        this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
-        if (this.lastGraphContextByDevice.size > 100) {
-          const firstKey = this.lastGraphContextByDevice.keys().next().value;
-          if (firstKey !== undefined) this.lastGraphContextByDevice.delete(firstKey);
-        }
+        const linkCtx = this.projectEventToGraph(ev, targetDb)!;
         for (const listener of this.graphListeners) {
           try {
             listener(linkCtx, ev);

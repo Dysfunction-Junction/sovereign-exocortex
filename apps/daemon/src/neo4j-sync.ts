@@ -92,6 +92,31 @@ export function safeRelType(rel: unknown): string {
   return /^[A-Z][A-Z0-9_]{0,48}$/u.test(trimmed) ? trimmed : "RELATED";
 }
 
+/** Curated nodes (vocab topics, rule-tagged files) carry `vocab` or `source`; their name and type are never overwritten. */
+function entityUpsertStatement(entity: GraphEntity): { statement: string; parameters: Record<string, unknown> } {
+  return {
+    statement: `
+      MERGE (n:Entity {id: $id})
+      SET n:${labelForType(entity.type)}, n += {
+        activation: $activation,
+        lastActive: $lastActive,
+        propertiesJson: $propertiesJson
+      }
+      WITH n
+      WHERE n.vocab IS NULL AND n.source IS NULL
+      SET n.name = $name, n.type = $type
+    `,
+    parameters: {
+      id: entity.id,
+      name: entity.name,
+      type: entity.type,
+      activation: entity.activation,
+      lastActive: entity.lastActive,
+      propertiesJson: JSON.stringify(entity.properties ?? {}),
+    },
+  };
+}
+
 export class GraphQueryRejectedError extends Error {
   constructor(message: string) {
     super(message);
@@ -206,45 +231,16 @@ export class Neo4jSyncService {
   }
 
   /**
-   * Perform an idempotent full graph sync.
+   * Perform an idempotent full graph sync. Upsert only: Neo4j also holds hand-curated nodes and links
+   * (vocabulary topics, HAS_TOPIC rules, file trees) that the daemon cannot rebuild, so this must never delete.
    */
   public async syncGraph(graph: GraphExport): Promise<{ entities: number; edges: number }> {
     await this.initSchema();
 
-    // Full sync is also the category migration boundary: remove stale tag hubs
-    // from previous graph versions before rebuilding the canonical projection.
-    await this.executeCypher([{
-      statement: "MATCH (n:Entity) WHERE n.type = 'TOPIC' OR n.id = 'person_michael_hebert' DETACH DELETE n",
-      parameters: {},
-    }]);
-
     // 1. Upsert entities in chunks
     for (let i = 0; i < graph.entities.length; i += this.batchSize) {
       const chunk = graph.entities.slice(i, i + this.batchSize);
-      const statements = chunk.map((entity) => {
-        const secLabel = labelForType(entity.type);
-        return {
-          statement: `
-            MERGE (n:Entity {id: $id})
-            SET n:${secLabel}, n += {
-              name: $name,
-              type: $type,
-              activation: $activation,
-              lastActive: $lastActive,
-              propertiesJson: $propertiesJson
-            }
-          `,
-          parameters: {
-            id: entity.id,
-            name: entity.name,
-            type: entity.type,
-            activation: entity.activation,
-            lastActive: entity.lastActive,
-            propertiesJson: JSON.stringify(entity.properties ?? {}),
-          },
-        };
-      });
-      await this.executeCypher(statements);
+      await this.executeCypher(chunk.map(entityUpsertStatement));
     }
 
     // 2. Upsert edges in chunks
@@ -295,27 +291,7 @@ export class Neo4jSyncService {
     const statements: Array<{ statement: string; parameters: Record<string, unknown> }> = [];
 
     for (const entity of entities) {
-      const secLabel = labelForType(entity.type);
-      statements.push({
-        statement: `
-          MERGE (n:Entity {id: $id})
-          SET n:${secLabel}, n += {
-            name: $name,
-            type: $type,
-            activation: $activation,
-            lastActive: $lastActive,
-            propertiesJson: $propertiesJson
-          }
-        `,
-        parameters: {
-          id: entity.id,
-          name: entity.name,
-          type: entity.type,
-          activation: entity.activation,
-          lastActive: entity.lastActive,
-          propertiesJson: JSON.stringify(entity.properties ?? {}),
-        },
-      });
+      statements.push(entityUpsertStatement(entity));
     }
 
     for (const edge of edges) {

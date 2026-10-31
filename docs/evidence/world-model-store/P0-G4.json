@@ -1,0 +1,18 @@
+{
+  "gate": "P0-G4",
+  "git_sha": "f89cdda253caeef2044524145688cac83434ee0b + branch fix/world-model-graph-durability",
+  "command": "node --import tsx --test src/neo4j-sync.test.ts (test: syncGraph only upserts ... P0-G4); then the fixed syncGraph run against the P0-3 scratch copy (127.0.0.1:17474) with the daemon graph rebuilt from the full ledger snapshot, curated counts taken before and after",
+  "ran_at": "2026-10-31T19:05:00Z",
+  "host_state": { "commit_used_gb": 35.5, "llama_server_running": true },
+  "measured": {
+    "unit_test": "pass",
+    "scratch_copy_sync": { "runs": 2, "entities_upserted": 165, "edges_upserted": 167, "final_code_sync_ms": 3408 },
+    "curated_nodes_id_name_type_vocab_source_aliases": { "nodes": 9835, "sha256_after_two_syncs": "48fc34c29df2e63383efe437ef7847400ea76c683d8c8221cbe202c38772a937", "sha256_in_p0_3_export": "48fc34c29df2e63383efe437ef7847400ea76c683d8c8221cbe202c38772a937" },
+    "daemon_owned_nodes_missing_name_or_type": 0,
+    "before": { "vocab_topics": 8157, "vocab_topics_with_aliases": 8157, "has_topic_by_source": { "<none>": 2990, "colon-topic-merge-2026-10-25": 867, "entity-rule-2026-10-25": 43, "oakridge-system-index-2026-10-26": 254, "path-rule-2026-10-24": 1743 }, "file_folder": 1003, "contains": 1002, "legacy_operator_person_node": 1, "nodes_total": 17485, "rels_total": 14936 },
+    "after": { "vocab_topics": 8157, "vocab_topics_with_aliases": 8157, "has_topic_by_source": { "<none>": 2990, "colon-topic-merge-2026-10-25": 867, "entity-rule-2026-10-25": 43, "oakridge-system-index-2026-10-26": 254, "path-rule-2026-10-24": 1743 }, "file_folder": 1003, "contains": 1002, "legacy_operator_person_node": 1, "nodes_total": 17490, "rels_total": 15069 }
+  },
+  "threshold": { "vocab_topics_and_has_topic_links_unchanged_by_syncGraph": true },
+  "pass": true,
+  "notes": "The unit test asserts syncGraph sends no DELETE, DETACH, REMOVE or DROP, never replaces properties (SET n = ...), and writes name and type only on nodes without a vocab or source marker. The scratch runs are the stronger check: after the first full sync every curated count was identical and only 5 nodes and 133 relationships were added; after the advisor-review fix (name/type guard), a second sync left the curated-node hash equal to the P0-3 export. Stale daemon tag hubs are no longer deleted from Neo4j; Neo4j is retired in Phase 3, so no cleanup migration was added."
+}

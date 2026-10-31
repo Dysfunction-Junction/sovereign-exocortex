@@ -1,0 +1,16 @@
+{
+  "gate": "P0-G2",
+  "git_sha": "d8cbb557a8691e8065f41afed91947c22f3b929c",
+  "command": "robocopy /E /COPY:DAT of apps/neo4j-import/.neo4j, C:/Users/micha/tag-cleanup, and both Neo4j Desktop 2 DBMS directories to %LOCALAPPDATA%/exocortex/backups/neo4j-2026-10-31/; MANIFEST.sha256.json per tree; mirrored to D:/exocortex-backups and re-hashed",
+  "ran_at": "2026-10-31T17:49:00Z",
+  "host_state": { "commit_used_gb": 35.0, "llama_server_running": true },
+  "measured": {
+    "repo_neo4j_and_tag_cleanup": { "files": 1372, "bytes": 617103073, "d_mirror_hash_mismatches": 0 },
+    "neo4j_desktop2_dbms_dirs": { "dbms_count": 2, "files": 1843, "bytes": 1313438029, "d_mirror": "robocopy rc=1 (files copied)" },
+    "listeners_on_7474_7687_during_copy": 0,
+    "java_processes_during_copy": 0
+  },
+  "threshold": { "manifest_covers_every_file": true, "no_listener_on_7474_or_7687": true },
+  "pass": true,
+  "notes": "Scope widened beyond the plan: memory recorded that Neo4j had been run from Neo4j Desktop 2, so its two DBMS directories were also copied. The Desktop DBMS query.log shows the syncGraph TOPIC delete first ran there at 2026-10-27 19:32:31 UTC (1,778 ms, 14,544 page hits) and repeatedly after, so the Desktop copy has lost its vocabulary. The repo .neo4j copy last wrote at 2026-10-27 18:37 UTC, its query.log contains the curation writes and never the delete; it is the surviving curated store."
+}

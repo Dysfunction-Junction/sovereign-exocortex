@@ -515,6 +515,7 @@ export async function requestServiceRestart(
           ingestConsumerGetter(newDb).start();
         }
         defaultWorldModelHost.rehydrate(newDb);
+        defaultWorldModelHost.normalizeCategories();
 
         // Re-run quick_check
         const rows = newDb.raw.prepare("PRAGMA quick_check(1);").all() as Array<Record<string, unknown>>;
