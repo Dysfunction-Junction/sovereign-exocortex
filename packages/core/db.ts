@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { canonicalJsonStringify } from "./canonical.js";
+import { HOST_DEVICE_ID } from "./provenance.js";
 import {
   computeShadowMetrics,
   loadShadowRows,
@@ -183,6 +184,36 @@ CREATE TABLE IF NOT EXISTS mutations (
 ) STRICT;
 `;
 
+/**
+ * Content-addressed blobs referenced by `curation_import` events. Bytes are canonical JSON (sorted keys, UTF-8)
+ * and `sha256` is computed over exactly those bytes. Insert-only, like `events`. An artifact must be stored before
+ * the event that references it; otherwise the world model stops serving until the next restart.
+ */
+export const ARTIFACTS_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS artifacts (
+  sha256     BLOB PRIMARY KEY,
+  media_type TEXT NOT NULL,
+  bytes      BLOB NOT NULL
+) STRICT;
+CREATE TRIGGER IF NOT EXISTS artifacts_no_update BEFORE UPDATE ON artifacts
+  BEGIN SELECT RAISE(ABORT, 'artifacts are insert-only'); END;
+CREATE TRIGGER IF NOT EXISTS artifacts_no_delete BEFORE DELETE ON artifacts
+  BEGIN SELECT RAISE(ABORT, 'artifacts are insert-only'); END;
+`;
+
+export interface ArtifactRecord {
+  sha256: string;
+  media_type: string;
+  bytes: Buffer;
+}
+
+export interface CurationArtifactCheck {
+  ok: boolean;
+  checked: number;
+  missing: string[];
+  altered: string[];
+}
+
 export interface ExocortexDbOptions {
   path?: string;
   schemaSql?: string;
@@ -313,6 +344,7 @@ export class ExocortexDatabase {
       name TEXT PRIMARY KEY,
       seq INTEGER NOT NULL
     ) STRICT`);
+    this.db.exec(ARTIFACTS_SCHEMA_SQL);
   }
 
   public get raw(): DatabaseSync {
@@ -1061,6 +1093,63 @@ export class ExocortexDatabase {
 
   public resetConsumerCursor(name: string): void {
     this.db.prepare("DELETE FROM consumer_cursors WHERE name = ?").run(name);
+  }
+
+  // --- Artifacts ---
+
+  /** Store `value` as canonical JSON and return its SHA-256 (hex). Storing the same content twice is a no-op. */
+  public putArtifact(mediaType: string, value: unknown): { sha256: string; size: number } {
+    if (!mediaType) throw new TypeError("artifact media_type is required");
+    const bytes = Buffer.from(canonicalJsonStringify(value), "utf8");
+    const digest = createHash("sha256").update(bytes).digest();
+    this.db
+      .prepare("INSERT INTO artifacts (sha256, media_type, bytes) VALUES (?, ?, ?) ON CONFLICT(sha256) DO NOTHING")
+      .run(digest, mediaType, bytes);
+    return { sha256: digest.toString("hex"), size: bytes.length };
+  }
+
+  /** Return the artifact only if its bytes still hash to its key; null when missing. Throws when altered. */
+  public getArtifact(sha256Hex: string): ArtifactRecord | null {
+    if (!/^[0-9a-fA-F]{64}$/.test(sha256Hex)) throw new TypeError("artifact sha256 must be 64 hex characters");
+    const row = this.db
+      .prepare("SELECT media_type, bytes FROM artifacts WHERE sha256 = ?")
+      .get(Buffer.from(sha256Hex, "hex")) as { media_type: string; bytes: Uint8Array } | undefined;
+    if (!row) return null;
+    const bytes = Buffer.from(row.bytes);
+    if (createHash("sha256").update(bytes).digest("hex") !== sha256Hex.toLowerCase()) {
+      throw new Error(`artifact ${sha256Hex} does not match its hash`);
+    }
+    return { sha256: sha256Hex.toLowerCase(), media_type: row.media_type, bytes };
+  }
+
+  /**
+   * Every artifact referenced by a host `curation_import` event must exist and hash correctly. Imports from other
+   * devices are unclassified and never projected, so they cannot take the world model offline.
+   */
+  public verifyCurationArtifacts(): CurationArtifactCheck {
+    const refs = new Set<string>();
+    for (const row of this.db
+      .prepare(
+        `SELECT json_extract(payload, '$.artifact_sha256') AS ref FROM events
+         WHERE kind = 'curation_import' AND device_id = ? AND json_valid(payload)`,
+      )
+      .iterate(HOST_DEVICE_ID) as Iterable<{ ref: unknown }>) {
+      refs.add(typeof row.ref === "string" ? row.ref.toLowerCase() : String(row.ref));
+    }
+    const missing: string[] = [];
+    const altered: string[] = [];
+    for (const ref of refs) {
+      if (!/^[0-9a-f]{64}$/.test(ref)) {
+        missing.push(ref);
+        continue;
+      }
+      try {
+        if (!this.getArtifact(ref)) missing.push(ref);
+      } catch {
+        altered.push(ref);
+      }
+    }
+    return { ok: missing.length === 0 && altered.length === 0, checked: refs.size, missing, altered };
   }
 
   public static deviceToJson(d: DeviceRecord): {

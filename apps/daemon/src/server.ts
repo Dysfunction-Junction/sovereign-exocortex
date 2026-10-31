@@ -48,7 +48,7 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+import { consumerAccepts, provenanceOf, isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
 
 const ingestConsumers = new WeakMap<ExocortexDatabase, IngestConsumer>();
 
@@ -77,10 +77,11 @@ export function ingestConsumerForDatabase(db: ExocortexDatabase): IngestConsumer
             const source = payload?.source === "inferred"
               ? "inferred"
               : labelSource(target, ev.device_id, String(payload.proposal_id), payload.label, payload.attestation);
+            const verifiedSource = consumerAccepts("shadow-labels", provenanceOf(ev, { labelAttestation: source })) ? source : "inferred";
             applyShadowLabel(target, ev.device_id, {
               proposalId: String(payload.proposal_id),
               label: payload.label,
-              source,
+              source: verifiedSource,
               actual: payload.actual,
               latencyMs: payload.latency_ms,
               emitEvent: false,
@@ -578,6 +579,11 @@ export const server = createServer(async (req, res) => {
       const dev = decoded as any;
       if (typeof dev.device_id !== "string" || dev.device_id.length === 0 || dev.device_id.length > 128) {
         sendJson(res, 400, { error: "device_id must be a string of 1-128 chars" });
+        return;
+      }
+      if (dev.device_id.startsWith("host:")) {
+        // The provenance registry trusts curation and graph edits from the host device id.
+        sendJson(res, 400, { error: "device_id prefix 'host:' is reserved for the daemon" });
         return;
       }
       if (typeof dev.name !== "string" || dev.name.length === 0 || dev.name.length > 128) {
@@ -1144,6 +1150,26 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  if (
+    method === "GET" &&
+    (url.pathname === "/v3/world-model/graph" || url.pathname.startsWith("/v3/world-model/graph/")) &&
+    !defaultWorldModelHost.graphServing
+  ) {
+    try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph inspection requires admin:read scope" });
+        return;
+      }
+      sendJson(res, 503, {
+        error: "world model is not serving: a curation artifact referenced by the ledger is missing or altered",
+        store: defaultWorldModelHost.getStoreStatus(),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query world model graph", err);
+    }
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v3/world-model/graph") {
     try {
       const db = getDatabase();
@@ -1156,6 +1182,7 @@ export const server = createServer(async (req, res) => {
         entity_count: defaultWorldModelHost.lifeGraph.entityCount,
         edge_count: defaultWorldModelHost.lifeGraph.edgeCount,
         has_context: defaultWorldModelHost.getLastGraphContext(auth.deviceId) !== null,
+        store: defaultWorldModelHost.getStoreStatus(),
       });
     } catch (err) {
       sendInternalError(res, "failed to query world model graph", err);

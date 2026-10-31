@@ -13,6 +13,9 @@ import {
   computeWakeDeltaQuantile,
   extractWakeDeltasFromEvents,
   DEFAULT_WAKE_THRESHOLD_MS,
+  consumerAccepts,
+  provenanceOf,
+  redactPayload,
   type ReadinessState,
   type WakeEventRecord,
   type EventRecord,
@@ -291,7 +294,10 @@ export class PreCognitiveHost {
     if (events.length === 0) return;
     // Fast path: filter by recency (server + device clocks) and relevant kind before grouping/parsing
     const byDevice = new Map<string, EventRecord[]>();
-    for (const ev of events) {
+      for (const rawEv of events) {
+        const prov = provenanceOf(rawEv);
+        if (!consumerAccepts("precognitive", prov)) continue;
+        const ev = prov.redactedFields.length > 0 ? { ...rawEv, payload: redactPayload(rawEv.payload, prov) } : rawEv;
       if (Math.abs(now - ev.ts_server) >= RECENCY_WINDOW_MS) continue;
       const deviceAgeMs = now - ev.ts_device;
       if (deviceAgeMs < -5000) {

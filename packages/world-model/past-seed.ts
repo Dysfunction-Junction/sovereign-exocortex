@@ -14,7 +14,7 @@ export interface PastSeedResult { sessions: number; projects: number; edges: num
 const MS_PER_DAY = 86_400_000;
 
 export function seedFromPastSessions(graph: LivingLifeGraph, sessions: PastSession[], opts: PastSeedOptions = {}): PastSeedResult {
-  const now = opts.now ?? Date.now();
+  const now = opts.now ?? sessions.reduce((max, s) => Math.max(max, s.ts), 0);
   const selfId = opts.selfId ?? (typeof process !== 'undefined' ? process.env?.EXOCORTEX_OPERATOR_ID : undefined) ?? 'person_operator';
   const ordered = [...sessions].sort((a, b) => a.ts - b.ts);
   seedCanonicalProjects(graph);
@@ -29,7 +29,7 @@ export function seedFromPastSessions(graph: LivingLifeGraph, sessions: PastSessi
     const ageDays = Math.max(0, (now - last) / MS_PER_DAY);
     graph.addEntity({ id: project.id, type: 'PROJECT', name: project.name,
       properties: { origin: 'pieces-backfill' }, activation: Math.max(0.01, Math.pow(0.5, ageDays / 7)), lastActive: last });
-    if (graph.getEntity(selfId)) { graph.addEdge(selfId, project.id, 'WORKS_ON', 0.9); edges++; }
+    if (graph.getEntity(selfId)) { graph.addEdge(selfId, project.id, 'WORKS_ON', 0.9, 30, last); edges++; }
   }
   return { sessions: ordered.length, projects: lastSeen.size, edges };
 }

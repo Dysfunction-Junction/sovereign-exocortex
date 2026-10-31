@@ -1,0 +1,32 @@
+{
+  "gate": "P1-G4",
+  "git_sha": "bc9b139 + branch feat/world-model-store-p1",
+  "command": "node --import tsx --test src/world-model-provenance.test.ts (test: system-emitted events and query results change neither the graph, learner, predictions, nor triage (P1-G4))",
+  "ran_at": "2026-10-31T22:17:46.539Z",
+  "host_state": { "llama_server_running": true },
+  "measured": {
+    "scratch_db": ":memory:",
+    "base_events": 600,
+    "appended_events": 10000,
+    "appended_mix": { "proposal": 3334, "label_inferred": 3333, "query_with_poisoned_result": 3333 },
+    "graph_dump_unchanged_live": true,
+    "graph_dump_unchanged_after_restart": true,
+    "model_params_unchanged": true,
+    "belief_snapshots_unchanged": true,
+    "predictions_unchanged": true,
+    "triage_results_unchanged": true,
+    "precognitive_status_unchanged": true,
+    "proposal_preferences_unchanged": true,
+    "poison_strings_in_graph": 0,
+    "unclassified": 0
+  },
+  "threshold": {
+    "graph_dump_equal": true,
+    "model_params_equal": true,
+    "belief_snapshots_equal": true,
+    "predictions_equal": true,
+    "triage_equal": true
+  },
+  "pass": true,
+  "notes": "All six consumers (world-model-graph, world-model-learner, precognitive, prediction, triage, shadow-labels) are gated through CONSUMER_CLASSES and provenanceOf/redactPayload in packages/core/provenance.ts."
+}

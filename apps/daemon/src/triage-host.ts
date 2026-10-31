@@ -13,7 +13,7 @@
  */
 
 import type { ExocortexDatabase } from "@exocortex/core/db";
-import type { RawEvent } from "@exocortex/core";
+import { consumerAccepts, provenanceOf, redactPayload, type RawEvent } from "@exocortex/core";
 import { defaultInferenceBroker, type InferenceBroker } from "./inference-broker.js";
 
 export const TRIAGE_CATEGORIES = ["urgent", "routine", "noise"] as const;
@@ -135,7 +135,10 @@ export class TriageHost {
     const lastSeq = this.processedSeqByDb.get(db) ?? 0;
     const pending = [...events].sort((a, b) => a.seq - b.seq).filter((ev) => ev.seq > lastSeq);
     let queued = 0;
-    for (const ev of pending) {
+    for (const rawEv of pending) {
+      const prov = provenanceOf(rawEv);
+      if (!consumerAccepts("triage", prov)) continue;
+      const ev = prov.redactedFields.length > 0 ? { ...rawEv, payload: redactPayload(rawEv.payload, prov) } : rawEv;
       const text = triageTextOf(ev);
       if (!text) continue;
       if (this.queue.length >= this.maxQueue) this.queue.shift(); // drop oldest; newest events matter most

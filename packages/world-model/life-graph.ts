@@ -68,11 +68,24 @@ export class LivingLifeGraph {
   private reverseAdjacency = new Map<string, Set<string>>(); // targetId -> Set<edgeId>
   // Time up to which decay has already been applied, so repeated decay() calls don't compound.
   private decayedAt = new WeakMap<object, number>();
+  private mergedInto = new Map<string, string>();
+
+  private resolveEntityId(id: string): string {
+    let cur = id;
+    const seen = new Set<string>();
+    while (this.mergedInto.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = this.mergedInto.get(cur)!;
+    }
+    return cur;
+  }
 
   /**
    * Add or update an entity in the graph.
    */
   public addEntity(entity: Omit<GraphEntity, 'activation' | 'lastActive'> & Partial<Pick<GraphEntity, 'activation' | 'lastActive'>>): GraphEntity {
+    const resolvedId = this.resolveEntityId(entity.id);
+    if (resolvedId !== entity.id) entity = { ...entity, id: resolvedId, name: this.entities.get(resolvedId)?.name ?? entity.name };
     const existing = this.entities.get(entity.id);
     const rawAct = entity.activation ?? existing?.activation ?? 1.0;
     const activation = typeof rawAct === 'number' && Number.isFinite(rawAct)
@@ -105,7 +118,7 @@ export class LivingLifeGraph {
    * Retrieve an entity by id.
    */
   public getEntity(id: string): GraphEntity | undefined {
-    return this.entities.get(id);
+    return this.entities.get(this.resolveEntityId(id));
   }
 
   /**
@@ -127,6 +140,8 @@ export class LivingLifeGraph {
     halfLifeDays: number = 30,
     observedAt: number = Date.now()
   ): GraphEdge {
+    sourceId = this.resolveEntityId(sourceId);
+    targetId = this.resolveEntityId(targetId);
     if (!this.entities.has(sourceId)) {
       throw new Error(`Source entity not found in LifeGraph: ${sourceId}`);
     }
@@ -417,6 +432,55 @@ export class LivingLifeGraph {
   /**
    * Remove all entities matching an ID prefix and all their attached edges.
    */
+  public removeEdge(edgeId: string): boolean {
+    const edge = this.edges.get(edgeId);
+    if (!edge) return false;
+    this.edges.delete(edgeId);
+    this.adjacency.get(edge.sourceId)?.delete(edgeId);
+    this.reverseAdjacency.get(edge.targetId)?.delete(edgeId);
+    return true;
+  }
+
+  public mergeEntity(fromId: string, intoId: string): boolean {
+    if (fromId === intoId) return false;
+    const fromEnt = this.entities.get(fromId);
+    const intoEnt = this.entities.get(intoId);
+    if (!fromEnt || !intoEnt) return false;
+    intoEnt.lastActive = Math.max(intoEnt.lastActive, fromEnt.lastActive);
+    intoEnt.activation = Math.min(1.0, Math.max(intoEnt.activation, fromEnt.activation));
+    intoEnt.properties = { ...(fromEnt.properties ?? {}), ...(intoEnt.properties ?? {}) };
+    const incident = [
+      ...Array.from(this.adjacency.get(fromId) ?? []),
+      ...Array.from(this.reverseAdjacency.get(fromId) ?? []),
+    ];
+    for (const edgeId of incident) {
+      const edge = this.edges.get(edgeId);
+      if (!edge) continue;
+      const newSrc = edge.sourceId === fromId ? intoId : edge.sourceId;
+      const newTgt = edge.targetId === fromId ? intoId : edge.targetId;
+      if (newSrc !== newTgt) {
+        const mergedId = `${newSrc}:${edge.relation}:${newTgt}`;
+        const existing = this.edges.get(mergedId);
+        const merged: GraphEdge = {
+          id: mergedId,
+          sourceId: newSrc,
+          targetId: newTgt,
+          relation: edge.relation,
+          weight: existing ? Math.min(1.0, Math.max(existing.weight, edge.weight)) : edge.weight,
+          observedCount: (existing?.observedCount ?? 0) + edge.observedCount,
+          lastObserved: Math.max(existing?.lastObserved ?? edge.lastObserved, edge.lastObserved),
+          halfLifeDays: existing?.halfLifeDays ?? edge.halfLifeDays,
+        };
+        this.edges.set(mergedId, merged);
+        this.adjacency.get(newSrc)?.add(mergedId);
+        this.reverseAdjacency.get(newTgt)?.add(mergedId);
+      }
+    }
+    this.removeEntity(fromId);
+    this.mergedInto.set(fromId, intoId);
+    return true;
+  }
+
   public removeEntitiesByPrefix(prefix: string): number {
     let removed = 0;
     for (const id of Array.from(this.entities.keys())) {

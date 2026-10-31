@@ -1,0 +1,77 @@
+{
+  "gate": "P1-G1",
+  "command": "pnpm world-model-bench <ledger copy> --runs 15",
+  "ran_at": "2026-10-31T22:17:46.539Z",
+  "host_state": {
+    "llama_server_running": true
+  },
+  "measured": {
+    "registry_version": 1,
+    "events": 17539,
+    "world_model_cursor": 17539,
+    "by_class": {
+      "observed": 17463,
+      "system_emitted": 63,
+      "user_label": 11,
+      "derived": 2
+    },
+    "by_rule": {
+      "touch": 410,
+      "telemetry": 7340,
+      "proposal": 37,
+      "label:tap": 11,
+      "query": 15,
+      "past:pieces-backfill": 123,
+      "past:comms-backfill": 9126,
+      "observation:repo_health_watcher": 3,
+      "label:inferred": 26,
+      "observation": 27,
+      "channel_ingest": 419,
+      "vision_observation:local_vision": 2
+    },
+    "unclassified": 0,
+    "unclassified_seen_by_host": 0,
+    "hydrate_ms": {
+      "runs": [
+        141,
+        123,
+        125,
+        112,
+        120,
+        120,
+        125,
+        113,
+        123,
+        114,
+        120,
+        114,
+        121,
+        116,
+        114
+      ],
+      "median": 120,
+      "max": 141
+    },
+    "after_hydrate": {
+      "entities": 768,
+      "edges": 997
+    },
+    "graph_skipped": 74,
+    "artifacts": {
+      "ok": true,
+      "checked": 0,
+      "missing": [],
+      "altered": []
+    },
+    "identical_dumps_across_runs": true,
+    "clock_independence_30d": {
+      "hash_t0": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+      "hash_plus_30d": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+      "identical": true
+    }
+  },
+  "threshold": {
+    "unclassified": 0
+  },
+  "pass": true
+}

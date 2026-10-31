@@ -1,0 +1,19 @@
+{
+  "gate": "P1-G5",
+  "git_sha": "bc9b139 + branch feat/world-model-store-p1",
+  "command": "node --import tsx --test src/world-model-provenance.test.ts (P1-G5 and intact-artifact tests); vitest run packages/core/artifacts.test.ts",
+  "ran_at": "2026-10-31T21:20:00Z",
+  "host_state": { "llama_server_running": true },
+  "measured": {
+    "missing_artifact_live_import": "graphServing=false, status names the hash",
+    "missing_artifact_restart": "graphServing=false, artifacts={ok:false, checked:2, missing:[hash]}",
+    "altered_artifact_restart": "status names the hash under altered",
+    "intact_artifacts_restart": "graphServing=true",
+    "off_host_curation_import": "ignored by the check and unclassified by the registry",
+    "artifacts_table_update_or_delete": "aborts (insert-only triggers)",
+    "graph_routes_when_not_serving": "GET /v3/world-model/graph and /graph/* return 503 with the store status (admin:read still required)"
+  },
+  "threshold": { "refuses_to_serve_and_names_hash": true },
+  "pass": true,
+  "notes": "An artifact must be stored before the curation_import event that references it. A live import of a missing artifact stops serving until the next restart re-verifies the ledger. No curation_import events exist in the live ledger yet; the vocabulary and rule-link imports from the P0-3 export are still to do."
+}

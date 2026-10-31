@@ -12,6 +12,7 @@
     "./rank": "./mishmash-rank.ts",
     "./canonical": "./canonical.ts",
     "./db": "./db.ts",
+    "./provenance": "./provenance.ts",
     "./shadow-metrics": "./shadow-metrics.ts"
   },
   "scripts": {

@@ -71,6 +71,15 @@ test("v3 event store endpoints integration test", async () => {
     });
     assert.equal(invalidKeyRes.status, 400);
 
+    // The host: prefix is reserved; the provenance registry trusts curation events from the daemon's own id.
+    const reservedIdRes = await fetch(`${baseUrl}/v3/devices/enroll`, {
+      method: "POST",
+      headers: enrollHeaders,
+      body: JSON.stringify({ device_id: "host:exocortexd2", name: "Impostor", platform: "android", pubkey_b64: pubkeyB64 }),
+    });
+    assert.equal(reservedIdRes.status, 400);
+    assert.equal(memoryDb.getDevice("host:exocortexd2"), null);
+
     // 3. Successful enrollment with valid enrollment token and key
     const enrollRes = await fetch(`${baseUrl}/v3/devices/enroll`, {
       method: "POST",

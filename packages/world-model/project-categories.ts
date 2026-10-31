@@ -30,8 +30,8 @@ export function classifyProjectIds(values: unknown[]): string[] {
   return [...found];
 }
 
-export function seedCanonicalProjects(graph: LivingLifeGraph): void {
-  for (const project of CANONICAL_PROJECTS) graph.addEntity({ id: project.id, type: 'PROJECT', name: project.name });
+export function seedCanonicalProjects(graph: LivingLifeGraph, lastActive: number = 0): void {
+  for (const project of CANONICAL_PROJECTS) graph.addEntity({ id: project.id, type: 'PROJECT', name: project.name, lastActive: graph.getEntity(project.id)?.lastActive ?? lastActive });
 }
 
 /** File one document under exactly one owner: its canonical project, otherwise the operator. */
@@ -43,11 +43,11 @@ export function attachDocumentToOwner(
   const tags = Array.isArray(entity.properties?.tags) ? entity.properties.tags : [];
   const projectIds = classifyProjectIds([entity.id, entity.name, entity.properties?.sourcePath as string, ...tags]);
   for (const id of projectIds) {
-    if (graph.getEntity(id)) graph.addEdge(entity.id, id, 'REFERENCES', 0.9);
+    if (graph.getEntity(id)) graph.addEdge(entity.id, id, 'REFERENCES', 0.9, 30, 0);
   }
   const mentionsOperator = tags.some((tag) => typeof tag === 'string' && /^(?:#?)(?:operator|michael[ _-]?hebert)$/i.test(tag.trim()));
   if ((mentionsOperator || projectIds.length === 0) && graph.getEntity(operatorId)) {
-    graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9);
+    graph.addEdge(operatorId, entity.id, 'MENTIONS', 0.9, 30, 0);
   }
 }
 
@@ -64,7 +64,7 @@ export function normalizeProjectCategories(graph: LivingLifeGraph, operatorId: s
   }
   if (graph.getEntity(operatorId)) {
     for (const project of CANONICAL_PROJECTS) {
-      if (graph.getEntity(project.id)) graph.addEdge(operatorId, project.id, 'WORKS_ON', 0.8);
+      if (graph.getEntity(project.id)) graph.addEdge(operatorId, project.id, 'WORKS_ON', 0.8, 30, 0);
     }
   }
 }
