@@ -91,22 +91,29 @@ function main(): void {
       const timings: number[] = [];
       const hashes = new Set<string>();
       let last: WorldModelHost | null = null;
-      // Constructor-time ecosystem seeds still stamp edges with the wall clock (open item for P1-G2), so the
-      // clock is pinned while the host is built; replay itself runs on the real clock.
-      const seedClock = Date.UTC(2026, 9, 31);
+      const clockT0 = Date.UTC(2026, 9, 31);
+      const clockPlus30d = clockT0 + 30 * 86_400_000;
       const realNow = Date.now;
+      let hashAtT0 = "";
+      let hashAtPlus30d = "";
       for (let i = 0; i < args.runs; i++) {
-        Date.now = () => seedClock;
+        const fakeClock = i % 2 === 0 ? clockT0 : clockPlus30d;
+        Date.now = () => fakeClock;
         let host: WorldModelHost;
+        let dt = 0;
         try {
           host = WorldModelHost.createIsolatedForTest();
+          const t0 = performance.now();
+          host.rehydrate(db);
+          dt = performance.now() - t0;
         } finally {
           Date.now = realNow;
         }
-        const t0 = performance.now();
-        host.rehydrate(db);
-        timings.push(performance.now() - t0);
-        hashes.add(dumpHash(host));
+        timings.push(dt);
+        const h = dumpHash(host);
+        hashes.add(h);
+        if (i === 0) hashAtT0 = h;
+        if (i === 1) hashAtPlus30d = h;
         last = host;
       }
       const status = last!.getStoreStatus();
@@ -128,9 +135,14 @@ function main(): void {
           graph_skipped: status.graphSkipped,
           artifacts: status.artifacts,
           identical_dumps_across_runs: hashes.size === 1,
+          clock_independence_30d: {
+            hash_t0: hashAtT0,
+            hash_plus_30d: hashAtPlus30d,
+            identical: args.runs >= 2 && hashAtT0 === hashAtPlus30d,
+          },
         },
         threshold: { unclassified: 0 },
-        pass: (byClass.unclassified ?? 0) === 0 && status.unclassified.total === 0 && hashes.size === 1,
+        pass: (byClass.unclassified ?? 0) === 0 && status.unclassified.total === 0 && hashes.size === 1 && (args.runs < 2 || hashAtT0 === hashAtPlus30d),
       };
       const json = JSON.stringify(report, null, 2);
       if (args.out) writeFileSync(args.out, json + "\n");

@@ -1,0 +1,19 @@
+{
+  "gate": "P1-G2",
+  "git_sha": "bc9b139 + branch feat/world-model-store-p1",
+  "command": "pnpm world-model-bench %LOCALAPPDATA%\\exocortex\\backups\\exocortex-2026-10-31.db --runs 15; node --import tsx --test src/world-model-provenance.test.ts (test: two full replays under fake clocks 30 days apart produce identical dumps (P1-G2))",
+  "ran_at": "2026-10-31T22:17:46.539Z",
+  "host_state": { "llama_server_running": true },
+  "measured": {
+    "events": 17539,
+    "clock_t0": "2026-10-31T00:00:00.000Z",
+    "clock_plus_30d": "2026-11-30T00:00:00.000Z",
+    "dump_sha256_t0": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+    "dump_sha256_plus_30d": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+    "identical": true,
+    "after_hydrate": { "entities": 768, "edges": 997 }
+  },
+  "threshold": { "dump_sha256_equal": true },
+  "pass": true,
+  "notes": "Constructor-time ecosystem seeds and canonical project seeds now stamp epoch 0 (lastActive=0, observedAt=0) instead of Date.now(), and past/channel/linker projections read event time only (stop rule S6)."
+}

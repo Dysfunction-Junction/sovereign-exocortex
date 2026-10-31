@@ -48,7 +48,7 @@ import { defaultNeo4jSyncService, GraphQueryRejectedError } from "./neo4j-sync.j
 import { defaultChannelManager } from "./channels/channel-manager.js";
 import { recordChannelIngest } from "./channels/channel-audit.js";
 import { ExocortexDatabase, DeviceNotEnrolledError, DeviceRevokedError, EventIdConflictError } from "@exocortex/core/db";
-import { isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
+import { consumerAccepts, provenanceOf, isShadowLabel, type IngestReq, type DeviceRecord, type EventRecord, type ShadowLabel, type ProposalState } from "@exocortex/core";
 
 const ingestConsumers = new WeakMap<ExocortexDatabase, IngestConsumer>();
 
@@ -77,10 +77,11 @@ export function ingestConsumerForDatabase(db: ExocortexDatabase): IngestConsumer
             const source = payload?.source === "inferred"
               ? "inferred"
               : labelSource(target, ev.device_id, String(payload.proposal_id), payload.label, payload.attestation);
+            const verifiedSource = consumerAccepts("shadow-labels", provenanceOf(ev, { labelAttestation: source })) ? source : "inferred";
             applyShadowLabel(target, ev.device_id, {
               proposalId: String(payload.proposal_id),
               label: payload.label,
-              source,
+              source: verifiedSource,
               actual: payload.actual,
               latencyMs: payload.latency_ms,
               emitEvent: false,

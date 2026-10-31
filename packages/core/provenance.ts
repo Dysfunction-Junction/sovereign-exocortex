@@ -43,6 +43,10 @@ export interface ProvenanceOptions {
 export const CONSUMER_CLASSES = {
   "world-model-graph": ["observed", "user_label", "derived"],
   "world-model-learner": ["observed", "derived"],
+  precognitive: ["observed"],
+  prediction: ["observed"],
+  triage: ["observed"],
+  "shadow-labels": ["user_label"],
 } as const satisfies Record<string, readonly ProvenanceClass[]>;
 
 export type ProvenanceConsumer = keyof typeof CONSUMER_CLASSES;

@@ -33,11 +33,11 @@ export interface CommsSeedResult {
 
 const MS_PER_DAY = 86_400_000;
 
-const humanize = (id: string): string =>
+export const humanize = (id: string): string =>
   id.replace(/^person_/, '').replace(/_\d+$/, '').split('_').filter(Boolean).map((w) => w[0]!.toUpperCase() + w.slice(1)).join(' ');
 
 export function seedFromComms(graph: LivingLifeGraph, events: CommsSeedEvent[], opts: CommsSeedOptions = {}): CommsSeedResult {
-  const now = opts.now ?? Date.now();
+  const now = opts.now ?? events.reduce((max, e) => Math.max(max, e.ts), 0);
   const selfId = opts.selfId ?? (typeof process !== 'undefined' ? process.env?.EXOCORTEX_OPERATOR_ID : undefined) ?? 'person_operator';
   const minContacts = opts.minContacts ?? 5;
 
@@ -67,7 +67,7 @@ export function seedFromComms(graph: LivingLifeGraph, events: CommsSeedEvent[], 
       lastActive: s.last,
     });
     if (hasSelf) {
-      graph.addEdge(selfId, id, 'INTERACTS_WITH', Math.log1p(s.count) / Math.log1p(maxCount), 90);
+      graph.addEdge(selfId, id, 'INTERACTS_WITH', Math.log1p(s.count) / Math.log1p(maxCount), 90, s.last);
       edges++;
     }
   }

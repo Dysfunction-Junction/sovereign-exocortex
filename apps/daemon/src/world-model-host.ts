@@ -17,6 +17,9 @@ import {
   seedCanonicalProjects,
   normalizeProjectCategories,
   seedFromComms,
+  CANONICAL_PROJECTS,
+  classifyProjectIds,
+  humanize as humanizeCommsPerson,
   type CommsSeedResult,
   type PastSeedResult,
   LivingLifeGraph,
@@ -134,6 +137,8 @@ export interface WorldModelStoreStatus {
 
 export class WorldModelHost {
   private readonly processedEventSeqByDb = new WeakMap<ExocortexDatabase, number>();
+  private readonly hydratedUpToSeqByDb = new WeakMap<ExocortexDatabase, number>();
+  private readonly projectedSeqsByDb = new WeakMap<ExocortexDatabase, Set<number>>();
   // First seq applied live in this process; hydration must stop before it or those events would be applied twice.
   private readonly firstLiveSeqByDb = new WeakMap<ExocortexDatabase, number>();
   private static instance: WorldModelHost | null = null;
@@ -153,6 +158,12 @@ export class WorldModelHost {
   private artifactCheck: CurationArtifactCheck | null = null;
   private unclassifiedByRule = new Map<string, number>();
   private graphSkipped = 0;
+  private commsStatsByPerson = new Map<string, { count: number; last: number; labels: Set<string> }>();
+  private commsEventsProjected = 0;
+  private commsEdgePeople = new Set<string>();
+  private pastSessionsProjected = 0;
+  private pastProjectsSeen = new Set<string>();
+  private pastEdgeProjects = new Set<string>();
 
   /** Subscribe to live graph mutations when events are linked to the Living Life Graph. */
   public onGraphUpdated(listener: (ctx: EventGraphContext, event: EventRecord) => void): () => void {
@@ -189,6 +200,14 @@ export class WorldModelHost {
   public rehydrate(db: ExocortexDatabase): void {
     this.hydrated = false;
     this.unclassifiedByRule.clear();
+    this.commsStatsByPerson.clear();
+    this.commsEventsProjected = 0;
+    this.commsEdgePeople.clear();
+    this.pastSessionsProjected = 0;
+    this.pastProjectsSeen.clear();
+    this.pastEdgeProjects.clear();
+    this.hydratedUpToSeqByDb.delete(db);
+    this.projectedSeqsByDb.delete(db);
     this.graphSkipped = 0;
     this.hydrateFromDatabase(db);
   }
@@ -308,6 +327,15 @@ export class WorldModelHost {
     db: ExocortexDatabase | null,
     classified: ReturnType<WorldModelHost["classify"]> = this.classify(ev, db),
   ): EventGraphContext | null {
+    if (db && Number.isSafeInteger(ev.seq) && ev.seq > 0) {
+      let seen = this.projectedSeqsByDb.get(db);
+      if (!seen) {
+        seen = new Set<number>();
+        this.projectedSeqsByDb.set(db, seen);
+      }
+      if (seen.has(ev.seq)) return null;
+      seen.add(ev.seq);
+    }
     const { provenance } = classified;
     if (provenance.class === "unclassified") {
       this.unclassifiedByRule.set(provenance.rule, (this.unclassifiedByRule.get(provenance.rule) ?? 0) + 1);
@@ -324,6 +352,97 @@ export class WorldModelHost {
     if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
       this.projectChannelEvent(ev, db);
       return null;
+    }
+    const ts = Number.isFinite(ev.ts_device)
+      ? (Number.isFinite(ev.ts_server) ? Math.min(ev.ts_device, ev.ts_server) : ev.ts_device)
+      : (Number.isFinite(ev.ts_server) ? ev.ts_server : 0);
+    const selfId = process.env.EXOCORTEX_OPERATOR_ID || "person_operator";
+    const protectedIds = new Set<string>([selfId, "device_host_pc", "device_phone_galaxy_s26", ...CANONICAL_PROJECTS.map((c) => c.id)]);
+    if (ev.kind === "entity_merge") {
+      if (provenance.class === "derived") return null;
+      const p = typeof classified.payload === "object" && classified.payload ? (classified.payload as Record<string, unknown>) : {};
+      if (typeof p.from_id === "string" && typeof p.into_id === "string" && p.from_id && p.into_id && !protectedIds.has(p.from_id)) {
+        this.lifeGraph.mergeEntity(p.from_id, p.into_id);
+      }
+      return null;
+    }
+    if (ev.kind === "assertion_retract") {
+      if (provenance.class === "derived") return null;
+      const p = typeof classified.payload === "object" && classified.payload ? (classified.payload as Record<string, unknown>) : {};
+      if (typeof p.entity_id === "string" && p.entity_id && !protectedIds.has(p.entity_id)) this.lifeGraph.removeEntity(p.entity_id);
+      if (typeof p.edge_id === "string" && p.edge_id) this.lifeGraph.removeEdge(p.edge_id);
+      return null;
+    }
+    if (ev.kind === "derived_assertion") {
+      const validRels = new Set<RelationType>(["WORKS_ON", "DEPENDS_ON", "LOCATED_AT", "TRIGGERS", "BLOCKS", "CARES_ABOUT", "INTERACTS_WITH", "TRANSITIONS_TO", "HAS_TOPIC", "REFERENCES", "MENTIONS"]);
+      const p = typeof classified.payload === "object" && classified.payload ? (classified.payload as Record<string, unknown>) : {};
+      const a = p.assertion && typeof p.assertion === "object" ? (p.assertion as Record<string, unknown>) : null;
+      if (a && typeof a.subj === "string" && typeof a.pred === "string" && typeof a.obj === "string" && a.subj !== a.obj && validRels.has(a.pred as RelationType)) {
+        if (this.lifeGraph.getEntity(a.subj) && this.lifeGraph.getEntity(a.obj)) {
+          const rawConf = typeof a.confidence === "number" && Number.isFinite(a.confidence) ? a.confidence : 0.7;
+          const conf = Math.min(1, Math.max(0, rawConf));
+          this.lifeGraph.addEdge(a.subj, a.obj, a.pred as RelationType, conf, 30, ts);
+        }
+      }
+      return null;
+    }
+    if (ev.kind === "past") {
+      const p = typeof classified.payload === "object" && classified.payload ? (classified.payload as Record<string, unknown>) : {};
+      if (p.origin === "comms-backfill") {
+        this.commsEventsProjected++;
+        const person = Array.isArray(p.people) && typeof p.people[0] === "string" ? p.people[0] : "";
+        if (person.startsWith("person_") && person !== selfId) {
+          const labels = Array.isArray(p.labels) ? p.labels.filter((x): x is string => typeof x === "string") : [];
+          const stats = this.commsStatsByPerson.get(person) ?? { count: 0, last: 0, labels: new Set<string>() };
+          stats.count++;
+          stats.last = Math.max(stats.last, ts);
+          for (const l of labels) stats.labels.add(l);
+          this.commsStatsByPerson.set(person, stats);
+          if (stats.count >= 5) {
+            this.lifeGraph.addEntity({
+              id: person,
+              type: "PERSON",
+              name: humanizeCommsPerson(person),
+              properties: {
+                contacts: stats.count,
+                labels: [...stats.labels].sort(),
+                lastContact: stats.last,
+                origin: "comms-backfill",
+              },
+              activation: 1.0,
+              lastActive: stats.last,
+            });
+            if (this.lifeGraph.getEntity(selfId)) {
+              this.lifeGraph.addEdge(selfId, person, "INTERACTS_WITH", Math.min(1, Math.log1p(stats.count) / Math.log1p(50)), 90, ts);
+              this.commsEdgePeople.add(person);
+            }
+          }
+        }
+        return null;
+      }
+      if (p.origin === "pieces-backfill") {
+        this.pastSessionsProjected++;
+        const tags = Array.isArray(p.tags) ? p.tags.filter((x): x is string => typeof x === "string") : [];
+        for (const id of classifyProjectIds(tags)) {
+          const project = CANONICAL_PROJECTS.find((c) => c.id === id);
+          if (!project) continue;
+          this.pastProjectsSeen.add(project.id);
+          const existing = this.lifeGraph.getEntity(project.id);
+          const last = Math.max(existing?.lastActive ?? 0, ts);
+          this.lifeGraph.addEntity({
+            id: project.id,
+            type: "PROJECT",
+            name: project.name,
+            properties: { origin: "pieces-backfill" },
+            activation: 1.0,
+            lastActive: last,
+          });
+          if (this.lifeGraph.getEntity(selfId)) {
+            this.lifeGraph.addEdge(selfId, project.id, "WORKS_ON", 0.9, 30, ts);
+            this.pastEdgeProjects.add(project.id);
+          }
+        }
+      }
     }
     const autoCreate = this.lifeGraph.entityCount < 20000;
     const linkCtx = linkEventToGraph(
@@ -394,37 +513,26 @@ export class WorldModelHost {
   private seedEcosystemGraph(): void {
     const selfId = process.env.EXOCORTEX_OPERATOR_ID || "person_operator";
     const selfName = process.env.EXOCORTEX_OPERATOR_NAME || "Operator";
-    // 1. Core Human & Hardware Nodes
-    this.lifeGraph.addEntity({ id: selfId, name: selfName, type: "PERSON" });
-    this.lifeGraph.addEntity({ id: "device_host_pc", name: "Primary Workstation", type: "DEVICE" });
-    this.lifeGraph.addEntity({ id: "device_phone_galaxy_s26", name: "Mobile Companion", type: "DEVICE" });
-
-    // 2. Active Projects & Invariants
-    seedCanonicalProjects(this.lifeGraph);
-
-    // 3. Systemic Goals & States
-    this.lifeGraph.addEntity({ id: "goal_zero_cafeteria_disruption", name: "Zero Cafeteria Meal Disruption", type: "GOAL" });
-    this.lifeGraph.addEntity({ id: "goal_100_percent_tests_pass", name: "100% Monorepo Test Pass Rate", type: "GOAL" });
-    this.lifeGraph.addEntity({ id: "state_deep_focus", name: "Deep Focus Flow State", type: "CONTEXT_STATE" });
-
-    // 4. Operator-to-project links are the graph's top-level organization.
-    this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0);
-    this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95);
-    this.lifeGraph.addEdge(selfId, "project_oakridge_smokehouse", "WORKS_ON", 0.9);
-    this.lifeGraph.addEdge(selfId, "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0);
-    this.lifeGraph.addEdge(selfId, "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0);
-
-    // Operator physical substrate & cognitive state links
-    this.lifeGraph.addEdge(selfId, "device_host_pc", "INTERACTS_WITH", 1.0);
-    this.lifeGraph.addEdge(selfId, "device_phone_galaxy_s26", "INTERACTS_WITH", 1.0);
-    this.lifeGraph.addEdge(selfId, "state_deep_focus", "CARES_ABOUT", 1.0);
-
-    // Inter-hardware & systemic dependency edges
-    this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0);
-    this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0);
-    this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95);
+    this.lifeGraph.addEntity({ id: selfId, name: selfName, type: "PERSON", lastActive: 0 });
+    this.lifeGraph.addEntity({ id: "device_host_pc", name: "Primary Workstation", type: "DEVICE", lastActive: 0 });
+    this.lifeGraph.addEntity({ id: "device_phone_galaxy_s26", name: "Mobile Companion", type: "DEVICE", lastActive: 0 });
+    seedCanonicalProjects(this.lifeGraph, 0);
+    this.lifeGraph.addEntity({ id: "goal_zero_cafeteria_disruption", name: "Zero Cafeteria Meal Disruption", type: "GOAL", lastActive: 0 });
+    this.lifeGraph.addEntity({ id: "goal_100_percent_tests_pass", name: "100% Monorepo Test Pass Rate", type: "GOAL", lastActive: 0 });
+    this.lifeGraph.addEntity({ id: "state_deep_focus", name: "Deep Focus Flow State", type: "CONTEXT_STATE", lastActive: 0 });
+    this.lifeGraph.addEdge(selfId, "project_sovereign_exocortex", "WORKS_ON", 1.0, 30, 0);
+    this.lifeGraph.addEdge(selfId, "project_bear_house_classic", "WORKS_ON", 0.95, 30, 0);
+    this.lifeGraph.addEdge(selfId, "project_oakridge_smokehouse", "WORKS_ON", 0.9, 30, 0);
+    this.lifeGraph.addEdge(selfId, "goal_zero_cafeteria_disruption", "CARES_ABOUT", 1.0, 30, 0);
+    this.lifeGraph.addEdge(selfId, "goal_100_percent_tests_pass", "CARES_ABOUT", 1.0, 30, 0);
+    this.lifeGraph.addEdge(selfId, "device_host_pc", "INTERACTS_WITH", 1.0, 30, 0);
+    this.lifeGraph.addEdge(selfId, "device_phone_galaxy_s26", "INTERACTS_WITH", 1.0, 30, 0);
+    this.lifeGraph.addEdge(selfId, "state_deep_focus", "CARES_ABOUT", 1.0, 30, 0);
+    this.lifeGraph.addEdge("device_phone_galaxy_s26", "device_host_pc", "INTERACTS_WITH", 1.0, 30, 0);
+    this.lifeGraph.addEdge("project_sovereign_exocortex", "goal_100_percent_tests_pass", "DEPENDS_ON", 1.0, 30, 0);
+    this.lifeGraph.addEdge("project_sovereign_exocortex", "project_autonomous_triad", "DEPENDS_ON", 0.95, 30, 0);
     for (const project of this.lifeGraph.snapshot().entities.filter((entity) => entity.type === "PROJECT")) {
-      this.lifeGraph.addEdge(selfId, project.id, "WORKS_ON", 0.85);
+      this.lifeGraph.addEdge(selfId, project.id, "WORKS_ON", 0.85, 30, 0);
     }
   }
 
@@ -438,6 +546,11 @@ export class WorldModelHost {
   public seedFromPastEvents(db: ExocortexDatabase): PastSeedResult | null {
     if (this.pastSeeded) return null;
     this.pastSeeded = true;
+    if (this.hydrated || this.pastSessionsProjected > 0) {
+      return this.pastSessionsProjected > 0
+        ? { sessions: this.pastSessionsProjected, projects: this.pastProjectsSeen.size, edges: this.pastEdgeProjects.size }
+        : null;
+    }
     try {
       return this.seedPastSessions(db);
     } finally {
@@ -483,6 +596,13 @@ export class WorldModelHost {
   public seedCommsFromPastEvents(db: ExocortexDatabase): CommsSeedResult | null {
     if (this.commsSeeded) return null;
     this.commsSeeded = true;
+    if (this.hydrated || this.commsEventsProjected > 0) {
+      const selfId = process.env.EXOCORTEX_OPERATOR_ID || "person_operator";
+      const people = [...this.commsStatsByPerson].filter(([id, s]) => s.count >= 5 && id !== selfId).length;
+      return this.commsEventsProjected > 0
+        ? { events: this.commsEventsProjected, people, edges: this.commsEdgePeople.size }
+        : null;
+    }
     try {
       const events = db.listEvents({ kind: "past" }).flatMap((e) => {
         try {
@@ -775,7 +895,7 @@ export class WorldModelHost {
 
     const kind = ev.kind;
     const channel = String(payload.channel ?? "");
-    const observedAt = typeof payload.observed_at === "number" ? payload.observed_at : (ev.ts_device || Date.now());
+    const observedAt = typeof payload.observed_at === "number" ? payload.observed_at : (ev.ts_device || ev.ts_server || 0);
 
     if (kind === "channel.entity.upserted") {
       const entityType = String(payload.entity_type ?? "").toLowerCase();

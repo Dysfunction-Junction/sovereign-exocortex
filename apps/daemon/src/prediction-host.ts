@@ -39,6 +39,9 @@ import {
   timeContext,
   DEFAULT_DWELL_DEBOUNCE_MS,
   BASELINE_WINDOW_MS,
+  consumerAccepts,
+  provenanceOf,
+  redactPayload,
   type Daypart,
   type EngineOptions,
   type FeatureMap,
@@ -153,7 +156,11 @@ export class PredictionHost {
           WHERE device_id = ? AND kind IN ('touch','telemetry') AND seq < ? ORDER BY seq DESC LIMIT ?`,
       )
       .all(deviceId, beforeSeq, HISTORY_LIMIT) as unknown as RawEvent[];
-    for (const r of rows.reverse()) this.tracker.update(r);
+    for (const r of rows.reverse()) {
+      const prov = provenanceOf(r);
+      if (!consumerAccepts("prediction", prov)) continue;
+      this.tracker.update(prov.redactedFields.length > 0 ? { ...r, payload: redactPayload(r.payload, prov) } : r);
+    }
   }
 
   /**
@@ -206,7 +213,10 @@ export class PredictionHost {
     };
     const featTracker = new ContextTracker(this.tz);
 
-    for (const r of rows) {
+    for (const rawRow of rows) {
+      const prov = provenanceOf(rawRow);
+      if (!consumerAccepts("prediction", prov)) continue;
+      const r = prov.redactedFields.length > 0 ? { ...rawRow, payload: redactPayload(rawRow.payload, prov) } : rawRow;
       state.lastSeq = Math.max(state.lastSeq, r.seq);
       featTracker.update(r);
       const action = this.streamAction(r, state);
@@ -233,7 +243,10 @@ export class PredictionHost {
     }
     let guesses = 0;
     let resolved = 0;
-    for (const ev of [...events].sort((a, b) => a.seq - b.seq)) {
+    for (const rawEv of [...events].sort((a, b) => a.seq - b.seq)) {
+      const prov = provenanceOf(rawEv);
+      if (!consumerAccepts("prediction", prov)) continue;
+      const ev = prov.redactedFields.length > 0 ? { ...rawEv, payload: redactPayload(rawEv.payload, prov) } : rawEv;
       const stream = streamOf(ev);
       const state = this.devices.get(stateKey(ev.device_id, stream)) ?? this.hydrate(db, ev.device_id, stream, ev.seq, ev.ts_device);
       if (ev.seq <= state.lastSeq) continue;

@@ -179,7 +179,7 @@ export function linkEventToGraph(
       : serverTs ??
         (typeof payload.created === 'string' && !Number.isNaN(Date.parse(payload.created))
           ? Date.parse(payload.created)
-          : Date.now());
+          : 0);
 
   // 1. Extract candidate identifiers
   const rawSummaryId =

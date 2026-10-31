@@ -1,78 +1,77 @@
 {
-    "gate":  "P1-G1",
-    "git_sha":  "bc9b139 + branch feat/world-model-store-p1",
-    "command":  "pnpm world-model-bench %LOCALAPPDATA%\\exocortex\\backups\\exocortex-2026-10-31.db --runs 15 (VACUUM INTO scratch copy of the P0-1 snapshot)",
-    "ran_at":  "2026-10-31T21:29:39.665Z",
-    "host_state":  {
-                       "llama_server_running":  true
-                   },
-    "measured":  {
-                     "registry_version":  1,
-                     "events":  17539,
-                     "world_model_cursor":  17539,
-                     "by_class":  {
-                                      "observed":  17463,
-                                      "system_emitted":  63,
-                                      "user_label":  11,
-                                      "derived":  2
-                                  },
-                     "by_rule":  {
-                                     "touch":  410,
-                                     "telemetry":  7340,
-                                     "proposal":  37,
-                                     "label:tap":  11,
-                                     "query":  15,
-                                     "past:pieces-backfill":  123,
-                                     "past:comms-backfill":  9126,
-                                     "observation:repo_health_watcher":  3,
-                                     "label:inferred":  26,
-                                     "observation":  27,
-                                     "channel_ingest":  419,
-                                     "vision_observation:local_vision":  2
-                                 },
-                     "unclassified":  0,
-                     "unclassified_seen_by_host":  0,
-                     "hydrate_ms":  {
-                                        "runs":  [
-                                                     217,
-                                                     180,
-                                                     190,
-                                                     181,
-                                                     195,
-                                                     213,
-                                                     176,
-                                                     179,
-                                                     170,
-                                                     156,
-                                                     159,
-                                                     164,
-                                                     159,
-                                                     168,
-                                                     186
-                                                 ],
-                                        "median":  179,
-                                        "max":  217
-                                    },
-                     "after_hydrate":  {
-                                           "entities":  740,
-                                           "edges":  969
-                                       },
-                     "graph_skipped":  74,
-                     "artifacts":  {
-                                       "ok":  true,
-                                       "checked":  0,
-                                       "missing":  [
-
-                                                   ],
-                                       "altered":  [
-
-                                                   ]
-                                   },
-                     "identical_dumps_across_runs":  true
-                 },
-    "threshold":  {
-                      "unclassified":  0
-                  },
-    "pass":  true,
-    "notes":  "Registry coverage: zero unclassified across every (kind, source, device) in the P0-1 ledger copy, by the registry and by the daemon\u0027s own projection counter. graph_skipped=74 is 37 proposals, 26 inferred labels and 11 tap labels (unattested on replay, so no consumer accepts them); none of them linked into the graph before this change either, so entities/edges match P0-G5 (740/969). Replay timing (for the user\u0027s 200 ms target; the frozen gate is P2-G1 \u003c= 2 s): run 1 is the cold run a real boot sees and was 217 ms; warm runs 156-195 ms, median 179 ms, llama-server running. An earlier quiet run on the same code measured median 158 ms, max 186 ms. Dumps were identical across runs only with the clock pinned while the host is constructed: seedEcosystemGraph stamps its constructor-time edges with Date.now(), which P1-G2 must remove."
+  "gate": "P1-G1",
+  "command": "pnpm world-model-bench <ledger copy> --runs 15",
+  "ran_at": "2026-10-31T22:17:46.539Z",
+  "host_state": {
+    "llama_server_running": true
+  },
+  "measured": {
+    "registry_version": 1,
+    "events": 17539,
+    "world_model_cursor": 17539,
+    "by_class": {
+      "observed": 17463,
+      "system_emitted": 63,
+      "user_label": 11,
+      "derived": 2
+    },
+    "by_rule": {
+      "touch": 410,
+      "telemetry": 7340,
+      "proposal": 37,
+      "label:tap": 11,
+      "query": 15,
+      "past:pieces-backfill": 123,
+      "past:comms-backfill": 9126,
+      "observation:repo_health_watcher": 3,
+      "label:inferred": 26,
+      "observation": 27,
+      "channel_ingest": 419,
+      "vision_observation:local_vision": 2
+    },
+    "unclassified": 0,
+    "unclassified_seen_by_host": 0,
+    "hydrate_ms": {
+      "runs": [
+        141,
+        123,
+        125,
+        112,
+        120,
+        120,
+        125,
+        113,
+        123,
+        114,
+        120,
+        114,
+        121,
+        116,
+        114
+      ],
+      "median": 120,
+      "max": 141
+    },
+    "after_hydrate": {
+      "entities": 768,
+      "edges": 997
+    },
+    "graph_skipped": 74,
+    "artifacts": {
+      "ok": true,
+      "checked": 0,
+      "missing": [],
+      "altered": []
+    },
+    "identical_dumps_across_runs": true,
+    "clock_independence_30d": {
+      "hash_t0": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+      "hash_plus_30d": "bd6481f21bf581ddfc788f54b0888924ba97301b4e260142879aec7ded9964fe",
+      "identical": true
+    }
+  },
+  "threshold": {
+    "unclassified": 0
+  },
+  "pass": true
 }

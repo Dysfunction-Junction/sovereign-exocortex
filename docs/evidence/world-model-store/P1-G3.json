@@ -1,0 +1,18 @@
+{
+  "gate": "P1-G3",
+  "git_sha": "bc9b139 + branch feat/world-model-store-p1",
+  "command": "node --import tsx --test src/world-model-provenance.test.ts (test: restart equals live across all event kinds including past, label, proposal, and query (P1-G3))",
+  "ran_at": "2026-10-31T22:17:46.539Z",
+  "host_state": { "llama_server_running": true },
+  "measured": {
+    "events": 1500,
+    "kinds": ["telemetry", "touch", "past (pieces-backfill)", "past (comms-backfill)", "query", "proposal", "label (inferred + tap)"],
+    "compared": ["entity id", "type", "name", "edge id (source:relation:target)", "observedCount", "lastObserved"],
+    "live_equals_restart": true,
+    "comms_contacts_projected": true,
+    "poison_strings_in_graph": 0
+  },
+  "threshold": { "canonical_dump_equal": true },
+  "pass": true,
+  "notes": "past events (comms-backfill and pieces-backfill) are now projected inside the single per-event projectEventToGraph function (plan §4.4), so live ingest and restart hydration produce identical dumps across all event kinds."
+}

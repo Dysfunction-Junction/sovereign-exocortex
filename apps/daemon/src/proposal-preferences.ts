@@ -1,4 +1,5 @@
 import type { ExocortexDatabase } from "@exocortex/core/db";
+import { consumerAccepts, provenanceOf } from "@exocortex/core";
 import { DEFAULT_INVARIANTS, preferenceKey, type PolicyPreference } from "@exocortex/world-model";
 import { HOST_DEVICE_ID } from "./shadow-recorder.js";
 
@@ -33,7 +34,12 @@ export function loadProposalPreferences(db: ExocortexDatabase | null, asOfMs: nu
   for (const label of db.getShadowLabels()) {
     try {
       if (label.label !== "wanted" && label.label !== "not_wanted") continue;
-      if (JSON.parse(label.actual ?? "null")?.source !== "tap" || !Number.isFinite(label.ts) || label.ts > asOfMs) continue;
+      const actualSource = JSON.parse(label.actual ?? "null")?.source;
+      const labelProv = provenanceOf(
+        { kind: "label", device_id: HOST_DEVICE_ID, payload: { source: actualSource } },
+        { labelAttestation: actualSource === "tap" ? "tap" : "inferred" },
+      );
+      if (!consumerAccepts("shadow-labels", labelProv) || !Number.isFinite(label.ts) || label.ts > asOfMs) continue;
       const proposal = db.getProposal(label.proposal_id);
       if (!proposal || proposal.shadow !== 1 || !["PRAGMATIC", "EPISTEMIC"].includes(proposal.policy_type)) continue;
       const event = db.getEventBySeq(proposal.created_seq);

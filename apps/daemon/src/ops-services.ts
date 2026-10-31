@@ -510,12 +510,11 @@ export async function requestServiceRestart(
           setDatabase(newDb);
         }
 
-        // Restart ingest consumer and world model host
+        // Rehydrate world model host before starting live ingest consumer
+        defaultWorldModelHost.rehydrate(newDb);
         if (ingestConsumerGetter) {
           ingestConsumerGetter(newDb).start();
         }
-        defaultWorldModelHost.rehydrate(newDb);
-        defaultWorldModelHost.normalizeCategories();
 
         // Re-run quick_check
         const rows = newDb.raw.prepare("PRAGMA quick_check(1);").all() as Array<Record<string, unknown>>;
