@@ -184,4 +184,23 @@ public class V3BodyTest {
     public void sha1HexMatchesKnownVector() {
         assertEquals("a9993e364706816aba3e25717850c26c9cd0d89d", NativeTelemetrySync.sha1Hex("abc"));
     }
+
+    @Test
+    public void noV3PayloadContainsTypedSummaryFields() throws Exception {
+        List<String> rows = new ArrayList<>();
+        rows.add(v3Row("row-1", 1000, fgPayload("pad")));
+        rows.add(usageRow("u-1"));
+        NativeTelemetrySync.V3Build b = NativeTelemetrySync.buildV3Body(rows, "token");
+        for (String body : b.bodies) {
+            JSONObject root = new JSONObject(body);
+            JSONArray events = root.getJSONArray("events");
+            for (int i = 0; i < events.length(); i++) {
+                JSONObject payload = events.getJSONObject(i).getJSONObject("payload");
+                assertFalse("V3 payload must never contain summary", payload.has("summary"));
+                assertFalse("V3 payload must never contain raw text", payload.has("text"));
+                assertFalse("V3 payload must never contain topics", payload.has("topics"));
+                assertFalse("V3 payload must never contain intent", payload.has("intent"));
+            }
+        }
+    }
 }
