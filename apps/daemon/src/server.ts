@@ -580,6 +580,11 @@ export const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "device_id must be a string of 1-128 chars" });
         return;
       }
+      if (dev.device_id.startsWith("host:")) {
+        // The provenance registry trusts curation and graph edits from the host device id.
+        sendJson(res, 400, { error: "device_id prefix 'host:' is reserved for the daemon" });
+        return;
+      }
       if (typeof dev.name !== "string" || dev.name.length === 0 || dev.name.length > 128) {
         sendJson(res, 400, { error: "name must be a string of 1-128 chars" });
         return;
@@ -1144,6 +1149,26 @@ export const server = createServer(async (req, res) => {
     return;
   }
 
+  if (
+    method === "GET" &&
+    (url.pathname === "/v3/world-model/graph" || url.pathname.startsWith("/v3/world-model/graph/")) &&
+    !defaultWorldModelHost.graphServing
+  ) {
+    try {
+      if (!deviceHasScope(getDatabase(), auth.deviceId, "admin", "admin:read")) {
+        sendJson(res, 403, { error: "forbidden: graph inspection requires admin:read scope" });
+        return;
+      }
+      sendJson(res, 503, {
+        error: "world model is not serving: a curation artifact referenced by the ledger is missing or altered",
+        store: defaultWorldModelHost.getStoreStatus(),
+      });
+    } catch (err) {
+      sendInternalError(res, "failed to query world model graph", err);
+    }
+    return;
+  }
+
   if (method === "GET" && url.pathname === "/v3/world-model/graph") {
     try {
       const db = getDatabase();
@@ -1156,6 +1181,7 @@ export const server = createServer(async (req, res) => {
         entity_count: defaultWorldModelHost.lifeGraph.entityCount,
         edge_count: defaultWorldModelHost.lifeGraph.edgeCount,
         has_context: defaultWorldModelHost.getLastGraphContext(auth.deviceId) !== null,
+        store: defaultWorldModelHost.getStoreStatus(),
       });
     } catch (err) {
       sendInternalError(res, "failed to query world model graph", err);

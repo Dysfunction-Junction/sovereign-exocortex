@@ -38,6 +38,18 @@ CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
   BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 
+CREATE TABLE IF NOT EXISTS artifacts (            -- content-addressed blobs referenced by curation_import events
+  sha256     BLOB PRIMARY KEY,                   -- sha256(bytes); bytes are canonical JSON
+  media_type TEXT NOT NULL,
+  bytes      BLOB NOT NULL
+) STRICT;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_no_update BEFORE UPDATE ON artifacts
+  BEGIN SELECT RAISE(ABORT, 'artifacts are insert-only'); END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_no_delete BEFORE DELETE ON artifacts
+  BEGIN SELECT RAISE(ABORT, 'artifacts are insert-only'); END;
+
 CREATE TABLE IF NOT EXISTS invariants (
   invariant_id TEXT PRIMARY KEY,
   name         TEXT NOT NULL,

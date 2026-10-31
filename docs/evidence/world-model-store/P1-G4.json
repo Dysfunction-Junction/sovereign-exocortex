@@ -1,0 +1,23 @@
+{
+  "gate": "P1-G4",
+  "git_sha": "bc9b139 + branch feat/world-model-store-p1",
+  "command": "node --import tsx --test src/world-model-provenance.test.ts (test: system-emitted events and query results change neither the graph nor the learner (P1-G4))",
+  "ran_at": "2026-10-31T21:20:00Z",
+  "host_state": { "llama_server_running": true },
+  "measured": {
+    "scratch_db": ":memory:",
+    "base_events": 600,
+    "appended_events": 10000,
+    "appended_mix": { "proposal": 3334, "label_inferred": 3333, "query_with_poisoned_result": 3333 },
+    "graph_dump_unchanged_live": true,
+    "graph_dump_unchanged_after_restart": true,
+    "model_params_unchanged": true,
+    "belief_snapshots_unchanged": true,
+    "poison_strings_in_graph": 0,
+    "unclassified": 0,
+    "mutation_check_graph_accepts_system_emitted": "fails: live graph must ignore system-emitted events"
+  },
+  "threshold": { "graph_dump_equal": true, "model_params_equal": true, "belief_snapshots_equal": true },
+  "pass": "partial",
+  "notes": "Covers the world-model graph and the learner tables (model_params, belief_snapshots). Not yet covered: the predictions table and triage output. The prediction, precognitive, triage and shadow-labels consumers do not read the registry yet; they need their own allowlists and this test extended to their outputs before P1-G4 can be marked pass. The learner gate changes nothing today: eventToObservation and systemObservationFromEvent read only observation and telemetry, which are always observed."
+}

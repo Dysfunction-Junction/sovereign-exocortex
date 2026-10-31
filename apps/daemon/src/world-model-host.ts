@@ -38,10 +38,19 @@ import {
   type ModelParamRecord,
   type InferencePolicy,
 } from "@exocortex/world-model";
-import { defaultDryRunCache, type SpeculativeProposal, type EventRecord } from "@exocortex/core";
+import {
+  defaultDryRunCache,
+  consumerAccepts,
+  provenanceOf,
+  redactPayload,
+  PROVENANCE_REGISTRY_VERSION,
+  type Provenance,
+  type SpeculativeProposal,
+  type EventRecord,
+} from "@exocortex/core";
 import { mayActuateAutoExecute, type ShadowRecorder } from "./shadow-recorder.js";
 import { getDatabase, hasDatabase } from "./db-host.js";
-import type { ExocortexDatabase } from "@exocortex/core/db";
+import type { CurationArtifactCheck, ExocortexDatabase } from "@exocortex/core/db";
 import { loadProposalPreferences, type PreferenceMetrics } from "./proposal-preferences.js";
 import { defaultAutoExecutor } from "./scripted-executors.js";
 
@@ -113,6 +122,15 @@ function validateSignals(signals: unknown): asserts signals is ContextualSignals
 
 const HYDRATE_PAGE_SIZE = 1000;
 const WORLD_MODEL_CONSUMER = "world-model";
+const MAX_DERIVATION_DEPTH = 8;
+
+export interface WorldModelStoreStatus {
+  registryVersion: number;
+  serving: boolean;
+  artifacts: CurationArtifactCheck | null;
+  unclassified: { total: number; byRule: Record<string, number> };
+  graphSkipped: number;
+}
 
 export class WorldModelHost {
   private readonly processedEventSeqByDb = new WeakMap<ExocortexDatabase, number>();
@@ -132,6 +150,9 @@ export class WorldModelHost {
   private preferenceDb: ExocortexDatabase | null = null;
   private lastGraphContextByDevice = new Map<string, EventGraphContext>();
   private graphListeners = new Set<(ctx: EventGraphContext, event: EventRecord) => void>();
+  private artifactCheck: CurationArtifactCheck | null = null;
+  private unclassifiedByRule = new Map<string, number>();
+  private graphSkipped = 0;
 
   /** Subscribe to live graph mutations when events are linked to the Living Life Graph. */
   public onGraphUpdated(listener: (ctx: EventGraphContext, event: EventRecord) => void): () => void {
@@ -167,6 +188,8 @@ export class WorldModelHost {
   /** Restore learned params, belief snapshot and graph projection. Runs once; retried when a recorder attaches after a cold start. */
   public rehydrate(db: ExocortexDatabase): void {
     this.hydrated = false;
+    this.unclassifiedByRule.clear();
+    this.graphSkipped = 0;
     this.hydrateFromDatabase(db);
   }
 
@@ -181,6 +204,8 @@ export class WorldModelHost {
     if (latestSnapshot) {
       this.learnedEngine.hydrateFromSnapshot(latestSnapshot);
     }
+
+    this.artifactCheck = db.verifyCurationArtifacts();
 
     // Rebuild the graph from every event the world-model consumer has already delivered. Later events arrive
     // through onEventsAppended, so each event reaches the graph exactly once and with the same linker options.
@@ -206,10 +231,96 @@ export class WorldModelHost {
       this.processedEventSeqByDb.set(db, toSeq);
     }
     this.hydrated = true;
+    const status = this.getStoreStatus();
+    if (status.unclassified.total > 0) {
+      console.warn("[world-model-host] unclassified ledger events were not projected:", status.unclassified.byRule);
+    }
+    if (!status.serving) {
+      console.error("[world-model-host] curation artifacts missing or altered; graph routes will refuse to serve:", status.artifacts);
+    }
+  }
+
+  /** Parse once; the registry and the linker both accept the parsed object. */
+  private classify(ev: EventRecord, db: ExocortexDatabase | null): { provenance: Provenance; payload: EventRecord["payload"] | Record<string, unknown> } {
+    let payload: EventRecord["payload"] | Record<string, unknown> = ev.payload;
+    try {
+      const parsed = JSON.parse(ev.payload);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) payload = parsed as Record<string, unknown>;
+    } catch {
+      // Unparsable legacy payloads stay strings; both readers treat them as empty.
+    }
+    return { provenance: this.provenanceFor({ kind: ev.kind, device_id: ev.device_id, payload }, db), payload };
+  }
+
+  /** Registry class of a ledger event. Derived events resolve their inputs from the same database. */
+  private provenanceFor(ev: { kind: string; device_id: string; payload: unknown }, db: ExocortexDatabase | null, depth = 0): Provenance {
+    return provenanceOf(ev, {
+      resolveInput: (eventId) => {
+        if (!db || depth >= MAX_DERIVATION_DEPTH) return undefined;
+        const row = db.raw.prepare("SELECT kind, device_id, payload FROM events WHERE event_id = ?").get(eventId) as
+          | Pick<EventRecord, "kind" | "device_id" | "payload">
+          | undefined;
+        return row ? this.provenanceFor(row, db, depth + 1) : undefined;
+      },
+    });
+  }
+
+  /** False when a curation artifact referenced by the ledger is missing or altered; graph routes then refuse to serve. */
+  public get graphServing(): boolean {
+    return this.artifactCheck?.ok !== false;
+  }
+
+  public getStoreStatus(): WorldModelStoreStatus {
+    let total = 0;
+    for (const n of this.unclassifiedByRule.values()) total += n;
+    return {
+      registryVersion: PROVENANCE_REGISTRY_VERSION,
+      serving: this.graphServing,
+      artifacts: this.artifactCheck,
+      unclassified: { total, byRule: Object.fromEntries(this.unclassifiedByRule) },
+      graphSkipped: this.graphSkipped,
+    };
+  }
+
+  private noteCurationImport(ev: EventRecord, db: ExocortexDatabase | null): void {
+    if (!db) return;
+    let ref: string;
+    try {
+      ref = String((JSON.parse(ev.payload) as { artifact_sha256?: unknown }).artifact_sha256 ?? "").toLowerCase();
+    } catch {
+      ref = "";
+    }
+    const check = this.artifactCheck ?? { ok: true, checked: 0, missing: [], altered: [] };
+    if (check.missing.includes(ref) || check.altered.includes(ref)) return;
+    let found = false;
+    try {
+      found = /^[0-9a-f]{64}$/.test(ref) && db.getArtifact(ref) !== null;
+    } catch {
+      this.artifactCheck = { ...check, ok: false, altered: [...check.altered, ref] };
+      return;
+    }
+    if (!found) this.artifactCheck = { ...check, ok: false, missing: [...check.missing, ref] };
   }
 
   /** Project one event into the life graph. Live ingest and restart hydration both go through here. */
-  private projectEventToGraph(ev: EventRecord, db: ExocortexDatabase | null): EventGraphContext | null {
+  private projectEventToGraph(
+    ev: EventRecord,
+    db: ExocortexDatabase | null,
+    classified: ReturnType<WorldModelHost["classify"]> = this.classify(ev, db),
+  ): EventGraphContext | null {
+    const { provenance } = classified;
+    if (provenance.class === "unclassified") {
+      this.unclassifiedByRule.set(provenance.rule, (this.unclassifiedByRule.get(provenance.rule) ?? 0) + 1);
+      return null;
+    }
+    if (!consumerAccepts("world-model-graph", provenance)) {
+      this.graphSkipped++;
+      return null;
+    }
+    if (ev.kind === "curation_import") {
+      this.noteCurationImport(ev, db);
+      return null;
+    }
     if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
       this.projectChannelEvent(ev, db);
       return null;
@@ -221,7 +332,7 @@ export class WorldModelHost {
         kind: ev.kind,
         ts_device: ev.ts_device,
         ts_server: ev.ts_server,
-        payload: ev.payload,
+        payload: redactPayload(classified.payload, provenance),
       },
       this.lifeGraph,
       { autoCreate, createMissingTopics: autoCreate },
@@ -785,27 +896,37 @@ export class WorldModelHost {
     let lastObsSeq: number | null = null;
 
     for (const ev of pendingEvents) {
+      const classified = this.classify(ev, targetDb);
+      const { provenance } = classified;
       if (typeof ev.kind === "string" && ev.kind.startsWith("channel.")) {
-        this.projectEventToGraph(ev, targetDb);
+        this.projectEventToGraph(ev, targetDb, classified);
         if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
         continue;
       }
       try {
-        const linkCtx = this.projectEventToGraph(ev, targetDb)!;
-        for (const listener of this.graphListeners) {
-          try {
-            listener(linkCtx, ev);
-          } catch (listenerErr) {
-            console.warn("[world-model-host] graph update listener error:", listenerErr);
+        const linkCtx = this.projectEventToGraph(ev, targetDb, classified);
+        if (linkCtx) {
+          for (const listener of this.graphListeners) {
+            try {
+              listener(linkCtx, ev);
+            } catch (listenerErr) {
+              console.warn("[world-model-host] graph update listener error:", listenerErr);
+            }
           }
         }
       } catch (graphErr) {
         console.warn(`[world-model-host] graph link error for seq ${ev.seq}:`, graphErr);
       }
 
+      if (!consumerAccepts("world-model-learner", provenance)) {
+        if (targetDb) this.processedEventSeqByDb.set(targetDb, ev.seq);
+        continue;
+      }
+      const learnerEv = provenance.redactedFields.length > 0 ? { ...ev, payload: redactPayload(ev.payload, provenance) } : ev;
+
       try {
-        const extracted = eventToObservation(ev, (name) => this.learnedEngine.getFactor(name));
-        const systemObservation = systemObservationFromEvent(ev, extracted, (name) => this.learnedEngine.getFactor(name));
+        const extracted = eventToObservation(learnerEv, (name) => this.learnedEngine.getFactor(name));
+        const systemObservation = systemObservationFromEvent(learnerEv, extracted, (name) => this.learnedEngine.getFactor(name));
         if (systemObservation) {
           // Unmapped/scalar invariants retain baseline proposals without updating a learned factor.
           this.ingestObservation(systemObservation, {

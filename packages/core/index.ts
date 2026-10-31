@@ -13,3 +13,4 @@ export * from "./prediction-events.js";
 export * from "./app-transitions.js";
 export * from "./usage-baseline.js";
 export * from "./action-of.js";
+export * from "./provenance.js";
