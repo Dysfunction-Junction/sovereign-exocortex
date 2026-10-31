@@ -1,0 +1,21 @@
+{
+  "gate": "P0-G1",
+  "git_sha": "d8cbb557a8691e8065f41afed91947c22f3b929c",
+  "command": "python sqlite3 (mode=ro): VACUUM INTO %LOCALAPPDATA%/exocortex/backups/exocortex-2026-10-31.db; PRAGMA integrity_check; then on a scratch copy: tsx ExocortexDatabase.verifyEventChain(); robocopy to D:/exocortex-backups",
+  "ran_at": "2026-10-31T17:46:00Z",
+  "host_state": { "commit_used_gb": 35.0, "llama_server_running": true },
+  "measured": {
+    "live_event_count_at_snapshot": 17539,
+    "live_max_seq_at_snapshot": 17539,
+    "copy_event_count": 17539,
+    "copy_max_seq": 17539,
+    "integrity_check": "ok",
+    "verify_event_chain": { "valid": true, "totalEvents": 17539 },
+    "copy_bytes": 15167488,
+    "copy_sha256": "333a1f2e94e09dfcdaad83df80e47f9115ab48861bdbda12ca89d82c857ac2c3",
+    "second_copy": { "disk": "D: (USB disk 1, separate physical disk from C: NVMe disk 0)", "sha256": "333a1f2e94e09dfcdaad83df80e47f9115ab48861bdbda12ca89d82c857ac2c3" }
+  },
+  "threshold": { "verify_event_chain_valid": true, "count_and_max_seq_match_live": true, "second_copy_on_other_disk": true },
+  "pass": true,
+  "notes": "verifyEventChain ran on a scratch copy because opening the database through ExocortexDatabase runs schema setup, which would change the snapshot's hash. The ledger had grown by 78 events since the plan's audit (17,461)."
+}

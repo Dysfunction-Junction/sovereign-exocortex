@@ -117,13 +117,15 @@ export class LivingLifeGraph {
 
   /**
    * Add or strengthen a relational edge between two entities.
+   * Projections replayed from the event log must pass the event time as observedAt so a restart rebuilds the same graph.
    */
   public addEdge(
     sourceId: string,
     targetId: string,
     relation: RelationType,
     weight: number = 1.0,
-    halfLifeDays: number = 30
+    halfLifeDays: number = 30,
+    observedAt: number = Date.now()
   ): GraphEdge {
     if (!this.entities.has(sourceId)) {
       throw new Error(`Source entity not found in LifeGraph: ${sourceId}`);
@@ -135,6 +137,7 @@ export class LivingLifeGraph {
     // Validate numeric inputs: NaN/negative weights or non-positive half-lives corrupt decay and ranking
     weight = Number.isNaN(weight) ? 0 : Math.min(1.0, Math.max(0, weight));
     if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) halfLifeDays = 30;
+    if (!Number.isFinite(observedAt) || observedAt < 0) observedAt = Date.now();
 
     const edgeId = `${sourceId}:${relation}:${targetId}`;
     const existing = this.edges.get(edgeId);
@@ -146,7 +149,7 @@ export class LivingLifeGraph {
       relation,
       weight: existing ? Math.min(1.0, existing.weight * 0.9 + weight * 0.1 + 0.05) : Math.min(1.0, weight),
       observedCount: (existing?.observedCount ?? 0) + 1,
-      lastObserved: Date.now(),
+      lastObserved: Math.max(existing?.lastObserved ?? observedAt, observedAt),
       halfLifeDays,
     };
 

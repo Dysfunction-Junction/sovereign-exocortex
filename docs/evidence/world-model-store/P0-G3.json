@@ -1,0 +1,28 @@
+{
+  "gate": "P0-G3",
+  "git_sha": "d8cbb557a8691e8065f41afed91947c22f3b929c",
+  "command": "Second copy of the repo .neo4j at %TEMP%/neo4j-inv, heap 512m, pagecache 256m, bolt 127.0.0.1:17687, http 127.0.0.1:17474; HTTP tx export of all nodes and relationships to backups/neo4j-2026-10-31/neo4j-repo-copy-export.json; counts by Cypher",
+  "ran_at": "2026-10-31T18:00:00Z",
+  "host_state": { "commit_used_gb": 35.0, "llama_server_running": true },
+  "measured": {
+    "export": { "nodes": 17485, "relationships": 14936, "bytes": 17319216, "sha256": "b8963475ac409a2f391306a9e24cd070d3121c2da8be6844f56d8ce4af5787af" },
+    "nodes_by_label": { "Anchors": 106, "Annotations": 5243, "ContextState": 1, "DOC": 544, "Device": 2, "Doc": 7662, "Entity": 8819, "File": 682, "Folder": 321, "Goal": 2, "Person": 29, "Persons": 1, "Pipelines": 10, "Project": 5, "Ranges": 104, "Sources": 33, "Summaries": 123, "Tags": 642, "Topic": 8237, "Websites": 1400 },
+    "rels_by_type": { "ANCHORS": 168, "ANNOTATIONS": 400, "CARES_ABOUT": 163, "CONTAINS": 1002, "DEPENDS_ON": 2, "EMBEDDED_MARKDOWN": 568, "HAS_TOPIC": 5897, "INTERACTS_WITH": 243, "PERSONS": 158, "PIPELINES": 10, "RANGES": 104, "REFERENCES": 3, "SOURCES": 1726, "SUMMARIES": 2004, "TAGS": 952, "TRANSITIONS_TO": 90, "WEBSITES": 1444, "WORKS_ON": 2 },
+    "has_topic_by_source": { "<none>": 2990, "colon-topic-merge-2026-10-25": 867, "entity-rule-2026-10-25": 43, "oakridge-system-index-2026-10-26": 254, "path-rule-2026-10-24": 1743 },
+    "topic_vocab_true": 8157,
+    "topic_vocab_false": 80,
+    "file_folder_by_source": { "repo-inventory-2026-10-24": 650, "oakridge-system-index-2026-10-26": 353 },
+    "contains_endpoints": { "Folder->File": 682, "Folder->Folder": 318, "Project->Folder": 2 }
+  },
+  "threshold": { "differences_from_plan_2_4_explained": true },
+  "differences_from_plan_2_4": [
+    { "item": "vocabulary topics", "expected": 8168, "measured": 8157, "explanation": "vocab-clean.json holds exactly 8,157 entries; the 8,168 in the 2026-10-25 memory note was wrong." },
+    { "item": "HAS_TOPIC entity-rule-2026-10-25", "expected": 44, "measured": 43, "explanation": "All 44 entity/topic pairs in link_entities.mjs exist. One link's source property was later overwritten by oakridge-system-index-2026-10-26." },
+    { "item": "HAS_TOPIC from DOC (Pieces baseline)", "expected": 2404, "measured": 3857, "explanation": "2,990 unsourced plus 867 colon-topic-merge. colon-merge-plan.json (36 merges: 32 rename-in-place, 4 merge-into-existing) records linksCount 1,452, which equals the growth (3,856 DOC-sourced = 2,404 + 1,452; one further unsourced link comes from a Project node)." },
+    { "item": "File and Folder nodes", "expected": 650, "measured": 1003, "explanation": "repo-inventory-2026-10-24 has exactly 650. oakridge-system-index-2026-10-26 added 353 after the note." },
+    { "item": "CONTAINS edges", "expected": 649, "measured": 1002, "explanation": "649 + 353 from the oakridge index." }
+  ],
+  "rebuilt_layers": [],
+  "pass": true,
+  "notes": "Nothing was short, so no layer was rebuilt. Found one duplicated Project id (two nodes, one labelled Project only from the oakridge index, one Entity:Project from the daemon sync); left as-is for Phase 1 entity_merge. The copy was stopped after export."
+}

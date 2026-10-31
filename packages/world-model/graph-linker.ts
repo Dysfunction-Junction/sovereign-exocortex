@@ -168,12 +168,18 @@ export function linkEventToGraph(
   const maxHops = options.maxHops ?? 2;
 
   const payload = parsePayload(event);
+  const finiteTs = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  const deviceTs = finiteTs(event.ts_device);
+  const serverTs = finiteTs(event.ts_server);
+  // Device time keeps backfilled history at its original time; capping it at the stored server time stops a skewed
+  // device clock from pinning graph time in the future while staying deterministic on replay.
   const timestamp =
-    event.ts_device ??
-    event.ts_server ??
-    (typeof payload.created === 'string' && !Number.isNaN(Date.parse(payload.created))
-      ? Date.parse(payload.created)
-      : Date.now());
+    deviceTs !== undefined
+      ? Math.min(deviceTs, serverTs ?? deviceTs)
+      : serverTs ??
+        (typeof payload.created === 'string' && !Number.isNaN(Date.parse(payload.created))
+          ? Date.parse(payload.created)
+          : Date.now());
 
   // 1. Extract candidate identifiers
   const rawSummaryId =
@@ -273,7 +279,7 @@ export function linkEventToGraph(
       topicEntities.push(tEntity);
       recordMatch(tEntity);
       if (docEntity) {
-        graph.addEdge(docEntity.id, tEntity.id, 'HAS_TOPIC', 0.8);
+        graph.addEdge(docEntity.id, tEntity.id, 'HAS_TOPIC', 0.8, undefined, timestamp);
       }
     }
   }
@@ -297,7 +303,7 @@ export function linkEventToGraph(
       personEntities.push(pEntity);
       recordMatch(pEntity);
       if (docEntity) {
-        graph.addEdge(pEntity.id, docEntity.id, 'WORKS_ON', 0.8);
+        graph.addEdge(pEntity.id, docEntity.id, 'WORKS_ON', 0.8, undefined, timestamp);
       }
     }
   }
@@ -350,7 +356,7 @@ export function linkEventToGraph(
           });
         }
         if (targetEntity) {
-          graph.addEdge(docEntity.id, targetEntity.id, 'LOCATED_AT', 0.85);
+          graph.addEdge(docEntity.id, targetEntity.id, 'LOCATED_AT', 0.85, undefined, timestamp);
         }
       } else if (entType === 'date' || entType === 'date_time' || entType === 'datetime') {
         const id = `time_${s}`;
@@ -370,7 +376,7 @@ export function linkEventToGraph(
           });
         }
         if (targetEntity) {
-          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8);
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8, undefined, timestamp);
         }
       } else if (entType === 'phone' || entType === 'email') {
         const id = `contact_${s}`;
@@ -390,7 +396,7 @@ export function linkEventToGraph(
           });
         }
         if (targetEntity) {
-          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.85);
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.85, undefined, timestamp);
         }
       } else {
         // url, flight_number, tracking_number, or general extracted entities
@@ -411,7 +417,7 @@ export function linkEventToGraph(
           });
         }
         if (targetEntity) {
-          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8);
+          graph.addEdge(docEntity.id, targetEntity.id, 'REFERENCES', 0.8, undefined, timestamp);
         }
       }
 
@@ -443,7 +449,7 @@ export function linkEventToGraph(
       const existingGoal = graph.getEntity(`goal_${s}`) ?? graph.getEntity(s);
       if (existingGoal && existingGoal.type === 'GOAL') {
         recordMatch(existingGoal);
-        graph.addEdge(docEntity.id, existingGoal.id, 'TRIGGERS', 0.75);
+        graph.addEdge(docEntity.id, existingGoal.id, 'TRIGGERS', 0.75, undefined, timestamp);
       }
     }
 
@@ -564,7 +570,7 @@ export function linkEventToGraph(
         matchedIntentEntityId = intentEntity.id;
         recordMatch(intentEntity);
         if (docEntity) {
-          graph.addEdge(docEntity.id, intentEntity.id, 'REFERENCES', 0.9);
+          graph.addEdge(docEntity.id, intentEntity.id, 'REFERENCES', 0.9, undefined, timestamp);
         }
       }
     }
@@ -596,6 +602,7 @@ export function linkEventToGraph(
 
     const fromId = `app_${slugify(fromPkg)}`;
     const toId = `app_${slugify(toPkg)}`;
+    const trTs = typeof tr.ts === 'number' && Number.isFinite(tr.ts) ? Math.min(tr.ts, timestamp) : timestamp;
 
     let fromEntity = graph.getEntity(fromId);
     if (!fromEntity && autoCreate) {
@@ -605,7 +612,7 @@ export function linkEventToGraph(
         name: fromPkg,
         properties: { origin: 'android_usage', package: fromPkg },
         activation: 0.8,
-        lastActive: tr.ts ?? timestamp,
+        lastActive: trTs,
       });
     }
 
@@ -617,7 +624,7 @@ export function linkEventToGraph(
         name: toPkg,
         properties: { origin: 'android_usage', package: toPkg },
         activation: 0.9,
-        lastActive: tr.ts ?? timestamp,
+        lastActive: trTs,
       });
     }
 
@@ -625,7 +632,7 @@ export function linkEventToGraph(
       recordMatch(fromEntity);
       recordMatch(toEntity);
       const dwellWeight = typeof tr.dwell_ms === 'number' && tr.dwell_ms > 5000 ? 0.85 : 0.65;
-      graph.addEdge(fromEntity.id, toEntity.id, 'TRANSITIONS_TO', dwellWeight);
+      graph.addEdge(fromEntity.id, toEntity.id, 'TRANSITIONS_TO', dwellWeight, undefined, trTs);
       transitionCount++;
     }
   }

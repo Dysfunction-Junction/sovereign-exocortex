@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExocortexDatabase } from "@exocortex/core/db";
+import type { EventIn } from "@exocortex/core";
 import { WorldModelHost } from "./world-model-host.js";
 import { ChannelVault } from "./channels/channel-vault.js";
 import {
@@ -300,6 +301,161 @@ test("replay from seq 0 yields identical graph and belief projections to live in
       assert.equal(replayedBelief.mode, liveBelief.mode);
       assert.equal(replayedBelief.as_of_seq, liveBelief.as_of_seq);
     }
+  } finally {
+    db.close();
+  }
+});
+
+function canonicalGraphDump(host: WorldModelHost) {
+  const snap = host.lifeGraph.snapshot();
+  return {
+    entities: snap.entities
+      .map((e) => ({ id: e.id, type: e.type, name: e.name }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    edges: snap.edges
+      .map((e) => ({ id: e.id, observedCount: e.observedCount, lastObserved: e.lastObserved }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  };
+}
+
+/** Seed constructor-time ecosystem edges at a fixed time; event projection itself must not read the clock. */
+function createHostAt(fixedNow: number): WorldModelHost {
+  const realNow = Date.now;
+  Date.now = () => fixedNow;
+  try {
+    return WorldModelHost.createIsolatedForTest();
+  } finally {
+    Date.now = realNow;
+  }
+}
+
+function syntheticEvents(count: number): EventIn[] {
+  let state = 0x2f6b1d;
+  const rand = (n: number) => {
+    state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+    return state % n;
+  };
+  const tags = Array.from({ length: 40 }, (_, i) => `topic ${i % 7 === 0 ? "sovereign-exocortex" : `area ${i}`}`);
+  const kinds = ["telemetry", "touch", "observation", "label", "proposal", "query", "channel_ingest"];
+  const start = Date.UTC(2026, 9, 1);
+  return Array.from({ length: count }, (_, i) => {
+    const kind = kinds[i % kinds.length];
+    // Mostly increasing device time with some backfilled (older) timestamps.
+    const ts = start + i * 30 * 60_000 - (rand(10) === 0 ? rand(5) * 86_400_000 : 0);
+    const payload: Record<string, unknown> = {
+      summary_id: `s${rand(300)}`,
+      name: `Doc ${i}`,
+      tags: [tags[rand(tags.length)], tags[rand(tags.length)]],
+    };
+    if (rand(3) === 0) payload.persons = ["Operator"];
+    if (rand(4) === 0) {
+      payload.extracted_entities = [
+        { type: ["address", "date", "phone", "url"][rand(4)], value: `value ${rand(50)}`, confidence: 0.5 + rand(5) / 10 },
+      ];
+    }
+    if (rand(5) === 0) {
+      payload.app_transitions = [{ from: `pkg.${rand(6)}`, to: `pkg.${rand(6)}`, dwell_ms: rand(10_000) }];
+    }
+    if (rand(6) === 0) payload.clipboard_intent = { entity_type: "url", value: `https://example.test/${rand(20)}`, action: "open" };
+    return { event_id: `ev_g5_${i}`, kind, schema_ver: 1 as const, ts_device: ts, payload };
+  });
+}
+
+test("restart hydration rebuilds the same graph as live ingest (P0-G5)", () => {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    db.registerDevice({
+      device_id: "dev_g5",
+      name: "dev_g5",
+      platform: "linux",
+      pubkey_spki: new Uint8Array([1, 2, 3]),
+      key_attested: 0,
+      scopes: ["telemetry:write"],
+      enrolled_at: Date.now(),
+      revoked_at: null,
+    });
+    const fixedNow = Date.UTC(2026, 10, 15);
+    const live = createHostAt(fixedNow);
+    const events = syntheticEvents(1500);
+    for (let i = 0; i < events.length; i += 100) {
+      const batch = db.ingestBatch({ device_id: "dev_g5", events: events.slice(i, i + 100) });
+      live.onEventsAppended(batch.insertedEvents, db);
+      db.setConsumerCursor("world-model", batch.insertedEvents[batch.insertedEvents.length - 1].seq);
+    }
+    const liveDump = canonicalGraphDump(live);
+    assert.ok(liveDump.entities.some((e) => e.type === "TOPIC"), "fixture must create topics");
+    assert.ok(liveDump.entities.filter((e) => e.type === "DOC").length > 100, "fixture must create documents");
+    assert.ok(liveDump.edges.length > 500, "fixture must create edges");
+
+    const restarted = createHostAt(fixedNow);
+    restarted.rehydrate(db);
+    assert.deepEqual(canonicalGraphDump(restarted), liveDump);
+
+    // The consumer resumes after the cursor; already-hydrated events must not be applied twice.
+    const before = canonicalGraphDump(restarted);
+    restarted.onEventsAppended(db.listEvents({ limit: 50 }), db);
+    assert.deepEqual(canonicalGraphDump(restarted), before);
+  } finally {
+    db.close();
+  }
+});
+
+function g5Database(): ExocortexDatabase {
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  db.registerDevice({
+    device_id: "dev_g5",
+    name: "dev_g5",
+    platform: "linux",
+    pubkey_spki: new Uint8Array([1, 2, 3]),
+    key_attested: 0,
+    scopes: ["telemetry:write"],
+    enrolled_at: Date.now(),
+    revoked_at: null,
+  });
+  const events = syntheticEvents(1500);
+  for (let i = 0; i < events.length; i += 100) db.ingestBatch({ device_id: "dev_g5", events: events.slice(i, i + 100) });
+  return db;
+}
+
+function deliver(host: WorldModelHost, db: ExocortexDatabase, sinceSeq: number, toSeq: number): void {
+  for (let seq = sinceSeq; seq < toSeq; seq += 100) {
+    host.onEventsAppended(db.listEvents({ sinceSeq: seq, to_seq: Math.min(seq + 100, toSeq) }), db);
+  }
+}
+
+test("restart with a lagging consumer cursor hydrates up to the cursor and the consumer delivers the rest once", () => {
+  const db = g5Database();
+  try {
+    const fixedNow = Date.UTC(2026, 10, 15);
+    const live = createHostAt(fixedNow);
+    deliver(live, db, 0, 1500);
+
+    db.setConsumerCursor("world-model", 700);
+    const restarted = createHostAt(fixedNow);
+    restarted.rehydrate(db);
+    deliver(restarted, db, 700, 1500);
+    assert.deepEqual(canonicalGraphDump(restarted), canonicalGraphDump(live));
+  } finally {
+    db.close();
+  }
+});
+
+test("hydration after live delivery started stops before the first live event", () => {
+  const db = g5Database();
+  try {
+    const fixedNow = Date.UTC(2026, 10, 15);
+    const live = createHostAt(fixedNow);
+    deliver(live, db, 0, 1500);
+
+    // The consumer applied 1001..1500 and advanced the cursor before the host hydrated.
+    const restarted = createHostAt(fixedNow);
+    deliver(restarted, db, 1000, 1500);
+    db.setConsumerCursor("world-model", 1500);
+    restarted.rehydrate(db);
+
+    // Arrival order differs, so first-seen names can differ; every event must still count exactly once.
+    const strip = (d: ReturnType<typeof canonicalGraphDump>) => ({ ids: d.entities.map((e) => e.id), edges: d.edges });
+    assert.deepEqual(strip(canonicalGraphDump(restarted)), strip(canonicalGraphDump(live)));
   } finally {
     db.close();
   }
