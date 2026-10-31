@@ -1,7 +1,7 @@
 # PR A5-2 Specification: On-Device Gemma 3 1B LiteRT-LM Engine, Provisioning, and Hardware Debug Spike
 
 **Branch:** `spike/gemma-litertlm` (from `feat/a5-typed-text-core` @ `66310da` / `7925cd8`)  
-**Target:** `apps/mobile/android`, device `SM-S948U1` (Snapdragon 8 Gen 3 / SM8850, 15.4 GB RAM)  
+**Target:** `apps/mobile/android`, device `SM-S948U1` (Galaxy S26 Ultra, SoC `SM8850`, 15.4 GB RAM)  
 **Author:** Advisory Council (Claude / Chief Architect)  
 **Implementer:** Antigravity (Executive Engine)  
 
