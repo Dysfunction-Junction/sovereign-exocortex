@@ -45,6 +45,7 @@
 ---
 
 ## 3. Next Step (PR A5-2)
-- **Target:** LiteRT-LM runtime engine & debug spike (`feat/a5-litert-debug-spike`).
-- **User Action Required for A5-2:** Download Gemma 3 1B IT int4 `.litertlm` from Hugging Face (accepting model license agreement), record SHA-256 hash, and push to device via `adb push <model>.litertlm /sdcard/Android/data/com.pieces.android.companion/files/models/`.
-- **Implementation:** Wire `LiteRtSummarizer` implementing `Summarizer`, verify hash on startup, load model in background worker, and test on real hardware.
+- **Specification:** [`docs/SPEC_GEMMA_LITERTLM_SPIKE_2026-10-31.md`](file:///C:/Users/micha/projects/sovereign-exocortex/docs/SPEC_GEMMA_LITERTLM_SPIKE_2026-10-31.md) authored by Claude / Advisory Council.
+- **Target Branch:** `spike/gemma-litertlm` (branched from `feat/a5-typed-text-core`).
+- **User Action Required for A5-2:** Download Gemma 3 1B IT int4 `.litertlm` from Hugging Face (`litert-community/Gemma3-1B-IT`), record SHA-256 hash, and push to device via `adb push <model>.litertlm /sdcard/Android/data/com.pieces.android.companion/files/models/staging/`.
+- **Implementation:** Wire `LiteRtBridge.kt` and `LiteRtSummarizer` implementing `Summarizer`, verify SHA-256 on staging copy, execute spikes S5-6 to S5-10 with debug harness, and evaluate against the quantitative Go/No-Go matrix in Section 7 of the spec.
