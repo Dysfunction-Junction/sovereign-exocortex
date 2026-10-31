@@ -1,0 +1,23 @@
+{
+  "gate": "P2-G5",
+  "git_sha": "738314c8b4c0cc90960d92aa40398fb07a33275b",
+  "command": "pnpm --filter @exocortex/daemon exec node --import tsx src/world-model-p2-bench-cli.ts (taskkill /F /PID <pid> + cold restart)",
+  "ran_at": "2026-10-31T22:50:23.501Z",
+  "host_state": {
+    "commit_used_gb": 32.66,
+    "llama_server_running": true,
+    "llama_server_count": 3
+  },
+  "measured": {
+    "killed_pid": 43808,
+    "restarted_pid": 39116,
+    "hash_before_kill": "5b28d09640f15cd644c8910908c16e7ccd42abeef1e755d7f588b07d436752e1",
+    "hash_after_restart": "5b28d09640f15cd644c8910908c16e7ccd42abeef1e755d7f588b07d436752e1",
+    "identical": true
+  },
+  "threshold": {
+    "identical": true
+  },
+  "pass": true,
+  "notes": "Forced termination via taskkill /F leaves SQLite ledger and curation artifacts intact; cold restart produces identical canonical dump SHA-256."
+}

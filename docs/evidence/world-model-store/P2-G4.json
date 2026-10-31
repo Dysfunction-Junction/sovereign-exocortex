@@ -1,0 +1,39 @@
+{
+  "gate": "P2-G4",
+  "git_sha": "738314c8b4c0cc90960d92aa40398fb07a33275b",
+  "command": "pnpm --filter @exocortex/daemon exec node --import tsx src/world-model-p2-bench-cli.ts",
+  "ran_at": "2026-10-31T22:50:23.501Z",
+  "host_state": {
+    "commit_used_gb": 32.66,
+    "llama_server_running": true,
+    "llama_server_count": 3
+  },
+  "measured": {
+    "artifact_sha256": {
+      "vocabulary": "6c3c1842c9030a480aead3c0f9386a9c84f9aaafeed2c243b74ac64cfdd5a5ee",
+      "entity_rules": "d1fbe83b45823c69eacd09c6ebd29b60c3bb0ea98a8d333451637fe41afdf134",
+      "path_rules": "22f23021976b82e2bbf695bab77e2e76d5565afe98b9c93d1a4942df100fbf99",
+      "file_tree": "06a003a62bb7ed1239f7fa7b59065f233fc7c32dce4080aa636842c8cb2da22f"
+    },
+    "p0_g3_export_counts": {
+      "vocabulary_topics": 8157,
+      "entity_rule_links": 44,
+      "path_rule_links": 1743,
+      "file_folder_nodes": 1003,
+      "contains_edges": 1002
+    },
+    "loaded_from_artifacts": {
+      "vocabulary_topics": 8157,
+      "entity_rule_links": 44,
+      "path_rule_links": 1743,
+      "file_folder_nodes": 1003,
+      "contains_edges": 1002
+    }
+  },
+  "threshold": {
+    "vocabulary_topics": 8157,
+    "entity_rule_links": 44
+  },
+  "pass": true,
+  "notes": "Vocabulary topics (8,157) and entity-rule links (44: 43 entity-rule-2026-10-25 + 1 Project->Topic link overwritten by oakridge-system-index-2026-10-26) match the P0-G3 Neo4j export 1:1."
+}

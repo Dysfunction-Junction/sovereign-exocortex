@@ -222,7 +222,8 @@ export function buildFileTreeArtifact(raw: RawNeo4jExport): FileTreeArtifact {
     const source_id = typeof srcNode.props.id === "string" ? srcNode.props.id : (typeof srcNode.props.path === "string" ? srcNode.props.path : "");
     const target_id = typeof tgtNode.props.id === "string" ? tgtNode.props.id : (typeof tgtNode.props.path === "string" ? tgtNode.props.path : "");
     if (!source_id || !target_id) continue;
-    if (!nodesById.has(source_id) || !nodesById.has(target_id)) continue;
+    const validSource = nodesById.has(source_id) || srcNode.labels.includes("Project") || srcNode.props.type === "PROJECT";
+    if (!validSource || !nodesById.has(target_id)) continue;
     edgeMap.set(`${source_id}->${target_id}`, { source_id, target_id });
   }
 

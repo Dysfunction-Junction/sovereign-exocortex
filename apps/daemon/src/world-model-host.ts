@@ -23,6 +23,11 @@ import {
   type CommsSeedResult,
   type PastSeedResult,
   LivingLifeGraph,
+  InMemoryGraphStore,
+  VOCABULARY_MEDIA_TYPE,
+  RULE_LINKS_MEDIA_TYPE,
+  type VocabularyArtifact,
+  type RuleLinksArtifact,
   CognitiveModeGate,
   ActiveInferenceEngine,
   LearnedActiveInferenceEngine,
@@ -144,6 +149,7 @@ export class WorldModelHost {
   private static instance: WorldModelHost | null = null;
 
   public readonly lifeGraph: LivingLifeGraph;
+  public readonly graphStore: InMemoryGraphStore;
   public readonly cognitiveGate: CognitiveModeGate;
   public readonly activeInference: ActiveInferenceEngine;
   public learnedEngine: LearnedActiveInferenceEngine;
@@ -175,6 +181,16 @@ export class WorldModelHost {
 
   private constructor() {
     this.lifeGraph = new LivingLifeGraph();
+    this.graphStore = new InMemoryGraphStore({
+      graph: this.lifeGraph,
+      isServing: () => this.graphServing,
+      lastError: () => {
+        if (this.graphServing) return null;
+        const missing = this.artifactCheck?.missing ?? [];
+        const altered = this.artifactCheck?.altered ?? [];
+        return `curation artifacts invalid (missing: ${missing.join(',') || 'none'}, altered: ${altered.join(',') || 'none'})`;
+      },
+    });
     this.seedEcosystemGraph();
 
     this.cognitiveGate = new CognitiveModeGate();
@@ -311,14 +327,34 @@ export class WorldModelHost {
     }
     const check = this.artifactCheck ?? { ok: true, checked: 0, missing: [], altered: [] };
     if (check.missing.includes(ref) || check.altered.includes(ref)) return;
-    let found = false;
+    let artifact: ReturnType<ExocortexDatabase["getArtifact"]> = null;
     try {
-      found = /^[0-9a-f]{64}$/.test(ref) && db.getArtifact(ref) !== null;
+      artifact = /^[0-9a-f]{64}$/.test(ref) ? db.getArtifact(ref) : null;
     } catch {
       this.artifactCheck = { ...check, ok: false, altered: [...check.altered, ref] };
       return;
     }
-    if (!found) this.artifactCheck = { ...check, ok: false, missing: [...check.missing, ref] };
+    if (!artifact) {
+      this.artifactCheck = { ...check, ok: false, missing: [...check.missing, ref] };
+      return;
+    }
+    try {
+      const iso = Number.isFinite(ev.ts_server) && ev.ts_server > 0 ? new Date(ev.ts_server).toISOString() : "1970-01-01T00:00:00.000Z";
+      const jsonText = Buffer.from(artifact.bytes).toString("utf8");
+      if (artifact.media_type === VOCABULARY_MEDIA_TYPE) {
+        const parsed = JSON.parse(jsonText) as VocabularyArtifact;
+        if (parsed && Array.isArray(parsed.topics)) {
+          this.graphStore.applyCurationArtifacts(parsed, null, iso);
+        }
+      } else if (artifact.media_type === RULE_LINKS_MEDIA_TYPE) {
+        const parsed = JSON.parse(jsonText) as RuleLinksArtifact;
+        if (parsed && parsed.rule_source === "entity-rule" && Array.isArray(parsed.links)) {
+          this.graphStore.applyCurationArtifacts(null, parsed, iso);
+        }
+      }
+    } catch {
+      this.artifactCheck = { ...check, ok: false, altered: [...check.altered, ref] };
+    }
   }
 
   /** Project one event into the life graph. Live ingest and restart hydration both go through here. */
@@ -454,7 +490,7 @@ export class WorldModelHost {
         payload: redactPayload(classified.payload, provenance),
       },
       this.lifeGraph,
-      { autoCreate, createMissingTopics: autoCreate },
+      { autoCreate, createMissingTopics: autoCreate, vocabIndex: this.graphStore.vocabIndex },
     );
     this.lastGraphContextByDevice.delete(ev.device_id);
     this.lastGraphContextByDevice.set(ev.device_id, linkCtx);
