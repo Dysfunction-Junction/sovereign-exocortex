@@ -5,7 +5,7 @@
  *
  *   GET  /                            -> search UI (public shell; token is typed into the page)
  *   GET  /health                      -> {ok, items}
- *   POST /search  {q, k?, kind?, source?, since?, until?}
+ *   POST /search  {q, k?, kind?, source?, owner?, since?, until?}
  *   GET  /item/:id
  *   GET  /blob/:id                    -> decrypted bytes (id = 64 hex chars)
  *   POST /ingest/text {source, kind, title, text, path?, ts?, meta?}
@@ -67,10 +67,14 @@ async function handle(bank: Databank, req: IncomingMessage, res: ServerResponse,
     const b = await readJson(req);
     if (!b || typeof b.q !== "string" || b.q.length === 0 || b.q.length > 1000) return json(res, 400, { error: "q required" });
     if (b.kind !== undefined && !KINDS.has(String(b.kind))) return json(res, 400, { error: "invalid kind" });
+    if (b.owner !== undefined && (typeof b.owner !== "string" || !b.owner.trim() || b.owner.length > 100)) {
+      return json(res, 400, { error: "invalid owner" });
+    }
     const hits = await bank.search(b.q, {
       k: typeof b.k === "number" ? b.k : undefined,
       kind: b.kind as ItemKind | undefined,
       source: typeof b.source === "string" ? b.source : undefined,
+      owner: typeof b.owner === "string" ? b.owner.trim().toLowerCase() : undefined,
       since: typeof b.since === "number" ? b.since : undefined,
       until: typeof b.until === "number" ? b.until : undefined,
     });

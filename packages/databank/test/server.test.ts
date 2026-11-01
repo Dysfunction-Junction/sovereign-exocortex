@@ -77,6 +77,21 @@ describe("databank server", () => {
     assert.equal((await call("/item/zzz")).status, 404);
   });
 
+  it("defaults to Michael and permits explicit authenticated Gwen retrieval", async () => {
+    await bank.ingestText({ source: "gwen-messenger", kind: "conversation", title: "Fixture", text: "ownerpartitionfixture", meta: { owner: "gwen" } });
+    const search = async (extra: Record<string, unknown>) => {
+      const res = await call("/search", { method: "POST", body: JSON.stringify({ q: "ownerpartitionfixture", ...extra }) });
+      assert.equal(res.status, 200);
+      return (await res.json()) as { hits: unknown[] };
+    };
+    assert.equal((await search({})).hits.length, 0);
+    assert.equal((await search({ source: "gwen-messenger" })).hits.length, 0);
+    assert.equal((await search({ owner: "gwen" })).hits.length, 1);
+    for (const owner of ["", 123, {}, " "]) {
+      assert.equal((await call("/search", { method: "POST", body: JSON.stringify({ q: "x", owner }) })).status, 400);
+    }
+  });
+
   it("reports health with counts", async () => {
     const h = (await (await call("/health")).json()) as { ok: boolean; items: number };
     assert.equal(h.ok, true);

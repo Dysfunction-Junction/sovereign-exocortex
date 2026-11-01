@@ -24,7 +24,7 @@ import { parseFiHistoryPath, normalizePhoneNumber } from "./parsers/fi-history.j
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
-const VALUE_FLAGS = new Set(["--source", "--older-than-days", "--kind", "--k", "--limit", "--device"]);
+const VALUE_FLAGS = new Set(["--source", "--older-than-days", "--kind", "--k", "--limit", "--device", "--owner"]);
 const positional: string[] = [];
 for (let i = 1; i < argv.length; i++) {
   if (VALUE_FLAGS.has(argv[i])) i++;
@@ -203,10 +203,10 @@ async function main(): Promise<void> {
     }
     case "search": {
       const q = positional.join(" ");
-      if (!q) throw new Error("usage: search <query> [--kind photo] [--k 10]");
+      if (!q) throw new Error("usage: search <query> [--kind photo] [--k 10] [--owner michael|gwen]");
       const bank = open();
       try {
-        const hits = await bank.search(q, { k: Number(flag("k") ?? 10), kind: flag("kind") as ItemKind | undefined });
+        const hits = await bank.search(q, { k: Number(flag("k") ?? 10), kind: flag("kind") as ItemKind | undefined, owner: flag("owner") });
         for (const h of hits) console.log(`${h.score.toFixed(3)}  [${h.kind}] ${h.path || h.title}  (${h.via})\n    ${h.snippet.replace(/\s+/g, " ").slice(0, 140)}`);
       } finally {
         bank.close();

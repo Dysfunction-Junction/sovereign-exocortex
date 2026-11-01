@@ -1,0 +1,16 @@
+{
+  "credential_items": 0,
+  "credential_chunks": 0,
+  "orphan_vectors": 0,
+  "credential_fts_matches": 2,
+  "gwen_records": 349,
+  "gwen_tagged": 349,
+  "unpartitioned_messenger": 0,
+  "default_gwen_hits": 0,
+  "explicit_gwen_hits": 10,
+  "explicit_only_gwen": true,
+  "source_only_gwen_hits": 0,
+  "http_checks_seconds": 25.45,
+  "verified_at": "2026-11-01T09:26:30Z",
+  "passed": true
+}

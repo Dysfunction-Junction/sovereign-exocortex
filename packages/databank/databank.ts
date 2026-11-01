@@ -56,6 +56,8 @@ export interface IngestResult {
 }
 
 export interface SearchOptions {
+  /** Retrieval partition, default Michael; legacy unowned records belong to Michael. */
+  owner?: string;
   k?: number;
   kind?: ItemKind;
   source?: string;
@@ -338,10 +340,12 @@ export class Databank {
   // ---------------------------------------------------------------- search
 
   async search(query: string, o: SearchOptions = {}): Promise<SearchHit[]> {
+    if (o.owner !== undefined && (typeof o.owner !== 'string' || !o.owner.trim() || o.owner.length > 100)) {
+      throw new Error('invalid owner');
+    }
+    o = { ...o, owner: o.owner?.trim().toLowerCase() ?? 'michael' };
     const k = Math.max(1, Math.min(o.k ?? 10, 100));
     const minCosine = o.minCosine ?? 0.3;
-    const allowed = this.allowedChunks(o);
-
     const fts = this.ftsCandidates(query, o);
     let vec: Array<{ chunkId: number; cosine: number }> = [];
     const embedder = this.opts.embedder ?? null;
@@ -351,7 +355,7 @@ export class Databank {
       if (unit) {
         const index = this.vectorIndex(embedder.model);
         if (index && index.dim === unit.length) {
-          vec = index.top(unit, CANDIDATES, allowed ?? undefined).filter((v) => v.cosine >= minCosine);
+          vec = index.top(unit, CANDIDATES, this.allowedChunks(o)).filter((v) => v.cosine >= minCosine);
         }
       }
     }
@@ -417,8 +421,14 @@ export class Databank {
   }
 
   private filterSql(o: SearchOptions): { where: string; args: Array<string | number> } {
-    const parts: string[] = [];
-    const args: Array<string | number> = [];
+    // Apply before both FTS ranking and vector top-k. Source/tier guards also cover
+    // older Gwen records whose owner metadata has not yet been backfilled.
+    const parts: string[] = [`(CASE WHEN json_valid(i.meta) THEN
+      CASE WHEN i.source = 'gwen-messenger' OR i.tier = 'gwen-knowledge-base'
+        OR json_extract(i.meta, '$.tier') = 'gwen-knowledge-base' THEN 'gwen'
+        ELSE COALESCE(NULLIF(json_extract(i.meta, '$.owner'), ''), 'michael') END
+      ELSE NULL END) = ?`];
+    const args: Array<string | number> = [o.owner ?? 'michael'];
     if (o.kind) (parts.push("i.kind = ?"), args.push(o.kind));
     if (o.source) (parts.push("i.source = ?"), args.push(o.source));
     if (o.since !== undefined) (parts.push("i.ts >= ?"), args.push(o.since));
@@ -426,9 +436,8 @@ export class Databank {
     return { where: parts.length ? "AND " + parts.join(" AND ") : "", args };
   }
 
-  /** Chunk IDs permitted by the filters, or null when unfiltered. */
-  private allowedChunks(o: SearchOptions): Set<number> | null {
-    if (!o.kind && !o.source && o.since === undefined && o.until === undefined) return null;
+  /** Chunk IDs permitted by the owner partition and optional filters. */
+  private allowedChunks(o: SearchOptions): Set<number> {
     const { where, args } = this.filterSql(o);
     const rows = this.db
       .prepare(`SELECT c.chunk_id FROM chunks c JOIN items i ON i.item_id = c.item_id WHERE 1=1 ${where}`)

@@ -114,6 +114,43 @@ describe("Databank", () => {
     assert.equal((await bank.search('"hello"'))[0].title, "Quote");
   });
 
+  it("partitions keyword and vector candidates by owner before ranking", async () => {
+    const own = await note("Own", "partitionword shared orchard");
+    const gwen = await note("Gwen", "partitionword shared orchard", { meta: { owner: "gwen" } });
+    await note("Legacy Gwen", "partitionword shared orchard", { source: "gwen-messenger" });
+    await note("Tier Gwen", "partitionword shared orchard", { meta: { tier: "gwen-knowledge-base" } });
+    for (const up of [true, false]) {
+      emb.up = up;
+      assert.deepEqual((await bank.search("partitionword")).map(h => h.itemId), [own.itemId]);
+      const hers = await bank.search("partitionword", { owner: "gwen" });
+      assert.equal(hers.length, 3);
+      assert.ok(hers.some(h => h.itemId === gwen.itemId));
+      assert.deepEqual(await bank.search("partitionword", { source: "gwen-messenger" }), []);
+    }
+    emb.up = true;
+    const [vector] = await emb.embedDocuments(["partitionword shared orchard"]);
+    emb.embedQuery = async () => vector;
+    const semantic = await bank.search("unmatchedqueryterm");
+    assert.deepEqual(semantic.map(h => h.itemId), [own.itemId]);
+    assert.equal(semantic[0].via, "vector");
+    assert.equal((await bank.search("unmatchedqueryterm", { owner: "gwen" })).length, 3);
+  });
+
+  it("keeps Michael candidates when Gwen fills the entire candidate window", async () => {
+    for (let i = 0; i < 55; i++) {
+      await note(`Gwen ${i}`, "windowfixture orchard", { meta: { owner: "gwen" }, storeBlob: false });
+    }
+    const own = await note("Own", "windowfixture orchard");
+    emb.up = false;
+    assert.deepEqual((await bank.search("windowfixture", { k: 1 })).map(h => h.itemId), [own.itemId]);
+    emb.up = true;
+    const [vector] = await emb.embedDocuments(["windowfixture orchard"]);
+    emb.embedQuery = async () => vector;
+    assert.deepEqual((await bank.search("unmatchedqueryterm", { k: 1 })).map(h => h.itemId), [own.itemId]);
+    assert.equal((await bank.search("windowfixture", { owner: " Gwen " })).length, 10);
+    await assert.rejects(bank.search("windowfixture", { owner: " " }), /invalid owner/);
+  });
+
   it("ingests files: media by path words, documents by content, blobs round-trip", async () => {
     const src = mkdtempSync(join(tmpdir(), "dbk-src-"));
     mkdirSync(join(src, "Vacation 2019", "Beach"), { recursive: true });
