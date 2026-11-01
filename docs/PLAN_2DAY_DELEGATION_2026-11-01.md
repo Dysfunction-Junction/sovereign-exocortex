@@ -9,7 +9,14 @@ Claude is at 8% weekly usage. From here: Claude writes specs and verifies result
 ### T0 — Ingest Downloads batch into live databank
 - **Owner:** agy (Claude is offline until Wed 2026-11-04 06:00 CST — do not wait on Claude).
 - **State as of handoff:** transfer to `michael@100.69.94.119:/home/michael/staging/downloads_ingest_2026-11-01/` is COMPLETE — verified `find <dir> -type f | wc -l` = 320/320. Only the `ingest-dir` run itself remains.
-- **Lubuntu has no repo checkout** — only `/opt/databank/databank.mjs`, a built bundle. Before assuming `ingest-dir` is runnable there: `systemctl cat databank.service` to see what command/env it actually runs, and check whether the bundle exposes an `ingest-dir`-equivalent CLI path or whether this needs to run from a dev checkout with `DATABANK_ROOT`/`DATABANK_KEY_FILE` pointed at the live vault instead.
+- **Correction — a dev checkout does exist:** `/home/michael/repos/sovereign-exocortex`, with `node_modules/.bin/tsx` present. It's currently 4 commits behind origin (stale at `96b9612`, missing the sensitivity-tier work) — `git pull` there first, before running anything, or `cli.ts` won't match what's actually deployed.
+- **Exact run sequence (verified 2026-11-01):**
+  1. `ssh michael@100.69.94.119`
+  2. `cd /home/michael/repos/sovereign-exocortex && git pull`
+  3. `set -a && source /etc/databank.env && set +a` (loads `DATABANK_ROOT`/`DATABANK_KEY_FILE` from the same env file `databank.service` uses)
+  4. Take a backup first (see Safety below)
+  5. `node_modules/.bin/tsx packages/databank/cli.ts ingest-dir /home/michael/staging/downloads_ingest_2026-11-01 --source downloads-2026-11-01`
+  6. `node_modules/.bin/tsx packages/databank/cli.ts stats` to verify
 - **Verified, not a risk:** `classifySensitivity()` is already called inside the ingest path (`databank.ts:291`), so this batch gets sensitivity-classified at ingest time, same as any other ingest — no separate reclassification step needed.
 - **Safety:** use `--source downloads-2026-11-01` so this batch is identifiable/reversible later. Take a `VACUUM INTO` backup immediately before running (same pattern as the sensitivity migration).
 - **Done when:** ingest reports `newItems` ≈ 320 minus duplicates already in the vault, `failed` empty or explained, `stats` shows item count above 5,669 (confirm actual pre-ingest count first — it may already differ from the 5,669 snapshot in HERMES_HANDOFF_2026-11-01_PHASE2.md since the sensitivity migration and any other work since then).
