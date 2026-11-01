@@ -8,7 +8,7 @@
  *   EXOCORTEX_EMBED_URL embedder (default llama.cpp http://127.0.0.1:8081; EXOCORTEX_EMBED_BACKEND=ollama uses OLLAMA_URL); EXOCORTEX_EMBEDDINGS=0 disables
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 import { LocalEmbedder } from "@exocortex/memory/embeddings";
 import { Databank, type Embedder, type TextInput } from "./databank.js";
@@ -21,10 +21,11 @@ import { parseJoinSmsPath } from "./parsers/join-sms.js";
 import { parseHealthConnectPath } from "./parsers/health-connect.js";
 import { parseContactsPath } from "./parsers/contacts.js";
 import { parseFiHistoryPath, normalizePhoneNumber } from "./parsers/fi-history.js";
+import { PeopleResolver } from "./people-resolver.js";
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
-const VALUE_FLAGS = new Set(["--source", "--older-than-days", "--kind", "--k", "--limit", "--device", "--owner"]);
+const VALUE_FLAGS = new Set(["--source", "--older-than-days", "--kind", "--k", "--limit", "--device", "--owner", "--seed", "--out"]);
 const positional: string[] = [];
 for (let i = 1; i < argv.length; i++) {
   if (VALUE_FLAGS.has(argv[i])) i++;
@@ -252,8 +253,148 @@ async function main(): Promise<void> {
       createDatabankServer(bank, { token }).listen(port, host, () => console.log(`databank listening on ${host}:${port}`));
       return;
     }
+    case "resolve-people": {
+      const explicitSeed = flag("seed");
+      const seedFile = explicitSeed ?? process.env.PEOPLE_SEED_FILE;
+      if (explicitSeed && !existsSync(explicitSeed)) {
+        throw new Error(`Explicit seed file not found: ${explicitSeed}`);
+      }
+      const outFile = flag("out");
+      if (outFile) {
+        const normalized = outFile.replace(/\\/g, "/");
+        if (normalized.includes("/projects/") || normalized.includes("/.git/")) {
+          throw new Error(`Refusing to write unencrypted people graph inside repository path: ${outFile}`);
+        }
+      }
+      const ownerId = flag("owner") ?? process.env.OWNER_ID ?? "person_michael";
+      const resolver = seedFile && existsSync(seedFile) ? PeopleResolver.fromFile(seedFile) : new PeopleResolver();
+      const bank = open();
+
+      const str = (v: unknown): string | undefined =>
+        typeof v === "string" && v.trim() ? v.trim() : undefined;
+
+      const toMs = (n: unknown): number | undefined =>
+        typeof n === "number" && Number.isFinite(n) && n > 0
+          ? (n < 1e11 ? n * 1000 : n)
+          : undefined;
+
+      try {
+        const sources = ["contacts", "cube-acr-calls", "google-fi", "gwen-messenger", "sms", "join-sms"];
+        let totalItems = 0;
+        let badMeta = 0;
+        let skippedEmpty = 0;
+        const perSourceCount: Record<string, number> = {};
+
+        for (const src of sources) {
+          const rows = bank.getItemsBySource(src);
+          perSourceCount[src] = rows.length;
+          totalItems += rows.length;
+
+          for (const r of rows) {
+            let m: Record<string, unknown> = {};
+            try {
+              const parsed = JSON.parse(r.meta || "{}");
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                m = parsed as Record<string, unknown>;
+              } else {
+                badMeta++;
+              }
+            } catch {
+              badMeta++;
+            }
+
+            let name = str(m.name) || str(m.contact);
+            if (!name && src === "contacts") {
+              name = str(r.title);
+            }
+
+            const phones: string[] = [];
+            const extractPhone = (val: unknown) => {
+              if (typeof val === "string") {
+                const s = str(val);
+                if (s) phones.push(s);
+              } else if (val && typeof val === "object") {
+                const s = str((val as Record<string, unknown>).number);
+                if (s) phones.push(s);
+              }
+            };
+
+            if (Array.isArray(m.phones)) m.phones.forEach(extractPhone);
+            if (Array.isArray(m.phone_numbers)) m.phone_numbers.forEach(extractPhone);
+            if (m.phoneNumber) extractPhone(m.phoneNumber);
+
+            const emails: string[] = [];
+            const extractEmail = (val: unknown) => {
+              if (typeof val === "string") {
+                const s = str(val);
+                if (s) emails.push(s);
+              } else if (val && typeof val === "object") {
+                const s = str((val as Record<string, unknown>).address);
+                if (s) emails.push(s);
+              }
+            };
+            if (Array.isArray(m.emails)) m.emails.forEach(extractEmail);
+
+            const tags: string[] = [];
+            if (Array.isArray(m.tags)) {
+              for (const t of m.tags) {
+                const st = str(t);
+                if (st) tags.push(st);
+              }
+            }
+
+            if (!name && phones.length === 0 && emails.length === 0) {
+              skippedEmpty++;
+              continue;
+            }
+
+            const rawTs = toMs(m.start_ts_ms) ?? toMs(m.lastTimestamp) ?? toMs(r.ts);
+
+            resolver.ingestRecord({
+              source: src,
+              itemId: r.item_id,
+              name,
+              phones,
+              emails,
+              account: str(m.account),
+              timestamp: rawTs,
+              tags,
+            });
+          }
+        }
+
+        const people = resolver.getAllPeople();
+        const { entities, edges } = resolver.toGraphEntitiesAndEdges(ownerId);
+        const ledgerEvents = resolver.toLedgerEvents(ownerId);
+
+        const summary = {
+          totalItemsProcessed: totalItems,
+          perSourceCount,
+          badMeta,
+          skippedEmpty,
+          canonicalPeopleCount: people.length,
+          graphEntitiesCount: entities.length,
+          graphEdgesCount: edges.length,
+          ledgerEventsCount: ledgerEvents.length,
+          staffCount: people.filter((p) => p.tags.includes("oakridge-staff")).length,
+        };
+
+        console.log(JSON.stringify(summary, null, 2));
+
+        if (outFile) {
+          mkdirSync(dirname(outFile), { recursive: true });
+          const tmpFile = `${outFile}.tmp.${Date.now()}`;
+          writeFileSync(tmpFile, JSON.stringify({ people, entities, edges, ledgerEvents }, null, 2), "utf8");
+          renameSync(tmpFile, outFile);
+          console.error(`[PeopleResolver] Saved people graph atomically to ${outFile}`);
+        }
+      } finally {
+        bank.close();
+      }
+      return;
+    }
     default:
-      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | ingest-takeout <path> [--device <dev>] | ingest-sms <path> [--device <dev>] | ingest-health <path> [--device <dev>] | ingest-contacts <path> | archive-memories <file> --older-than-days N | search <q> | reindex | stats | verify [--limit N] | serve");
+      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | ingest-takeout <path> [--device <dev>] | ingest-sms <path> [--device <dev>] | ingest-health <path> [--device <dev>] | ingest-contacts <path> | archive-memories <file> --older-than-days N | search <q> | reindex | stats | verify [--limit N] | resolve-people [--seed <file>] [--out <file>] | serve");
       process.exitCode = cmd ? 2 : 0;
   }
 }
