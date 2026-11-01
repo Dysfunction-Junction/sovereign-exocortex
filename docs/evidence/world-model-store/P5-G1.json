@@ -1,0 +1,34 @@
+{
+  "gate": "P5-G1",
+  "git_sha": "b44e7db188ed04fec7b2319bc62819f44b340d80",
+  "command": "pnpm --filter @exocortex/memory test",
+  "ran_at": "2026-11-01T04:10:42.000Z",
+  "host_state": {
+    "commit_used_gb": 28.77,
+    "llama_server_running": true,
+    "llama_server_processes": 3
+  },
+  "measured": {
+    "aura_probe": {
+      "status": "not_found",
+      "error_code": "ENOTFOUND"
+    },
+    "local_export": {
+      "sha256": "4d246db9cb6a2b6eccaf2429210e93ce0433f2dafc8f6de1dcfd536bede4b040",
+      "bytes": 5834215,
+      "nodes": 7662,
+      "relationships": 7534
+    },
+    "network_isolated_test": {
+      "fetch_throws": true,
+      "search_passed": true,
+      "latency_ms": 46.07
+    }
+  },
+  "threshold": {
+    "export_bytes_max": 20971520,
+    "network_calls_allowed": 0
+  },
+  "pass": true,
+  "notes": "Aura instance confirmed retired (ENOTFOUND). Local PiecesRecord graph exported to cold file under 20 MB cap. Network path completely removed from GraphClient (strict allowlist node:crypto, node:fs, node:sqlite). Gateway memory.search passed with globalThis.fetch throwing unconditionally."
+}

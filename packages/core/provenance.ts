@@ -138,6 +138,9 @@ export function provenanceOf(event: ProvenanceEvent, opts: ProvenanceOptions = {
       return result("derived", source ? `vision_observation:${source}` : "vision_observation");
     case "curation_import":
       if (!isHostDevice(event.device_id)) return result("unclassified", "curation_import:off-host");
+      if (payload.media_type === "application/vnd.exocortex.pieces-graph+json") {
+        return result("derived", "curation_import:pieces-graph", { imported: true, untrusted: true });
+      }
       return typeof payload.rule_source === "string"
         ? result("derived", "curation_import:rule-links")
         : result("user_label", "curation_import:vocabulary", { attested: true });

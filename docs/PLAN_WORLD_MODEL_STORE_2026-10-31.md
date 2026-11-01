@@ -1,13 +1,14 @@
 # World-Model Store Plan: Retire Neo4j, Rebuild the Graph from the Ledger
 
 **Status:** Direction approved by the user on 2026-10-31 (decisions in §1). The gate thresholds in §9 are frozen. Only a dated planner amendment can change them.
-**Progress (2026-10-31, updated 18:32 CDT):**
+**Progress (2026-10-31, updated 23:15 CDT):**
 - **Phase 0 (`P0-G1`..`P0-G5`):** DONE — cold backups & isolated Neo4j inventory completed (`docs/evidence/world-model-store/P0-G1.json`..`P0-G5.json`); P0-4 merged to `main` as `bc9b139` ([PR #77](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/77)); P0-5 doc/spec corrections merged as `3171837` ([PR #78](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/78)).
 - **Phase 1 (`P1-G1`..`P1-G5`):** DONE & MERGED — provenance registry, append-only `artifacts` table, curation artifact builders, and unified `projectEventToGraph` projector merged to `main` as `738314c` ([PR #79](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/79)).
 - **Phase 2 (`P2-G1`..`P2-G5`):** DONE & MERGED — `GraphStore` port, `InMemoryGraphStore`, and `VocabularyIndex` merged to `main` ([PR #81](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/81)); all 5 gates passed with 3 `llama-server` processes running (`317 ms` 1x / `3,325 ms` 10x boot replay, `<= 13.33 ms` p95 port latency, `+50.43 MB` RSS delta at 10x, 1:1 curated parity, identical `taskkill /F` dump SHA-256). No §5.3 escalation required.
 - **Phase 3.2 (Living Brain mobile cutover):** DONE & MERGED — `LivingBrain.tsx` and `api.ts` cut over to `/v3/world-model/graph/*` (404-only fallback to `/neo4j/*`), Cypher box removed, and user-facing `Neo4j` labels renamed to `Graph` as `28047bd` ([PR #80](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/80)).
-- **Phase 3.1 & 3.3 (Daemon route cutover, Neo4j sync removal & `curation-import` CLI):** IMPLEMENTED & TRIAD-REVIEWED on `feat/world-model-store-p3` — revert tag `pre-world-model-store-cutover` pushed at `28047bd`; `/v3/world-model/{graph,neo4j}/*` wired to `GraphStore` (`400` on `cypher`, `503` when `!graphServing`); `Neo4jSyncService` startup/pulse sync removed from `server.ts`; `curation-import` CLI verified against P0-3 export; `pnpm typecheck` 0 errors.
-- **Remaining:** Merge Phase 3.1/3.3 (`P3-G2`), run live curation import + `SM-S948U1` smoke test (`P3-G1`), execute Phase 5 read-only Aura export + user-confirmed credential removal (`P5-G1`), 3-day soak (`P3-G3`), rollback drill (`P3-G4`), and 30-day local Neo4j retirement (`P4-G1`).
+- **Phase 3.1 & 3.3 (Daemon route cutover, Neo4j sync removal & `curation-import` CLI):** DONE & MERGED — revert tag `pre-world-model-store-cutover` pushed at `28047bd`; merged to `main` as `4d8938f` ([PR #82](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/82)); `P3-G2` passed.
+- **Phase 5 (`P5-G1`):** DONE — read-only Aura probe confirmed instance retired (`ENOTFOUND`), cold canonical `pieces-graph` artifact exported (5.83 MB, 7,662 nodes, 7,534 relationships), network egress completely removed from `GraphClient`, `memory.search` verified with `globalThis.fetch` throwing unconditionally (`docs/evidence/world-model-store/P5-G1.json`).
+- **Remaining:** Live daemon cutover and `curation-import --apply` on `%LOCALAPPDATA%\exocortex.db`, `SM-S948U1` smoke test (`P3-G1`), user-confirmed credential removal (`packages/memory/.env`), 3-day soak (`P3-G3`), rollback drill (`P3-G4`), and 30-day local Neo4j retirement (`P4-G1`).
 **Supersedes:**
 - `cortex_serverless_embedded_graph_plan.md` (Antigravity brain, 2026-10-31).
 - The `graph_store_transition` (GS-1) entry in `docs/SOVEREIGN_EXOCORTEX_SPEC.json`.
@@ -403,12 +404,12 @@ Gate: P5-G1.
 | P0-G1..P0-G5 | PASS | `docs/evidence/world-model-store/P0-G1.json`..`P0-G5.json`, [PR #77](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/77) (`bc9b139`), [PR #78](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/78) (`3171837`) |
 | P1-G1..P1-G5 | PASS | `docs/evidence/world-model-store/P1-G1.json`..`P1-G5.json`, [PR #79](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/79) (`738314c`) |
 | P2-G1..P2-G5 | PASS | `docs/evidence/world-model-store/P2-G1.json`..`P2-G5.json`, [PR #81](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/81) |
-| P3-G2 | READY | `feat/world-model-store-p3` (`pnpm typecheck` 0 errors; Phase 3 suites 19/19 pass; revert tag `pre-world-model-store-cutover` at `28047bd`; mobile 3.2 merged in [PR #80](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/80)) |
+| P3-G2 | PASS | `docs/evidence/world-model-store/P3-G2.json`, [PR #82](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/82) (`4d8938f`) |
 | P3-G1 | PENDING | Smoke test on `SM-S948U1` after PR #82 merge + live `curation-import --apply` |
 | P3-G3 | PENDING | 3-day daemon soak post-cutover |
 | P3-G4 | PENDING | Rollback drill (`pre-world-model-store-cutover` + P0-2 copy) |
 | P4-G1 | PENDING | After P3-G3, P3-G4, 30-day retention window, and explicit user confirmation (S4) |
-| P5-G1 | PENDING | Read-only Aura `PiecesRecord` export + local `GraphClient` fallback + user-confirmed credential removal (S4) |
+| P5-G1 | PASS | `docs/evidence/world-model-store/P5-G1.json`, PR #83 (Aura ENOTFOUND, pieces-graph artifact export 5.83 MB, 7,662 nodes, 7,534 relations, zero-network memory.search test pass) |
 
 ## 10. Evidence files
 
