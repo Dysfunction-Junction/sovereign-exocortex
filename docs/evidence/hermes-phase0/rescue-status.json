@@ -1,0 +1,10 @@
+{
+  "started_at": "2026-11-01T09:37:16Z",
+  "stage": "encrypted_mirror_copy",
+  "updated_at": "2026-11-01T09:46:57Z",
+  "files": 14320,
+  "bytes": 160305226262,
+  "symlinks": 0,
+  "sha256_samples": 32,
+  "manifest_sample_matches": 0
+}

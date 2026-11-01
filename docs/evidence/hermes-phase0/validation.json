@@ -1,15 +1,16 @@
 {
-  "verified_at": "2026-11-01T09:38:48Z",
+  "verified_at": "2026-11-01T09:49:36Z",
   "databank_tests": {
-    "passed": 77,
+    "passed": 78,
     "failed": 0
   },
   "package_typecheck": "pass",
   "workspace_typecheck": "pass",
   "bundle": "pass",
-  "deployed_bundle_sha256": "4128395f24eb0e68a27b8e627fb4c8fbb3ecb91265196745a40bb6942e76dfee",
+  "deployed_bundle_sha256": "e3e863e51028ab1ddde221dac1e583dfeb588c1a1b0eadaa59c7f95e384f29c6",
   "python_compile": "pass",
-  "source_destination_verification": "pending",
-  "encrypted_archive_mirror": "pending",
-  "recovery_probe": "pass"
+  "source_destination_verification": "pass_inventory_and_32_sha256_samples",
+  "encrypted_archive_mirror": "running_not_verified",
+  "recovery_probe": "pass",
+  "historical_manifest_comparison": "unavailable_no_oldpc_entries"
 }

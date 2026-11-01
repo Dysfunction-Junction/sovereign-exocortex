@@ -373,12 +373,13 @@ export class Databank {
     if (scores.size === 0) return [];
 
     const ids = [...scores.keys()];
+    const { where, args } = this.filterSql(o);
     const rows = this.db
       .prepare(
         `SELECT c.chunk_id, c.text, i.* FROM chunks c JOIN items i ON i.item_id = c.item_id
-          WHERE c.chunk_id IN (${ids.map(() => "?").join(",")})`,
+          WHERE c.chunk_id IN (${ids.map(() => "?").join(",")}) ${where}`,
       )
-      .all(...ids) as Row[];
+      .all(...ids, ...args) as Row[];
 
     const best = new Map<string, SearchHit>();
     for (const r of rows) {

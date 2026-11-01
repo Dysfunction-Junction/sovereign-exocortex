@@ -10,7 +10,7 @@
   "explicit_gwen_hits": 10,
   "explicit_only_gwen": true,
   "source_only_gwen_hits": 0,
-  "http_checks_seconds": 25.45,
-  "verified_at": "2026-11-01T09:26:30Z",
+  "http_checks_seconds": 1.84,
+  "verified_at": "2026-11-01T09:46:57Z",
   "passed": true
 }

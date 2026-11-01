@@ -151,6 +151,19 @@ describe("Databank", () => {
     await assert.rejects(bank.search("windowfixture", { owner: " " }), /invalid owner/);
   });
 
+  it("rechecks ownership if it changes while query embedding is in flight", async () => {
+    const own = await note("Reassigned", "reassignmentfixture orchard");
+    assert.equal((await bank.search("reassignmentfixture"))[0].itemId, own.itemId);
+    emb.embedQuery = async () => {
+      const raw = new DatabaseSync(join(root, "index", "databank.db"));
+      raw.prepare("UPDATE items SET meta = ? WHERE item_id = ?").run(JSON.stringify({ owner: "gwen" }), own.itemId);
+      raw.close();
+      return null;
+    };
+    assert.deepEqual(await bank.search("reassignmentfixture"), []);
+    assert.equal((await bank.search("reassignmentfixture", { owner: "gwen" }))[0].itemId, own.itemId);
+  });
+
   it("ingests files: media by path words, documents by content, blobs round-trip", async () => {
     const src = mkdtempSync(join(tmpdir(), "dbk-src-"));
     mkdirSync(join(src, "Vacation 2019", "Beach"), { recursive: true });

@@ -1,6 +1,6 @@
 # Hermes Phase 0 execution — 2026-11-01
 
-Status: retrieval protection verified; old-PC rescue and encrypted mirror running.
+Status: local rescue and retrieval protection verified; encrypted Drive mirror running, verification pending.
 
 ## Password quarantine: verified
 
@@ -25,11 +25,20 @@ The existing Pieces-for-All archive client sends `{q,k}` to `/search`, so its de
 
 Deployment: both `/home/michael/databank.mjs` and `/opt/databank/databank.mjs` on `michael@100.69.94.119`; prior bundles retained as `databank.pre-phase0.mjs`. The systemd Databank service was started after reboot and is listening on `127.0.0.1:8790`.
 
-Live HTTP verification: zero Gwen records in default results, zero when only `source: "gwen-messenger"` is specified, and 10 Gwen records when `owner: "gwen"` is explicit. Only aggregate results were retained.
+Live HTTP verification: zero Gwen records in default results, zero when only `source: "gwen-messenger"` is specified, and 10 Gwen records when `owner: "gwen"` is explicit. Only aggregate results were retained. A repeat probe timed out during heavy rescue I/O; the final probe after the copy passed in 1.84 seconds.
 
-Validation: 77 Databank tests pass, package TypeScript checks and bundle pass, workspace `pnpm typecheck` passes. Tests cover FTS, vector-only, the 50-candidate cutoff, and HTTP owner handling. Advisor review found no blocking issue after revision; schema and vector sentinel assumptions were checked against source.
+Validation: 78 Databank tests pass, package TypeScript checks and bundle pass, workspace `pnpm typecheck` passes. Tests cover FTS, vector-only, the 50-candidate cutoff, HTTP owner handling, and reassignment while embedding is in flight. Final hydration rechecks the partition after the asynchronous query-embedding call. Advisor review found no blocking issue after revision; schema and vector sentinel assumptions were checked against source.
 
 ## Old-PC rescue and encrypted off-site mirror
+
+Local rescue completed and passed the final incremental rsync, inventory comparison, and sampled hashes:
+
+- 14,320 regular files; 160,305,226,262 bytes; zero symlinks; original rsync reported 424 directories.
+- All source/destination paths and sizes agree; all 32 sampled SHA-256 hashes agree.
+- No old-PC entries exist in the current dedup manifest (20,375 entries in total); zero samples had a historical manifest match. Historical manifest comparison is unavailable, rather than a PASS. No full reread/hash of the degrading source was attempted.
+- Encrypted upload started at `2026-11-01T09:46:57Z`. Its detached rclone process is active. Final per-file cryptcheck is queued after upload and has not passed yet.
+
+Evidence snapshots: [rescue-status.json](evidence/hermes-phase0/rescue-status.json), [manifest-coverage.json](evidence/hermes-phase0/manifest-coverage.json). These are snapshots; the remote JSON below is the live status.
 
 The existing rsync was preserved:
 
