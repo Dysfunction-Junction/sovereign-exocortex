@@ -87,7 +87,7 @@ export const SENSORS: SensorInfo[] = [
 
 export interface TypedTextInfo { key: "typed_text"; title: string; copy: string }
 
-/** Shown in its own Setup section, not in the sensor list. The summarizer is a bundled on-device model (decision D1). */
+/** Shown in its own Setup section, not in the sensor list. The summarizer is a bundled on-device Gemma model (decision D1). */
 export const TYPED_TEXT: TypedTextInfo = {
   key: "typed_text",
   title: "Typed-text summaries",

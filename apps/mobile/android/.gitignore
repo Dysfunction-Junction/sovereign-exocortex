@@ -5,6 +5,7 @@
 *.aar
 *.ap_
 *.aab
+*.litertlm
 
 # Files for the ART/Dalvik VM
 *.dex
@@ -21,6 +22,7 @@ out/
 
 # Gradle files
 .gradle/
+.kotlin/
 build/
 
 # Local configuration file (sdk path, etc)

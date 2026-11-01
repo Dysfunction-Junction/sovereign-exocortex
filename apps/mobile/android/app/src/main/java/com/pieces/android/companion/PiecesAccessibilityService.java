@@ -644,12 +644,37 @@ public class PiecesAccessibilityService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         isRunning = true;
+        if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            try {
+                Class.forName("com.pieces.android.companion.SpeechApiSpike")
+                    .getMethod("register", android.content.Context.class).invoke(null, this);
+            } catch (ClassNotFoundException ignored) {
+                // Spike exists only in debug builds.
+            } catch (ReflectiveOperationException e) {
+                android.util.Log.w("SpeechApiSpike", e.getClass().getSimpleName());
+            }
+        }
         initClipboardListener();
         NativeHardwareTelemetry.initSensors(this); // consent-gated
         SensorWindowSampler.start(this);
         MicWindowSampler.start(this);   // consent-gated, runs inside this service (no foreground service)
         PlaceSampler.start(this);       // consent-gated
         TypedTextCapture.start(this);   // consent-gated
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            android.accessibilityservice.AccessibilityButtonController controller = getAccessibilityButtonController();
+            if (controller != null) {
+                controller.registerAccessibilityButtonCallback(new android.accessibilityservice.AccessibilityButtonController.AccessibilityButtonCallback() {
+                    @Override
+                    public void onClicked(android.accessibilityservice.AccessibilityButtonController c) {
+                        if (TypedTextGate.isOn()) {
+                            TypedTextGate.turnOff(PiecesAccessibilityService.this);
+                        } else {
+                            TypedTextGate.turnOn(PiecesAccessibilityService.this);
+                        }
+                    }
+                });
+            }
+        }
         NativeTelemetrySync.warmUpDatabaseAsync(this);
         NativeTelemetrySync.flushAsync(this);
         syncHandler.postDelayed(periodicSyncRunnable, PERIODIC_SYNC_INTERVAL_MS);
