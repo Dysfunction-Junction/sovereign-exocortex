@@ -1,0 +1,42 @@
+{
+  "environment": "synthetic-only",
+  "from": 2,
+  "to": 3,
+  "classifier": "rule-only-names-source-path",
+  "timestamp": "2026-11-01T17:56:58.284Z",
+  "before": {
+    "items": 6,
+    "chunks": 6,
+    "vectors": 0,
+    "ingest_log": 0
+  },
+  "after": {
+    "items": 6,
+    "chunks": 6,
+    "vectors": 0,
+    "ingest_log": 0
+  },
+  "byRule": {
+    "credentials": 1,
+    "tax-return": 1,
+    "ssn-ein": 1,
+    "gwen-messenger": 1,
+    "child-collection": 1,
+    "default": 1
+  },
+  "bySensitivity": {
+    "secret": 3,
+    "private": 1,
+    "child": 1,
+    "personal": 1
+  },
+  "classifiedByRule": 5,
+  "leftAtDefault": 1,
+  "backupCreated": true,
+  "redFlagMatches": {
+    "1040": 0,
+    "password": 0,
+    "ssn": 0
+  },
+  "liveIndexVerified": false
+}

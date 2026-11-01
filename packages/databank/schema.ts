@@ -4,8 +4,9 @@
  */
 
 import { ITEM_KINDS } from "./text.js";
+import { SENSITIVITY_SQL } from "./sensitivity.js";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const KINDS_SQL = ITEM_KINDS.map((k) => `'${k}'`).join(",");
 
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS items (
   blob_id     TEXT,
   meta        TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta)),
   tier        TEXT NOT NULL DEFAULT 'archived' CHECK (tier IN ('hot','archived')),
+  sensitivity TEXT NOT NULL DEFAULT 'personal' CHECK (sensitivity IN (${SENSITIVITY_SQL})),
   ingested_at INTEGER NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS items_kind_ts ON items(kind, ts);

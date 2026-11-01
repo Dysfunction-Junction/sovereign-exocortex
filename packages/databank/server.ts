@@ -18,6 +18,7 @@ import type { Databank, ItemKind } from "./databank.js";
 import { UI_HTML } from "./ui.js";
 
 import { ITEM_KINDS } from "./text.js";
+import { isSensitivity, type Sensitivity } from "./sensitivity.js";
 
 const KINDS = new Set<string>(ITEM_KINDS);
 const MAX_BODY = 4 * 1024 * 1024;
@@ -70,11 +71,21 @@ async function handle(bank: Databank, req: IncomingMessage, res: ServerResponse,
     if (b.owner !== undefined && (typeof b.owner !== "string" || !b.owner.trim() || b.owner.length > 100)) {
       return json(res, 400, { error: "invalid owner" });
     }
+    if (b.minSensitivity !== undefined || (b.maxSensitivity !== undefined &&
+        (typeof b.maxSensitivity !== "string" || !["public", "personal", "private"].includes(b.maxSensitivity)))) {
+      return json(res, 400, { error: "invalid sensitivity clearance" });
+    }
+    if ([b.includeClinical, b.includeChild].some(flag => flag !== undefined && typeof flag !== "boolean")) {
+      return json(res, 400, { error: "invalid sensitivity flag" });
+    }
     const hits = await bank.search(b.q, {
       k: typeof b.k === "number" ? b.k : undefined,
       kind: b.kind as ItemKind | undefined,
       source: typeof b.source === "string" ? b.source : undefined,
       owner: typeof b.owner === "string" ? b.owner.trim().toLowerCase() : undefined,
+      maxSensitivity: b.maxSensitivity as "public" | "personal" | "private" | undefined,
+      includeClinical: b.includeClinical as boolean | undefined,
+      includeChild: b.includeChild as boolean | undefined,
       since: typeof b.since === "number" ? b.since : undefined,
       until: typeof b.until === "number" ? b.until : undefined,
     });
@@ -103,11 +114,16 @@ async function handle(bank: Databank, req: IncomingMessage, res: ServerResponse,
     if (!b || typeof b.source !== "string" || typeof b.title !== "string" || typeof b.text !== "string" || !KINDS.has(String(b.kind))) {
       return json(res, 400, { error: "source, kind, title, text required" });
     }
+    if ((b.sensitivity !== undefined && !isSensitivity(b.sensitivity)) ||
+        (b.meta && typeof b.meta === "object" && "sensitivity" in b.meta && !isSensitivity(b.meta.sensitivity))) {
+      return json(res, 400, { error: "invalid sensitivity" });
+    }
     const r = await bank.ingestText({
       source: b.source,
       kind: b.kind as ItemKind,
       title: b.title,
       text: b.text,
+      sensitivity: b.sensitivity as Sensitivity | undefined,
       path: typeof b.path === "string" ? b.path : undefined,
       ts: typeof b.ts === "number" ? b.ts : undefined,
       meta: b.meta && typeof b.meta === "object" && !Array.isArray(b.meta) ? (b.meta as Record<string, unknown>) : undefined,

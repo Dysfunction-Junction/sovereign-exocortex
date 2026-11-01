@@ -86,7 +86,8 @@ describe("databank server", () => {
     };
     assert.equal((await search({})).hits.length, 0);
     assert.equal((await search({ source: "gwen-messenger" })).hits.length, 0);
-    assert.equal((await search({ owner: "gwen" })).hits.length, 1);
+    assert.equal((await search({ owner: "gwen" })).hits.length, 0);
+    assert.equal((await search({ owner: "gwen", maxSensitivity: "private" })).hits.length, 1);
     for (const owner of ["", 123, {}, " "]) {
       assert.equal((await call("/search", { method: "POST", body: JSON.stringify({ q: "x", owner }) })).status, 400);
     }
@@ -96,6 +97,30 @@ describe("databank server", () => {
     const h = (await (await call("/health")).json()) as { ok: boolean; items: number };
     assert.equal(h.ok, true);
     assert.ok(h.items >= 1);
+  });
+
+  it("enforces sensitivity defaults and independent flags over HTTP", async () => {
+    for (const sensitivity of ["personal", "private", "secret", "clinical", "child"]) {
+      const put = await call("/ingest/text", { method: "POST", body: JSON.stringify({
+        source: "fixture", kind: "memory", title: `Audience ${sensitivity}`, text: "httpaudiencefixture", sensitivity,
+      }) });
+      assert.equal(put.status, 200);
+    }
+    const search = async (options: Record<string, unknown>) => {
+      const res = await call("/search", { method: "POST", body: JSON.stringify({ q: "httpaudiencefixture", ...options }) });
+      assert.equal(res.status, 200);
+      return ((await res.json()) as { hits: Array<{ title: string }> }).hits.map(h => h.title).sort();
+    };
+    assert.deepEqual(await search({}), ["Audience personal"]);
+    assert.deepEqual(await search({ includeClinical: true }), ["Audience clinical", "Audience personal"]);
+    assert.deepEqual(await search({ includeChild: true }), ["Audience child", "Audience personal"]);
+    assert.deepEqual(await search({ maxSensitivity: "private" }), ["Audience personal", "Audience private"]);
+    for (const options of [{ maxSensitivity: "secret" }, { maxSensitivity: ["private"] }, { minSensitivity: "public" }, { includeClinical: "true" }, { includeChild: 1 }]) {
+      assert.equal((await call("/search", { method: "POST", body: JSON.stringify({ q: "x", ...options }) })).status, 400);
+    }
+    assert.equal((await call("/ingest/text", { method: "POST", body: JSON.stringify({
+      source: "fixture", kind: "memory", title: "Fixture", text: "body", sensitivity: "invalid",
+    }) })).status, 400);
   });
 
   it("serves the search UI without a token but nothing else", async () => {

@@ -13,6 +13,9 @@ import { DatabaseSync } from "node:sqlite";
 import { BlobStore } from "./blobstore.js";
 import { DatabankKeys } from "./crypto.js";
 import { KINDS_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
+import { classifySensitivity, type Sensitivity } from "./sensitivity.js";
+import { migrateSensitivity } from "./sensitivity-migration.js";
+export { classifySensitivity, type Sensitivity } from "./sensitivity.js";
 import { chunkText, describeFile, extractText, isItemKind, kindOf, mimeOf, type ItemKind } from "./text.js";
 import { VectorIndex, normalize, quantize, type VectorRow } from "./vectors.js";
 
@@ -43,6 +46,7 @@ export interface TextInput {
   ts?: number;
   mime?: string;
   meta?: Record<string, unknown>;
+  sensitivity?: Sensitivity;
   /** Keep the original text as an encrypted blob (default true). */
   storeBlob?: boolean;
 }
@@ -58,6 +62,12 @@ export interface IngestResult {
 export interface SearchOptions {
   /** Retrieval partition, default Michael; legacy unowned records belong to Michael. */
   owner?: string;
+  minSensitivity?: never;
+  /** Base clearance, default personal. Secret is never retrievable by search. */
+  maxSensitivity?: "public" | "personal" | "private";
+  /** Separate audience gates; neither is implied by base clearance. */
+  includeClinical?: boolean;
+  includeChild?: boolean;
   k?: number;
   kind?: ItemKind;
   source?: string;
@@ -92,6 +102,7 @@ export interface ItemRow {
   blob_id: string | null;
   meta: string;
   tier: string;
+  sensitivity: Sensitivity;
   ingested_at: number;
 }
 
@@ -116,7 +127,12 @@ export class Databank {
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA synchronous = FULL;");
     this.db.exec(SCHEMA_SQL);
     this.db.prepare("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)").run(String(SCHEMA_VERSION));
-    this.migrate();
+    try {
+      this.migrate();
+    } catch (err) {
+      this.db.close();
+      throw err;
+    }
     this.blobs = new BlobStore(opts.root, opts.keys);
   }
 
@@ -164,6 +180,10 @@ export class Databank {
         PRAGMA foreign_keys = ON;
       `);
     }
+    if (currentVersion < 3) {
+      const backup = join(this.opts.root, "index", `databank.pre-v3-${Date.now()}.db`);
+      migrateSensitivity(this.db, backup);
+    }
   }
 
   close(): void {
@@ -188,6 +208,7 @@ export class Databank {
       blobId,
       meta: input.meta ?? {},
       text: input.text,
+      sensitivity: input.sensitivity,
     });
   }
 
@@ -262,10 +283,12 @@ export class Databank {
     blobId: string | null;
     meta: Record<string, unknown>;
     text: string;
+    sensitivity?: Sensitivity;
   }): Promise<IngestResult> {
     if (!isItemKind(it.kind)) {
       throw new Error(`invalid item kind: ${it.kind}`);
     }
+    const { sensitivity } = classifySensitivity(it);
     const itemId = createHash("sha256")
       .update(`${it.source}\n${it.path || it.title}\n${it.blobId ?? createHash("sha256").update(it.text).digest("hex")}`)
       .digest("hex")
@@ -285,10 +308,10 @@ export class Databank {
     try {
       this.db
         .prepare(
-          `INSERT INTO items (item_id, source, kind, title, path, mime, size, ts, blob_id, meta, tier, ingested_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?)`,
+          `INSERT INTO items (item_id, source, kind, title, path, mime, size, ts, blob_id, meta, tier, sensitivity, ingested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)`,
         )
-        .run(itemId, it.source, it.kind, it.title, it.path, it.mime, it.size, it.ts, it.blobId, JSON.stringify(it.meta), this.now());
+        .run(itemId, it.source, it.kind, it.title, it.path, it.mime, it.size, it.ts, it.blobId, JSON.stringify(it.meta), sensitivity, this.now());
       const insChunk = this.db.prepare("INSERT INTO chunks (item_id, ord, text) VALUES (?, ?, ?)");
       const insVec = this.db.prepare("INSERT INTO vectors (chunk_id, model, dim, scale, q8) VALUES (?, ?, ?, ?, ?)");
       for (let i = 0; i < chunks.length; i++) {
@@ -344,6 +367,12 @@ export class Databank {
       throw new Error('invalid owner');
     }
     o = { ...o, owner: o.owner?.trim().toLowerCase() ?? 'michael' };
+    if (o.minSensitivity !== undefined || (o.maxSensitivity !== undefined && !["public", "personal", "private"].includes(o.maxSensitivity))) {
+      throw new Error("invalid sensitivity clearance");
+    }
+    for (const flag of [o.includeClinical, o.includeChild]) {
+      if (flag !== undefined && typeof flag !== "boolean") throw new Error("invalid sensitivity flag");
+    }
     const k = Math.max(1, Math.min(o.k ?? 10, 100));
     const minCosine = o.minCosine ?? 0.3;
     const fts = this.ftsCandidates(query, o);
@@ -429,7 +458,12 @@ export class Databank {
         OR json_extract(i.meta, '$.tier') = 'gwen-knowledge-base' THEN 'gwen'
         ELSE COALESCE(NULLIF(json_extract(i.meta, '$.owner'), ''), 'michael') END
       ELSE NULL END) = ?`];
-    const args: Array<string | number> = [o.owner ?? 'michael'];
+    const levels = ["public", "personal", "private"];
+    const allowed = levels.slice(0, levels.indexOf(o.maxSensitivity ?? "personal") + 1);
+    if (o.includeClinical === true) allowed.push("clinical");
+    if (o.includeChild === true) allowed.push("child");
+    parts.push(`i.sensitivity IN (${allowed.map(() => "?").join(",")})`);
+    const args: Array<string | number> = [o.owner ?? 'michael', ...allowed];
     if (o.kind) (parts.push("i.kind = ?"), args.push(o.kind));
     if (o.source) (parts.push("i.source = ?"), args.push(o.source));
     if (o.since !== undefined) (parts.push("i.ts >= ?"), args.push(o.since));
@@ -437,7 +471,7 @@ export class Databank {
     return { where: parts.length ? "AND " + parts.join(" AND ") : "", args };
   }
 
-  /** Chunk IDs permitted by the owner partition and optional filters. */
+  /** Chunk IDs permitted by owner, sensitivity, and optional filters. */
   private allowedChunks(o: SearchOptions): Set<number> {
     const { where, args } = this.filterSql(o);
     const rows = this.db

@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Databank, minMax, type Embedder } from "../databank.js";
+import { Databank, minMax, classifySensitivity, type Sensitivity, type SearchOptions, type Embedder } from "../databank.js";
+import { SCHEMA_SQL } from "../schema.js";
 import { archiveMemories } from "../archive.js";
 import { DatabankKeys } from "../crypto.js";
 import { chunkText } from "../text.js";
@@ -122,7 +123,7 @@ describe("Databank", () => {
     for (const up of [true, false]) {
       emb.up = up;
       assert.deepEqual((await bank.search("partitionword")).map(h => h.itemId), [own.itemId]);
-      const hers = await bank.search("partitionword", { owner: "gwen" });
+      const hers = await bank.search("partitionword", { owner: "gwen", maxSensitivity: "private" });
       assert.equal(hers.length, 3);
       assert.ok(hers.some(h => h.itemId === gwen.itemId));
       assert.deepEqual(await bank.search("partitionword", { source: "gwen-messenger" }), []);
@@ -133,7 +134,7 @@ describe("Databank", () => {
     const semantic = await bank.search("unmatchedqueryterm");
     assert.deepEqual(semantic.map(h => h.itemId), [own.itemId]);
     assert.equal(semantic[0].via, "vector");
-    assert.equal((await bank.search("unmatchedqueryterm", { owner: "gwen" })).length, 3);
+    assert.equal((await bank.search("unmatchedqueryterm", { owner: "gwen", maxSensitivity: "private" })).length, 3);
   });
 
   it("keeps Michael candidates when Gwen fills the entire candidate window", async () => {
@@ -149,6 +150,191 @@ describe("Databank", () => {
     assert.deepEqual((await bank.search("unmatchedqueryterm", { k: 1 })).map(h => h.itemId), [own.itemId]);
     assert.equal((await bank.search("windowfixture", { owner: " Gwen " })).length, 10);
     await assert.rejects(bank.search("windowfixture", { owner: " " }), /invalid owner/);
+  });
+
+  it("enforces every ceiling and independent audience gate in FTS, hybrid and vector-only search", async () => {
+    for (const sensitivity of ["public", "personal", "private", "secret", "clinical", "child"] as Sensitivity[]) {
+      await note(`Fixture ${sensitivity}`, "sensitivityfixture orchard", { sensitivity });
+    }
+    const [vector] = await emb.embedDocuments(["sensitivityfixture orchard"]);
+    const cases: Array<[SearchOptions, Sensitivity[]]> = [
+      [{}, ["public", "personal"]],
+      [{ maxSensitivity: "public" }, ["public"]],
+      [{ maxSensitivity: "private" }, ["public", "personal", "private"]],
+      [{ includeClinical: true }, ["public", "personal", "clinical"]],
+      [{ includeChild: true }, ["public", "personal", "child"]],
+      [{ maxSensitivity: "private", includeClinical: true, includeChild: true }, ["public", "personal", "private", "clinical", "child"]],
+    ];
+    for (const mode of ["fts", "hybrid", "vector"] as const) {
+      emb.up = mode !== "fts";
+      emb.embedQuery = async () => emb.up ? vector : null;
+      for (const [options, expected] of cases) {
+        const hits = await bank.search(mode === "vector" ? "unmatchedqueryterm" : "sensitivityfixture", options);
+        assert.deepEqual(hits.map(h => h.title).sort(), expected.map(s => `Fixture ${s}`).sort(), mode);
+        assert.ok(hits.every(h => h.via === mode));
+      }
+    }
+  });
+
+  it("ANDs owner with private clearance and audience flags", async () => {
+    const gwen = await note("Private fixture", "audiencefixture orchard", { source: "gwen-messenger" });
+    assert.equal(bank.getItem(gwen.itemId)?.sensitivity, "private");
+    const open = { maxSensitivity: "private", includeClinical: true, includeChild: true } as const;
+    assert.deepEqual(await bank.search("audiencefixture", open), []);
+    assert.deepEqual(await bank.search("audiencefixture", { owner: "gwen" }), []);
+    assert.equal((await bank.search("audiencefixture", { ...open, owner: "gwen" }))[0].itemId, gwen.itemId);
+  });
+
+  it("filters restricted items before the FTS and vector candidate windows", async () => {
+    for (let i = 0; i < 55; i++) {
+      await note(`Restricted ${i}`, "clearancewindow orchard", { sensitivity: "secret", storeBlob: false });
+    }
+    const own = await note("Allowed", "clearancewindow orchard");
+    emb.up = false;
+    assert.deepEqual((await bank.search("clearancewindow", { k: 1 })).map(h => h.itemId), [own.itemId]);
+    emb.up = true;
+    const [vector] = await emb.embedDocuments(["clearancewindow orchard"]);
+    emb.embedQuery = async () => vector;
+    assert.deepEqual((await bank.search("unmatchedqueryterm", { k: 1 })).map(h => h.itemId), [own.itemId]);
+  });
+
+  it("rechecks sensitivity when it changes during query embedding", async () => {
+    const own = await note("Changed", "sensitivityrace orchard");
+    emb.embedQuery = async () => {
+      const raw = new DatabaseSync(join(root, "index", "databank.db"));
+      try { raw.prepare("UPDATE items SET sensitivity = 'secret' WHERE item_id = ?").run(own.itemId); }
+      finally { raw.close(); }
+      return null;
+    };
+    assert.deepEqual(await bank.search("sensitivityrace"), []);
+  });
+
+  it("normalizes ingest hints into the column and never reads them as query-time fallbacks", async () => {
+    const hidden = await note("Hint", "hintfixture", { meta: { sensitivity: "private" } });
+    assert.equal(bank.getItem(hidden.itemId)?.sensitivity, "private");
+    assert.deepEqual(await bank.search("hintfixture"), []);
+    const raw = new DatabaseSync(join(root, "index", "databank.db"));
+    try {
+      raw.prepare("UPDATE items SET meta = ? WHERE item_id = ?").run('{"sensitivity":"public"}', hidden.itemId);
+      assert.throws(() => raw.exec("UPDATE items SET sensitivity = 'bogus'"), /CHECK/);
+    } finally { raw.close(); }
+    assert.deepEqual(await bank.search("hintfixture"), []);
+    assert.equal((await bank.search("hintfixture", { maxSensitivity: "private" }))[0].itemId, hidden.itemId);
+    await assert.rejects(note("Bad hint", "body", { meta: { sensitivity: "bogus" } }), /invalid sensitivity/);
+  });
+
+  it("rejects runtime clearance bypasses", async () => {
+    for (const options of [
+      { maxSensitivity: "secret" }, { maxSensitivity: "clinical" }, { maxSensitivity: "bogus" },
+      { minSensitivity: "private" }, { includeClinical: "true" }, { includeChild: 1 },
+    ]) await assert.rejects(bank.search("x", options as unknown as SearchOptions), /invalid sensitivity/);
+  });
+
+  it("classifies text and files before their rows become searchable", async () => {
+    const text = await note("Neutral fixture", "Form W-9 synthetic classificationfixture", { sensitivity: "public" });
+    assert.equal(bank.getItem(text.itemId)?.sensitivity, "secret");
+    const file = join(root, "Google_Passwords.txt");
+    writeFileSync(file, "synthetic classificationfixture");
+    const result = await bank.ingestFile(file, { source: "fixture" });
+    assert.equal(bank.getItem(result.itemId)?.sensitivity, "secret");
+    assert.deepEqual(await bank.search("classificationfixture", {
+      maxSensitivity: "private", includeClinical: true, includeChild: true,
+    }), []);
+  });
+
+  it("classifies the named synthetic rule fixtures and respects priority", () => {
+    const fixtures: Array<[string, Sensitivity]> = [
+      ["Google_Passwords.pdf", "secret"], ["Google_Passwords.xlsx", "secret"],
+      ["passwd.txt", "secret"], ["SSN_scan.pdf", "secret"], ["EIN_notice.pdf", "secret"],
+      ["000-00-0000.txt", "secret"], ["00-0000000.txt", "secret"],
+      ["1040.pdf", "secret"], ["W-2.pdf", "secret"], ["W-9.pdf", "secret"],
+      ["tax-return.pdf", "secret"], ["insurance_card.jpg", "secret"], ["Ordinary journal", "personal"],
+    ];
+    for (const [title, expected] of fixtures) assert.equal(classifySensitivity({ source: "fixture", title }).sensitivity, expected, title);
+    assert.equal(classifySensitivity({ source: "fixture", title: "Scan", text: "Member ID: SYNTHETIC" }).sensitivity, "secret");
+    assert.equal(classifySensitivity({ source: "fixture", title: "Scan", text: "Form W-9" }).sensitivity, "secret");
+    assert.equal(classifySensitivity({ source: "fixture", title: "Scan", path: "archive/passwords/card.pdf" }).sensitivity, "secret");
+    assert.equal(classifySensitivity({ source: "gwen-messenger", title: "Note", meta: { sensitivity: "public" } }).sensitivity, "private");
+    assert.equal(classifySensitivity({ source: "gwen-messenger", title: "passwords" }).sensitivity, "secret");
+    assert.equal(classifySensitivity({ source: "fixture", title: "Session", sensitivity: "clinical" }).sensitivity, "clinical");
+    for (const path of ["Mana/YouTube Kids/history.html", "Mana/School Forms/enrollment.pdf", "Mana\\School Forms\\enrollment.pdf"]) {
+      assert.equal(classifySensitivity({ source: "fixture", title: "Fixture", path }).sensitivity, "child");
+    }
+    for (const source of ["youtube-kids", "mana-youtube-kids", "school-forms"]) {
+      assert.equal(classifySensitivity({ source, title: "Fixture", sensitivity: "public" }).sensitivity, "child");
+    }
+    assert.equal(classifySensitivity({ source: "fixture", title: "Export", sensitivity: "public" }).sensitivity, "public");
+  });
+
+  it("atomically migrates v2, preserves counts and storage tier, backs up, and records evidence", async () => {
+    const legacy = mkdtempSync(join(tmpdir(), "dbk-v2-"));
+    let migrated: Databank | undefined;
+    try {
+      Databank.provision(legacy, "fixture");
+      const dbPath = join(legacy, "index", "databank.db");
+      mkdirSync(join(legacy, "index"));
+      const raw = new DatabaseSync(dbPath);
+      raw.exec(SCHEMA_SQL.replace(/^.*sensitivity TEXT.*\n/m, ""));
+      raw.exec("INSERT INTO meta VALUES ('schema_version', '2')");
+      const insert = raw.prepare("INSERT INTO items (item_id, source, kind, title, path, ts, ingested_at) VALUES (?, ?, 'document', ?, ?, 1, 1)");
+      for (const [id, source, title, path] of [
+        ["a", "fixture", "passwords.pdf", ""], ["b", "fixture", "1040.pdf", ""],
+        ["c", "fixture", "ssn.pdf", ""], ["d", "gwen-messenger", "Fixture", ""],
+        ["e", "fixture", "Fixture", "Mana/School Forms/form.pdf"], ["f", "fixture", "Ordinary", ""],
+      ]) {
+        insert.run(id, source, title, path);
+        raw.prepare("INSERT INTO chunks (item_id, ord, text) VALUES (?, 0, ?)").run(id, `${title} migrationfixture`);
+      }
+      raw.close();
+      migrated = Databank.open({ root: legacy, keys, embedder: null });
+      assert.equal(migrated.getItem("a")?.sensitivity, "secret");
+      assert.equal(migrated.getItem("d")?.sensitivity, "private");
+      assert.equal(migrated.getItem("e")?.sensitivity, "child");
+      assert.equal(migrated.getItem("f")?.sensitivity, "personal");
+      assert.equal(migrated.getItem("a")?.tier, "archived");
+      for (const term of ["password", "1040", "ssn"]) assert.deepEqual(await migrated.search(term), []);
+      const audit = new DatabaseSync(dbPath);
+      const receipt = JSON.parse(String(audit.prepare("SELECT value FROM meta WHERE key = 'sensitivity_migration_v3'").get()?.value));
+      assert.deepEqual(receipt.before, { items: 6, chunks: 6, vectors: 0, ingest_log: 0 });
+      assert.deepEqual(receipt.before, receipt.after);
+      assert.equal(receipt.classifiedByRule, 5);
+      assert.equal(receipt.leftAtDefault, 1);
+      assert.deepEqual(receipt.bySensitivity, { secret: 3, private: 1, child: 1, personal: 1 });
+      assert.equal(audit.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value, "3");
+      audit.close();
+      const backups = readdirSync(join(legacy, "index")).filter(p => p.startsWith("databank.pre-v3-"));
+      assert.equal(backups.length, 1);
+      const backup = new DatabaseSync(join(legacy, "index", backups[0]), { readOnly: true });
+      assert.equal(backup.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value, "2");
+      assert.ok(!backup.prepare("PRAGMA table_info(items)").all().some(r => r.name === "sensitivity"));
+      backup.close();
+      migrated.close();
+      migrated = Databank.open({ root: legacy, keys });
+      assert.equal(readdirSync(join(legacy, "index")).filter(p => p.startsWith("databank.pre-v3-")).length, 1);
+    } finally {
+      migrated?.close();
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+
+  it("rolls back column creation, backfill and version together if migration fails", () => {
+    const legacy = mkdtempSync(join(tmpdir(), "dbk-rollback-"));
+    try {
+      Databank.provision(legacy, "fixture");
+      mkdirSync(join(legacy, "index"));
+      const dbPath = join(legacy, "index", "databank.db");
+      const raw = new DatabaseSync(dbPath);
+      raw.exec(SCHEMA_SQL.replace(/^.*sensitivity TEXT.*\n/m, ""));
+      raw.exec("INSERT INTO meta VALUES ('schema_version', '2'); INSERT INTO items (item_id, source, kind, title, ts, ingested_at) VALUES ('a', 'fixture', 'document', 'passwords', 1, 1)");
+      raw.exec("CREATE TRIGGER refuse_backfill BEFORE UPDATE ON items BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+      raw.close();
+      assert.throws(() => Databank.open({ root: legacy, keys }), /fixture failure/);
+      const check = new DatabaseSync(dbPath);
+      assert.equal(check.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value, "2");
+      assert.ok(!check.prepare("PRAGMA table_info(items)").all().some(r => r.name === "sensitivity"));
+      assert.equal(check.prepare("SELECT value FROM meta WHERE key = 'sensitivity_migration_v3'").get(), undefined);
+      check.close();
+    } finally { rmSync(legacy, { recursive: true, force: true }); }
   });
 
   it("rechecks ownership if it changes while query embedding is in flight", async () => {
