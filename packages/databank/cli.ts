@@ -8,7 +8,7 @@
  *   EXOCORTEX_EMBED_URL embedder (default llama.cpp http://127.0.0.1:8081; EXOCORTEX_EMBED_BACKEND=ollama uses OLLAMA_URL); EXOCORTEX_EMBEDDINGS=0 disables
  */
 
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { LocalEmbedder } from "@exocortex/memory/embeddings";
 import { Databank, type Embedder, type TextInput } from "./databank.js";
@@ -167,6 +167,27 @@ async function main(): Promise<void> {
       const target = positional[0];
       if (!target) throw new Error("usage: ingest-health <path> [--device <device>]");
       await runIngest("health", () => parseHealthConnectPath(target, { device: flag("device") }));
+      return;
+    }
+    case "ingest-jsonl": {
+      const target = positional[0];
+      if (!target) throw new Error("usage: ingest-jsonl <file.jsonl>");
+      const bank = open();
+      try {
+        const content = readFileSync(target, "utf8");
+        const lines = content.split("\n").filter((l) => l.trim().length > 0);
+        let newItems = 0;
+        let existing = 0;
+        for (const line of lines) {
+          const item = JSON.parse(line) as TextInput;
+          const res = await bank.ingestText(item);
+          if (res.existed) existing++;
+          else newItems++;
+        }
+        console.log(JSON.stringify({ label: "jsonl", total: lines.length, newItems, existing }));
+      } finally {
+        bank.close();
+      }
       return;
     }
     case "archive-memories": {
