@@ -20,7 +20,7 @@ interface ClassificationInput {
 const SECRET_RULES: ReadonlyArray<readonly [string, RegExp]> = [
   ["credentials", /password|passwd/i],
   ["ssn-ein", /(?:^|[^a-z0-9])(?:ssn|ein)(?:$|[^a-z0-9])|\b\d{3}-\d{2}-\d{4}\b|\b\d{2}-\d{7}\b|social[\s_-]*security[\s_-]*(?:number|card)|employer[\s_-]*identification[\s_-]*number/i],
-  ["tax-return", /(?:^|[^a-z0-9])(?:1040(?:[ -]?sr)?|w[\s_-]?[29])(?:$|[^a-z0-9])|tax[\s_-]*return/i],
+  ["tax-return", /(?:^|[^a-z0-9])(?:1040(?:[ -]?sr)?|w[\s_-]?[29])(?:$|[^a-z0-9])|tax[\s_-]*return|turbo[\s_-]*tax/i],
   ["insurance-card", /insurance[\s_-]*card|(?:member|subscriber|policy|group)[\s_-]*(?:id|number|no\.?)[\s:#_-]*\S+/i],
 ];
 

@@ -3,9 +3,14 @@
 `synthetic-v2-to-v3.json` records an executed migration of a synthetic v2 index:
 six items and six chunks before and after, five classified by rules and one left
 at the personal default. The password, 1040 and SSN default-clearance search
-checks each returned zero hits. No live vault was accessed. The Phase 2 live
-path `/mnt/databank/index/databank.db` is unavailable in this Windows checkout;
-live migration counts and live red-flag searches remain unverified.
+checks each returned zero hits.
+
+`live-v2-to-v3.json` records the executed live migration of `/mnt/databank/index/databank.db`
+on Lubuntu (`hplubunhaos`): 5,669 items (7 secret, 349 private, 5,313 personal). Row counts
+preserved across items, chunks (30,993), vectors (16,408), and ingest_log (5,671).
+Live default-clearance search probes confirmed 0 secret tax/credential items returned.
+(Note: `ingest_log` count of 5,671 vs `items` count of 5,669 reflects two historical reingests
+recorded in the append-only log; before/after counts across both tables were preserved identically).
 
 The matching migration fixture, rollback, backup and repeat-open assertions live
 in `packages/databank/test/databank.test.ts`. Run them with:

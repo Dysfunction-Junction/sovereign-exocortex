@@ -36,7 +36,7 @@ The finish-line builder run (`docs/FINISH_LINE_PLAN_2026-10-28.md`, `docs/REMAIN
 | WM-CREDS | User-confirmed removal of any remaining Neo4j/Aura keys in local `.env` files | owner | Ready |
 | WM-P4-G1 | After P3-G3, P3-G4, 30-day retention, user confirm: retire local Neo4j | owner | Blocked |
 | DB-PARSERS | Databank domain parsers (Takeout, Join SMS, Health Connect, contacts) on `main` | merged | Done |
-| DB-SENSITIVITY | Databank sensitivity schema v3, rule classifier and retrieval gates (`SPEC_SENSITIVITY_TIERS_2026-11-01.md`) | Codex | In review; synthetic migration evidence recorded; live coverage gate unverified |
+| DB-SENSITIVITY | Databank sensitivity schema v3, rule classifier and retrieval gates (`SPEC_SENSITIVITY_TIERS_2026-11-01.md`) | Codex / Antigravity | Done (`live-v2-to-v3.json` verified on Lubuntu) |
 
 ## Finish-line queue (historical, all Done)
 

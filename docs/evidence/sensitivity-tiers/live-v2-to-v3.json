@@ -1,0 +1,49 @@
+{
+  "environment": "live-lubuntu-vault",
+  "from": 2,
+  "to": 3,
+  "classifier": "rule-only-names-source-path",
+  "rules": {
+    "credentials": "password|passwd",
+    "ssn-ein": "(?:^|[^a-z0-9])(?:ssn|ein)(?:$|[^a-z0-9])|\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b\\d{2}-\\d{7}\\b|social[\\s_-]*security[\\s_-]*(?:number|card)|employer[\\s_-]*identification[\\s_-]*number",
+    "tax-return": "(?:^|[^a-z0-9])(?:1040(?:[ -]?sr)?|w[\\s_-]?[29])(?:$|[^a-z0-9])|tax[\\s_-]*return|turbo[\\s_-]*tax",
+    "insurance-card": "insurance[\\s_-]*card|(?:member|subscriber|policy|group)[\\s_-]*(?:id|number|no\\.?)[\s:#_-]*\\S+"
+  },
+  "timestamp": "2026-11-01T22:51:53.495Z",
+  "dbPath": "/mnt/databank/index/databank.db",
+  "backupPath": "/mnt/databank/index/databank.db.pre-v3-1793573343552.db",
+  "backupSha256": "48620131c658bb874c8840fb8613290fd336328076fcc94ddc61cf9c1e03e3a9",
+  "before": {
+    "items": 5669,
+    "chunks": 30993,
+    "vectors": 16408,
+    "ingest_log": 5671
+  },
+  "after": {
+    "items": 5669,
+    "chunks": 30993,
+    "vectors": 16408,
+    "ingest_log": 5671
+  },
+  "byRule": {
+    "default": 5313,
+    "tax-return": 7,
+    "gwen-messenger": 349
+  },
+  "bySensitivity": {
+    "personal": 5313,
+    "secret": 7,
+    "private": 349
+  },
+  "classifiedByRule": 356,
+  "leftAtDefault": 5313,
+  "backupCreated": true,
+  "redFlagMatches": {
+    "TaxReturn2023": 0,
+    "2020TurboTaxReturn": 0,
+    "TurboTax_untitled_Filing": 0,
+    "TurboTax_untitled_Records": 0,
+    "more_taxreturn": 0
+  },
+  "liveIndexVerified": true
+}

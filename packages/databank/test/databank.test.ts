@@ -248,7 +248,7 @@ describe("Databank", () => {
       ["passwd.txt", "secret"], ["SSN_scan.pdf", "secret"], ["EIN_notice.pdf", "secret"],
       ["000-00-0000.txt", "secret"], ["00-0000000.txt", "secret"],
       ["1040.pdf", "secret"], ["W-2.pdf", "secret"], ["W-9.pdf", "secret"],
-      ["tax-return.pdf", "secret"], ["insurance_card.jpg", "secret"], ["Ordinary journal", "personal"],
+      ["tax-return.pdf", "secret"], ["TurboTax_2023_Return.pdf", "secret"], ["Turbo Tax 2022.tax2022", "secret"], ["insurance_card.jpg", "secret"], ["turbine-maintenance.txt", "personal"], ["Ordinary journal", "personal"],
     ];
     for (const [title, expected] of fixtures) assert.equal(classifySensitivity({ source: "fixture", title }).sensitivity, expected, title);
     assert.equal(classifySensitivity({ source: "fixture", title: "Scan", text: "Member ID: SYNTHETIC" }).sensitivity, "secret");

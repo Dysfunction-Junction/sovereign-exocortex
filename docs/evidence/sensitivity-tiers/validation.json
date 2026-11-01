@@ -3,8 +3,13 @@
   "checks": [
     { "command": "pnpm typecheck", "exitCode": 0, "note": "Configured workspace checks pass; Python typechecking is skipped by its existing script." },
     { "command": "pnpm --filter @exocortex/databank test", "exitCode": 0, "tests": 105, "passed": 105, "failed": 0 },
-    { "command": "git diff --check", "exitCode": 0 }
+    { "command": "git diff --check", "exitCode": 0 },
+    { "command": "live Lubuntu migration + search verification", "exitCode": 0, "items": 5669, "secret": 7, "private": 349, "personal": 5313, "receipt": "docs/evidence/sensitivity-tiers/live-v2-to-v3.json" }
   ],
-  "environmentNote": "Sandboxed tsx failed at uv_os_get_passwd; the test suite passed outside the sandbox.",
-  "notVerified": ["Live vault migration and live red-flag search coverage"]
+  "environmentNote": "Live migration verified on Lubuntu (/mnt/databank/index/databank.db).",
+  "notVerified": [
+    "Direct item/blob ID access checks (deferred until Phase 6 /ask endpoint)",
+    "Full human recall audit across legacy personal items",
+    "Model-assisted secondary classification pass"
+  ]
 }
