@@ -19,6 +19,7 @@ import {
   parseHealthConnectPath,
 } from "../parsers/health-connect.js";
 import { parseContacts, parseContactsPath } from "../parsers/contacts.js";
+import { parseFiHistory, parseFiHistoryPath } from "../parsers/fi-history.js";
 
 class SimpleEmbedder implements Embedder {
   readonly model = "mock-embedder";
@@ -524,6 +525,44 @@ Alice Smith,Alice,Smith,Globex,Manager,Mobile,(555) 987-6543,Home,alice@example.
       assert.ok(item.text.includes("alice@example.com"));
     });
 
+    it("parses vCard (VCF) export", async () => {
+      const vcf = `BEGIN:VCARD
+VERSION:2.1
+N:Martinez;Karyme;;;
+FN:Karyme Martinez
+TEL;CELL:+19797332270
+EMAIL;INTERNET:karyme@example.com
+ORG:Oakridge Smokehouse
+NOTE:Colleague
+END:VCARD`;
+
+      const items = parseContacts(vcf);
+      assert.equal(items.length, 1);
+      const item = items[0];
+      assert.equal(item.title, "Contact: Karyme Martinez");
+      assert.ok(item.text.includes("+19797332270"));
+      assert.ok(item.text.includes("Oakridge Smokehouse"));
+      assert.ok(item.text.includes("Colleague"));
+    });
+
+    it("handles folded lines, property groups, and ORG-only contacts in vCard", async () => {
+      const vcf = `BEGIN:VCARD
+VERSION:3.0
+item1.TEL;TYPE=CELL,pref:+15559998888
+item2.EMAIL;TYPE=WORK:info@acmecorp.com
+ORG:Acme Wholesale Supply
+NOTE:This is a very long note that was folded \r\n across multiple lines
+END:VCARD`;
+
+      const items = parseContacts(vcf);
+      assert.equal(items.length, 1);
+      const item = items[0];
+      assert.equal(item.title, "Contact: Acme Wholesale Supply");
+      assert.ok(item.text.includes("+15559998888"));
+      assert.ok(item.text.includes("info@acmecorp.com"));
+      assert.ok(item.text.includes("Acme Wholesale Supply"));
+    });
+
     it("parses Contact files from disk", async () => {
       const testDir = join(root, "contacts-test");
       mkdirSync(testDir, { recursive: true });
@@ -536,6 +575,49 @@ Alice Smith,Alice,Smith,Globex,Manager,Mobile,(555) 987-6543,Home,alice@example.
       assert.equal(items.length, 1);
       assert.equal(items[0]?.title, "Contact: Bob Jones");
       assert.equal(items[0]?.meta?.account, "test@example.com");
+    });
+  });
+
+  describe("Google Fi History Parser", () => {
+    it("parses Fi CSV records and aggregates by month", async () => {
+      const csv = `Date (-05:00),Time (-05:00),Phone #,Type,Duration,Rate,Cost
+"Dec 01, 2022",9:58 PM,(979) 250-7118,Incoming call,9.0972222222222218E-2,,
+"Dec 01, 2022",7:26 PM,(979) 250-7118,Received text,,,
+"Dec 01, 2022",7:25 PM,(979) 250-7118,Sent text,,,
+"Dec 02, 2022",10:15 AM,(979) 250-7118,Outgoing call,0:03,,`;
+
+      const items = parseFiHistory(csv, {
+        contactMap: { "+19792507118": "Alice Doe" },
+      });
+
+      assert.equal(items.length, 1);
+      const item = items[0];
+      assert.equal(item.kind, "conversation");
+      assert.equal(item.source, "google-fi");
+      assert.equal(item.title, "Google Fi History: Alice Doe (+19792507118) (2022-12)");
+      assert.ok(item.text.includes("4 total events (2 texts, 2 calls)"));
+      assert.ok(item.text.includes("Incoming call (Duration: 5m 28s)"));
+      assert.ok(item.text.includes("Outgoing call (Duration: 3s)"));
+      assert.equal(item.meta?.eventCount, 4);
+      assert.equal(item.meta?.textCount, 2);
+      assert.equal(item.meta?.callCount, 2);
+
+      const res = await bank.ingestText(item);
+      assert.ok(res.itemId);
+    });
+
+    it("parses Fi CSV files from disk", async () => {
+      const testDir = join(root, "fi-test");
+      mkdirSync(testDir, { recursive: true });
+      writeFileSync(
+        join(testDir, "FiHistory2024.csv"),
+        `Date (-05:00),Time (-05:00),Phone #,Type,Duration,Rate,Cost\n"May 15, 2024",12:30 PM,Jenna,Received text,,`
+      );
+
+      const items = await parseFiHistoryPath(testDir);
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.title, "Google Fi History: Jenna (2024-05)");
+      assert.equal(items[0]?.meta?.contact, "Jenna");
     });
   });
 });

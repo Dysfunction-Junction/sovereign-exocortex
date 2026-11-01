@@ -20,6 +20,7 @@ import { parseTakeoutLocationPath } from "./parsers/takeout-location.js";
 import { parseJoinSmsPath } from "./parsers/join-sms.js";
 import { parseHealthConnectPath } from "./parsers/health-connect.js";
 import { parseContactsPath } from "./parsers/contacts.js";
+import { parseFiHistoryPath, normalizePhoneNumber } from "./parsers/fi-history.js";
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -111,6 +112,55 @@ async function main(): Promise<void> {
       const target = positional[0];
       if (!target) throw new Error("usage: ingest-contacts <path>");
       await runIngest("contacts", () => parseContactsPath(target, { source: flag("source") }));
+      return;
+    }
+    case "ingest-fi": {
+      const target = positional[0];
+      if (!target) throw new Error("usage: ingest-fi <path> [--group-by month|day|record]");
+      const groupByRaw = flag("group-by") ?? "month";
+      if (!["month", "day", "record"].includes(groupByRaw)) {
+        throw new Error(`invalid --group-by '${groupByRaw}'; valid options: month, day, record`);
+      }
+      const groupBy = groupByRaw as "month" | "day" | "record";
+      const bank = open();
+      try {
+        const contactMap: Record<string, string> = {};
+        try {
+          const rows = bank.getItemsBySource("contacts");
+          for (const r of rows) {
+            if (!r.meta) continue;
+            try {
+              const m = JSON.parse(r.meta);
+              const name = m.name || m.contact;
+              if (name && Array.isArray(m.phones)) {
+                for (const p of m.phones) {
+                  const num = typeof p === "string" ? p : p?.number;
+                  if (num) {
+                    const np = normalizePhoneNumber(num);
+                    if (np) contactMap[np] = name;
+                  }
+                }
+              }
+            } catch {}
+          }
+        } catch {}
+
+        const items = await parseFiHistoryPath(target, {
+          groupBy,
+          contactMap,
+        });
+
+        let newItems = 0;
+        let existing = 0;
+        for (const item of items) {
+          const res = await bank.ingestText(item);
+          if (res.existed) existing++;
+          else newItems++;
+        }
+        console.log(JSON.stringify({ label: "fi", total: items.length, newItems, existing }));
+      } finally {
+        bank.close();
+      }
       return;
     }
     case "ingest-health": {

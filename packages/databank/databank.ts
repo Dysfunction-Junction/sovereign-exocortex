@@ -512,6 +512,13 @@ export class Databank {
     }
     return { checked: rows.length, bad };
   }
+
+  /** Returns item rows matching a source (e.g. 'contacts') */
+  getItemsBySource(source: string, limit = 50000): ItemRow[] {
+    return this.db
+      .prepare("SELECT * FROM items WHERE source = ? ORDER BY ingested_at ASC LIMIT ?")
+      .all(source, limit) as unknown as ItemRow[];
+  }
 }
 
 export interface IngestSummary {

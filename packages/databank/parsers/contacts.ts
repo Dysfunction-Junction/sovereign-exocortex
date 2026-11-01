@@ -322,9 +322,112 @@ export function contactToTextInput(contact: ParsedContact, options?: ContactPars
   };
 }
 
-/** Parses Contact CSV content into Databank TextInputs */
-export function parseContacts(csv: string, options?: ContactParserOptions): TextInput[] {
-  const rows = parseCsvRows(csv);
+/** Parses vCard (VCF) format content into ParsedContacts (RFC 2425/2426/6350) */
+export function parseVcfContacts(vcf: string, options?: ContactParserOptions): ParsedContact[] {
+  const contacts: ParsedContact[] = [];
+  // Unfold folded lines and handle quoted-printable soft breaks
+  const cleanVcf = vcf.replace(/^\ufeff/, "");
+  const unfolded = cleanVcf.replace(/=\r?\n/g, "").replace(/\r?\n[ \t]/g, "");
+  const cards = unfolded.split(/BEGIN:VCARD/i);
+
+  for (const card of cards) {
+    if (!card.trim()) continue;
+
+    let name = "";
+    let first = "";
+    let last = "";
+    const phones: Array<{ type?: string; number: string }> = [];
+    const emails: Array<{ type?: string; address: string }> = [];
+    const notes: string[] = [];
+    let company: string | undefined;
+    let jobTitle: string | undefined;
+    let birthday: string | undefined;
+
+    const lines = card.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const m = /^(?:[\w-]+\.)?([A-Za-z0-9-]+)((?:;[^:]*)*):(.*)$/i.exec(line);
+      if (!m) continue;
+
+      const prop = m[1].toUpperCase();
+      const params = m[2];
+      let val = m[3].trim();
+
+      if (/ENCODING=QUOTED-PRINTABLE/i.test(params)) {
+        try {
+          val = decodeURIComponent(val.replace(/=([0-9A-Fa-f]{2})/g, "%$1"));
+        } catch {}
+      }
+      val = val.replace(/\\([,;nN\\])/g, (_, esc) => {
+        if (esc === "n" || esc === "N") return " ";
+        return esc;
+      });
+
+      if (prop === "FN" && !name) {
+        name = val;
+      } else if (prop === "N") {
+        const parts = val.split(";");
+        last = parts[0]?.trim() || "";
+        first = parts[1]?.trim() || "";
+        if (!name && (first || last)) name = `${first} ${last}`.trim();
+      } else if (prop === "TEL") {
+        const cleanNum = val.replace(/^tel:/i, "").trim();
+        if (cleanNum) {
+          const typeMatch = /TYPE=([^;:]+)/i.exec(params);
+          const type = typeMatch ? typeMatch[1].trim() : undefined;
+          phones.push({ type, number: cleanNum });
+        }
+      } else if (prop === "EMAIL") {
+        if (val) {
+          const typeMatch = /TYPE=([^;:]+)/i.exec(params);
+          const type = typeMatch ? typeMatch[1].trim() : undefined;
+          emails.push({ type, address: val });
+        }
+      } else if (prop === "ORG") {
+        company = val.replace(/;/g, " ").trim();
+      } else if (prop === "TITLE") {
+        jobTitle = val;
+      } else if (prop === "NOTE") {
+        notes.push(val);
+      } else if (prop === "BDAY") {
+        birthday = val;
+      }
+    }
+
+    // Fallback: If no FN/N, fallback to company, first phone, or first email
+    if (!name) {
+      if (company) name = company;
+      else if (phones.length > 0) name = phones[0].number;
+      else if (emails.length > 0) name = emails[0].address;
+      else continue;
+    }
+
+    contacts.push({
+      name,
+      firstName: first || undefined,
+      lastName: last || undefined,
+      company: company || undefined,
+      jobTitle: jobTitle || undefined,
+      phones,
+      emails,
+      addresses: [],
+      notes: notes.length > 0 ? notes.join(" | ") : undefined,
+      birthday,
+      account: options?.account,
+    });
+  }
+  return contacts;
+}
+
+/** Parses Contact CSV or VCF content into Databank TextInputs */
+export function parseContacts(content: string, options?: ContactParserOptions): TextInput[] {
+  const cleanContent = content.replace(/^\ufeff/, "");
+  if (/^BEGIN:VCARD/im.test(cleanContent)) {
+    return parseVcfContacts(cleanContent, options).map((c) => contactToTextInput(c, options));
+  }
+
+  const rows = parseCsvRows(content);
   if (rows.length < 2) return [];
 
   const rawHeader = rows[0];
@@ -346,13 +449,13 @@ async function walkContactsDir(dir: string, items: TextInput[], options?: Contac
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walkContactsDir(full, items, options);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith(".csv")) {
+    } else if (e.isFile() && (e.name.toLowerCase().endsWith(".csv") || e.name.toLowerCase().endsWith(".vcf"))) {
       try {
         const raw = await readFile(full, "utf8");
-        const account = e.name.includes("@") ? e.name.replace(/^Contact_/, "").replace(/\.csv$/i, "") : undefined;
+        const account = e.name.includes("@") ? e.name.replace(/^Contact_/, "").replace(/\.(csv|vcf)$/i, "") : undefined;
         items.push(...parseContacts(raw, { ...options, filePath: full, account }));
       } catch {
-        // ignore unparseable CSV
+        // ignore unparseable files
       }
     }
   }
