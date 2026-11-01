@@ -93,7 +93,7 @@ function Ensure-LlamaInstance([hashtable]$Spec) {
             }
         }
 
-        $arguments = "-m `"$($Spec.Model)`" --alias $($Spec.Alias) --host 127.0.0.1 --port $port --gpu-layers 0 $($Spec.Extra) --log-file `"$($Spec.LogFile)`""
+        $arguments = "-m `"$($Spec.Model)`" --alias $($Spec.Alias) --host $(if ($Spec.Host) { $Spec.Host } else { '127.0.0.1' }) --port $port --gpu-layers 0 $($Spec.Extra) --log-file `"$($Spec.LogFile)`""
         if ($Spec.Projector) { $arguments = "$arguments --mmproj `"$($Spec.Projector)`"" }
         try {
             $process = Start-Process -FilePath $LlamaServerExe -ArgumentList $arguments -WorkingDirectory $LlamaDir `
