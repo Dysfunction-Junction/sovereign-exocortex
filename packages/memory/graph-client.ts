@@ -1,12 +1,28 @@
 /**
  * @file graph-client.ts
- * Fail-soft client for the Pieces knowledge graph in Neo4j (loaded by apps/neo4j-import). Used by
- * memory.search to add graph matches next to the hot LocalLTM ones and the databank archive.
+ * Local, fail-soft client for the exported Pieces knowledge graph (PLAN_WORLD_MODEL_STORE_2026-10-31 §8).
  *
- * Talks to the Neo4j Query API over HTTP (no driver dependency): Aura and Neo4j 5.19+ both serve it.
- * Fail-soft by contract: an unreachable DB, bad credentials or a slow link never throws and never delays
- * the local answer by more than `timeoutMs`. Hits are recalled data, so they are flagged `untrusted`.
+ * Replaces the retired Neo4j Aura HTTP Query API client with zero network egress. Reads `PiecesRecord` /
+ * `Doc` nodes locally from `exocortex.db`'s append-only `artifacts` table (`PIECES_GRAPH_MEDIA_TYPE`,
+ * ordered by the latest host `curation_import` event) or a local JSON export file, preserving the
+ * `GraphResult` contract (`available`, `hits`, `untrusted: true`).
+ *
+ * Integrity note: unpinned SHA-256 verification checks `sha256(bytes) === key` (corruption detection,
+ * not cryptographic authorship). Supply `expectedSha256` / `PIECES_GRAPH_SHA256` to pin a specific export;
+ * all recalled graph hits remain flagged `untrusted: true`.
  */
+
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+
+export const PIECES_GRAPH_MEDIA_TYPE = "application/vnd.exocortex.pieces-graph+json";
+export const MAX_PIECES_GRAPH_BYTES = 20 * 1024 * 1024;
+
+const POSITIVE_CACHE_TTL_MS = 30_000;
+const NEGATIVE_CACHE_TTL_MS = 5_000;
+const HOST_DEVICE_ID = "host:exocortexd";
+const MAX_SNIPPET = 300;
 
 export interface GraphHit {
   kind: string;
@@ -22,95 +38,318 @@ export type GraphResult =
   | { available: true; hits: GraphHit[] }
   | { available: false; reason: "unreachable" | "unauthorized" | "error" };
 
-export interface GraphClientOptions {
-  /** Full Query API URL, e.g. https://<id>.databases.neo4j.io/db/neo4j/query/v2 */
-  queryUrl: string;
-  username: string;
-  password: string;
-  timeoutMs?: number;
-  fetchImpl?: typeof fetch;
+export interface PiecesGraphRecord {
+  id: string;
+  kind: string;
+  name: string;
+  ref: string;
+  path: string;
+  created: string;
+  links: number;
 }
 
-const MAX_SNIPPET = 300;
+export interface PiecesGraphEdge {
+  type: string;
+  source_id: string;
+  target_id: string;
+}
 
-/** Aura schema (loaded by the Pieces export): (:PiecesRecord:<Kind> {piecesId, kind, name, ref, created}). */
-const CYPHER = `
-MATCH (n:PiecesRecord)
-WHERE toLower(coalesce(n.name, '')) CONTAINS toLower($q) OR toLower(coalesce(n.ref, '')) CONTAINS toLower($q)
-RETURN coalesce(n.kind, [l IN labels(n) WHERE l <> 'PiecesRecord'][0], '') AS kind,
-       coalesce(n.name, n.ref, '') AS title,
-       coalesce(n.ref, '') AS snippet,
-       coalesce(n.piecesId, '') AS path,
-       COUNT { (n)--() } AS links
-ORDER BY links DESC
-LIMIT $k`;
+export interface PiecesGraphArtifact {
+  version: 1;
+  nodes: PiecesGraphRecord[];
+  relationships: PiecesGraphEdge[];
+}
+
+export interface GraphClientOptions {
+  /** Pre-loaded records (primarily for deterministic unit tests). */
+  records?: readonly PiecesGraphRecord[];
+  /** Path to a local JSON export containing `{ nodes: PiecesGraphRecord[] }` or `PiecesGraphRecord[]`. */
+  exportPath?: string;
+  /** Path to `exocortex.db` holding the `PIECES_GRAPH_MEDIA_TYPE` row in `artifacts`. */
+  sqliteDbPath?: string;
+  /** Optional 64-hex SHA-256 pin verified against the file or SQLite artifact bytes. */
+  expectedSha256?: string;
+  /** Optional clock override for deterministic TTL cache tests. */
+  nowMs?: () => number;
+}
+
+interface IndexedRecord {
+  record: PiecesGraphRecord;
+  nameLc: string;
+  refLc: string;
+}
+
+function indexRecords(records: readonly PiecesGraphRecord[]): IndexedRecord[] {
+  return records.map((record) => ({
+    record,
+    nameLc: record.name.toLowerCase(),
+    refLc: record.ref.toLowerCase(),
+  }));
+}
+
+function parseRecordsPayload(parsed: unknown): PiecesGraphRecord[] | null {
+  const rawNodes = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { nodes?: unknown }).nodes)
+    ? (parsed as { nodes: unknown[] }).nodes
+    : null;
+  if (!rawNodes) return null;
+
+  const out: PiecesGraphRecord[] = [];
+  for (const item of rawNodes) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const name = typeof rec.name === "string" ? rec.name : "";
+    const ref = typeof rec.ref === "string" ? rec.ref : "";
+    const path = typeof rec.path === "string" ? rec.path : "";
+    const id = typeof rec.id === "string" && rec.id ? rec.id : path || name;
+    if (!name && !ref) continue;
+    out.push({
+      id,
+      kind: typeof rec.kind === "string" && rec.kind ? rec.kind : "Other",
+      name,
+      ref,
+      path,
+      created: typeof rec.created === "string" ? rec.created : "",
+      links: typeof rec.links === "number" && Number.isFinite(rec.links) ? rec.links : 0,
+    });
+  }
+  if (rawNodes.length > 0 && out.length === 0) {
+    return null;
+  }
+  return out;
+}
+
+function openReadOnlySqlite(dbPath: string): DatabaseSync {
+  let db: DatabaseSync;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+  } catch {
+    db = new DatabaseSync(dbPath);
+  }
+  db.exec("PRAGMA busy_timeout = 250; PRAGMA query_only = ON;");
+  return db;
+}
+
+function resolveTargetShaInDb(db: DatabaseSync, expectedSha?: string): string | null {
+  if (expectedSha) return expectedSha;
+  try {
+    const evRow = db
+      .prepare(
+        `SELECT lower(json_extract(payload, '$.artifact_sha256')) AS sha
+         FROM events
+         WHERE kind = 'curation_import'
+           AND device_id = ?
+           AND json_valid(payload)
+           AND json_extract(payload, '$.media_type') = ?
+         ORDER BY seq DESC
+         LIMIT 1`,
+      )
+      .get(HOST_DEVICE_ID, PIECES_GRAPH_MEDIA_TYPE) as { sha?: unknown } | undefined;
+    if (typeof evRow?.sha === "string" && /^[0-9a-f]{64}$/.test(evRow.sha)) {
+      return evRow.sha;
+    }
+  } catch (err) {
+    if (!(err instanceof Error && /no such table/i.test(err.message))) {
+      throw err;
+    }
+  }
+
+  const artRow = db
+    .prepare("SELECT lower(hex(sha256)) AS sha FROM artifacts WHERE media_type = ? ORDER BY rowid DESC LIMIT 1")
+    .get(PIECES_GRAPH_MEDIA_TYPE) as { sha?: unknown } | undefined;
+  return typeof artRow?.sha === "string" && /^[0-9a-f]{64}$/.test(artRow.sha) ? artRow.sha : null;
+}
 
 export class GraphClient {
-  private readonly queryUrl: string;
-  private readonly auth: string;
-  private readonly timeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
+  private readonly opts: GraphClientOptions;
+  private readonly nowMs: () => number;
+  private readonly staticIndexed: readonly IndexedRecord[] | null;
+
+  private cachedIndexed: readonly IndexedRecord[] | null = null;
+  private cachedVersionKey: string | null = null;
+  private cacheExpiresAt = 0;
+  private negativeReason: "unreachable" | "error" | null = null;
+  private negativeExpiresAt = 0;
 
   constructor(opts: GraphClientOptions) {
-    this.queryUrl = opts.queryUrl;
-    this.auth = "Basic " + Buffer.from(`${opts.username}:${opts.password}`).toString("base64");
-    this.timeoutMs = opts.timeoutMs ?? 4000;
-    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.opts = opts;
+    this.nowMs = opts.nowMs ?? Date.now;
+    this.staticIndexed = opts.records ? indexRecords(opts.records) : null;
   }
 
   /**
-   * Client from NEO4J_URI / NEO4J_USERNAME / NEO4J_PASSWORD (+ optional NEO4J_DATABASE, NEO4J_HTTP_URL),
-   * or null when the graph is not configured. Bolt-style URIs map to the HTTP endpoint:
-   * neo4j+s://h -> https://h, bolt://localhost:7687 -> http://localhost:7474.
+   * Local client from `PIECES_GRAPH_EXPORT_PATH`, `PIECES_GRAPH_DB_PATH`, or `EXOCORTEX_DB_PATH`
+   * (with optional `PIECES_GRAPH_SHA256` pin), or `null` when unconfigured.
+   * Performs zero startup I/O so artifacts imported after gateway boot become visible automatically,
+   * and ignores legacy `NEO4J_*` variables completely.
    */
   static fromEnv(env: NodeJS.ProcessEnv = process.env): GraphClient | null {
-    const uri = env.NEO4J_URI?.trim();
-    const username = env.NEO4J_USERNAME?.trim();
-    const password = env.NEO4J_PASSWORD;
-    if (!uri || !username || !password) return null;
-    const db = encodeURIComponent(env.NEO4J_DATABASE?.trim() || "neo4j");
-    let base = env.NEO4J_HTTP_URL?.trim();
-    if (!base) {
-      const m = /^(neo4j|bolt)(\+s|\+ssc)?:\/\/([^/:]+)(?::\d+)?/i.exec(uri);
-      if (!m) return null;
-      base = m[2] ? `https://${m[3]}` : `http://${m[3]}:7474`;
+    const expectedSha256 = env.PIECES_GRAPH_SHA256?.trim() || undefined;
+    const exportPath = env.PIECES_GRAPH_EXPORT_PATH?.trim();
+    if (exportPath) {
+      return new GraphClient({ exportPath, expectedSha256 });
     }
-    try {
-      new URL(base);
-    } catch {
-      return null;
+    const dbPath = env.PIECES_GRAPH_DB_PATH?.trim() || env.EXOCORTEX_DB_PATH?.trim();
+    if (dbPath) {
+      return new GraphClient({ sqliteDbPath: dbPath, expectedSha256 });
     }
-    return new GraphClient({ queryUrl: `${base.replace(/\/+$/, "")}/db/${db}/query/v2`, username, password });
+    return null;
+  }
+
+  private setNegative(now: number, reason: "unreachable" | "error"): { ok: false; reason: "unreachable" | "error" } {
+    this.cachedIndexed = null;
+    this.cachedVersionKey = null;
+    this.negativeReason = reason;
+    this.negativeExpiresAt = now + NEGATIVE_CACHE_TTL_MS;
+    return { ok: false, reason };
+  }
+
+  private loadRecords():
+    | { ok: true; indexed: readonly IndexedRecord[] }
+    | { ok: false; reason: "unreachable" | "error" } {
+    if (this.staticIndexed) {
+      return { ok: true, indexed: this.staticIndexed };
+    }
+
+    const now = this.nowMs();
+    if (this.cachedIndexed && now < this.cacheExpiresAt) {
+      return { ok: true, indexed: this.cachedIndexed };
+    }
+    if (this.negativeReason && now < this.negativeExpiresAt) {
+      return { ok: false, reason: this.negativeReason };
+    }
+
+    const expectedSha = this.opts.expectedSha256?.toLowerCase();
+    if (expectedSha && !/^[0-9a-f]{64}$/.test(expectedSha)) {
+      return this.setNegative(now, "error");
+    }
+
+    if (this.opts.exportPath) {
+      if (!existsSync(this.opts.exportPath)) {
+        return this.setNegative(now, "unreachable");
+      }
+      try {
+        const st = statSync(this.opts.exportPath);
+        if (!st.isFile() || st.size > MAX_PIECES_GRAPH_BYTES) {
+          return this.setNegative(now, "error");
+        }
+        const versionKey = `file:${st.mtimeMs}:${st.size}:${expectedSha ?? ""}`;
+        if (this.cachedIndexed && this.cachedVersionKey === versionKey) {
+          this.cacheExpiresAt = now + POSITIVE_CACHE_TTL_MS;
+          return { ok: true, indexed: this.cachedIndexed };
+        }
+        const bytes = readFileSync(this.opts.exportPath);
+        if (bytes.byteLength > MAX_PIECES_GRAPH_BYTES) {
+          return this.setNegative(now, "error");
+        }
+        if (expectedSha) {
+          const actual = createHash("sha256").update(bytes).digest("hex");
+          if (actual !== expectedSha) return this.setNegative(now, "error");
+        }
+        const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+        const records = parseRecordsPayload(parsed);
+        if (!records) return this.setNegative(now, "error");
+        const indexed = indexRecords(records);
+        this.cachedIndexed = indexed;
+        this.cachedVersionKey = versionKey;
+        this.cacheExpiresAt = now + POSITIVE_CACHE_TTL_MS;
+        this.negativeReason = null;
+        return { ok: true, indexed };
+      } catch {
+        return this.setNegative(now, "error");
+      }
+    }
+
+    if (this.opts.sqliteDbPath) {
+      if (!existsSync(this.opts.sqliteDbPath)) {
+        return this.setNegative(now, "unreachable");
+      }
+      let db: DatabaseSync | null = null;
+      try {
+        db = openReadOnlySqlite(this.opts.sqliteDbPath);
+        const targetSha = resolveTargetShaInDb(db, expectedSha);
+        if (!targetSha) {
+          return this.setNegative(now, "unreachable");
+        }
+        const versionKey = `sqlite:${targetSha}`;
+        if (this.cachedIndexed && this.cachedVersionKey === versionKey) {
+          this.cacheExpiresAt = now + POSITIVE_CACHE_TTL_MS;
+          return { ok: true, indexed: this.cachedIndexed };
+        }
+        const row = db
+          .prepare("SELECT sha256, bytes FROM artifacts WHERE sha256 = ? AND media_type = ?")
+          .get(Buffer.from(targetSha, "hex"), PIECES_GRAPH_MEDIA_TYPE) as
+          | { sha256: Uint8Array; bytes: Uint8Array }
+          | undefined;
+        if (!row) {
+          return this.setNegative(now, "unreachable");
+        }
+        const bytes = Buffer.from(row.bytes);
+        if (bytes.byteLength > MAX_PIECES_GRAPH_BYTES) {
+          return this.setNegative(now, "error");
+        }
+        const keyHex = Buffer.from(row.sha256).toString("hex");
+        const actualHex = createHash("sha256").update(bytes).digest("hex");
+        if (actualHex !== keyHex || actualHex !== targetSha) {
+          return this.setNegative(now, "error");
+        }
+        const parsed = JSON.parse(bytes.toString("utf8")) as unknown;
+        const records = parseRecordsPayload(parsed);
+        if (!records) return this.setNegative(now, "error");
+        const indexed = indexRecords(records);
+        this.cachedIndexed = indexed;
+        this.cachedVersionKey = versionKey;
+        this.cacheExpiresAt = now + POSITIVE_CACHE_TTL_MS;
+        this.negativeReason = null;
+        return { ok: true, indexed };
+      } catch {
+        return this.setNegative(now, "error");
+      } finally {
+        try {
+          db?.close();
+        } catch {
+          // ignore close errors on read-only connection
+        }
+      }
+    }
+
+    return this.setNegative(now, "unreachable");
   }
 
   async search(query: string, k = 5): Promise<GraphResult> {
-    try {
-      const res = await this.fetchImpl(this.queryUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json", Authorization: this.auth },
-        body: JSON.stringify({ statement: CYPHER, parameters: { q: query, k } }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-      if (res.status === 401 || res.status === 403) return { available: false, reason: "unauthorized" };
-      if (!res.ok) return { available: false, reason: "error" };
-      const body = (await res.json()) as { data?: { values?: unknown } };
-      const rows = body?.data?.values;
-      if (!Array.isArray(rows)) return { available: false, reason: "error" };
-      const hits: GraphHit[] = [];
-      for (const r of rows as unknown[][]) {
-        if (!Array.isArray(r) || typeof r[1] !== "string") continue;
-        hits.push({
-          kind: String(r[0] || "Other"),
-          title: String(r[1]).slice(0, MAX_SNIPPET),
-          snippet: String(r[2] ?? "").slice(0, MAX_SNIPPET),
-          path: String(r[3] ?? ""),
-          links: typeof r[4] === "number" ? r[4] : 0,
-          untrusted: true,
-        });
-      }
-      return { available: true, hits };
-    } catch {
-      return { available: false, reason: "unreachable" };
+    const loaded = this.loadRecords();
+    if (!loaded.ok) {
+      return { available: false, reason: loaded.reason };
     }
+
+    const needle = query.toLowerCase();
+    const limit = Number.isFinite(k) ? Math.max(0, Math.floor(k)) : 5;
+    if (limit === 0) {
+      return { available: true, hits: [] };
+    }
+
+    const matched: PiecesGraphRecord[] = [];
+    for (const entry of loaded.indexed) {
+      if (entry.nameLc.includes(needle) || entry.refLc.includes(needle)) {
+        matched.push(entry.record);
+      }
+    }
+
+    matched.sort((a, b) => {
+      if (b.links !== a.links) return b.links - a.links;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+
+    const hits: GraphHit[] = matched.slice(0, limit).map((r) => ({
+      kind: String(r.kind || "Other"),
+      title: String(r.name || r.ref).slice(0, MAX_SNIPPET),
+      snippet: String(r.ref ?? "").slice(0, MAX_SNIPPET),
+      path: String(r.path ?? ""),
+      links: typeof r.links === "number" && Number.isFinite(r.links) ? r.links : 0,
+      untrusted: true,
+    }));
+
+    return { available: true, hits };
   }
 }

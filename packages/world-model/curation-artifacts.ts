@@ -15,8 +15,22 @@
 export const VOCABULARY_MEDIA_TYPE = "application/vnd.exocortex.vocabulary+json";
 export const RULE_LINKS_MEDIA_TYPE = "application/vnd.exocortex.rule-links+json";
 export const FILE_TREE_MEDIA_TYPE = "application/vnd.exocortex.file-tree+json";
+export const PIECES_GRAPH_MEDIA_TYPE = "application/vnd.exocortex.pieces-graph+json";
+export const MAX_PIECES_GRAPH_BYTES = 20 * 1024 * 1024;
+export const MAX_PIECES_NAME_CHARS = 512;
+export const MAX_PIECES_REF_CHARS = 2048;
 
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+function firstNonEmptyString(...candidates: unknown[]): string {
+  for (const c of candidates) {
+    if (typeof c === "string") {
+      const trimmed = c.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+  }
+  return "";
+}
 
 export interface VocabularyTopicEntry {
   id: string;
@@ -231,5 +245,115 @@ export function buildFileTreeArtifact(raw: RawNeo4jExport): FileTreeArtifact {
     version: 1,
     nodes: [...nodesById.values()].sort((a, b) => cmp(a.id, b.id)),
     contains: [...edgeMap.values()].sort((a, b) => cmp(a.source_id, b.source_id) || cmp(a.target_id, b.target_id)),
+  };
+}
+
+export interface PiecesGraphNodeEntry {
+  id: string;
+  kind: string;
+  name: string;
+  ref: string;
+  path: string;
+  created: string;
+  links: number;
+}
+
+export interface PiecesGraphEdgeEntry {
+  type: string;
+  source_id: string;
+  target_id: string;
+}
+
+export interface PiecesGraphArtifact {
+  version: 1;
+  nodes: PiecesGraphNodeEntry[];
+  relationships: PiecesGraphEdgeEntry[];
+}
+
+/**
+ * Extract the Pieces knowledge-graph artifact (`PiecesRecord` / `Doc` nodes and their edges)
+ * for local `@exocortex/memory` `GraphClient` recall (PLAN_WORLD_MODEL_STORE_2026-10-31 §8).
+ *
+ * - `links` counts distinct incident relationships in the export (matching Cypher `COUNT { (n)--() }`,
+ *   including edges to non-Pieces nodes and counting self-loops once).
+ * - `name` and `ref` are bounded at build time (`MAX_PIECES_NAME_CHARS`, `MAX_PIECES_REF_CHARS`)
+ *   so full page bodies cannot push the artifact past the 20 MB SQLite threshold.
+ */
+export function buildPiecesGraphArtifact(raw: RawNeo4jExport): PiecesGraphArtifact {
+  const rels = raw.relationships ?? raw.rels ?? [];
+  const incidentRelIdsByEid = new Map<string, Set<string>>();
+  for (let idx = 0; idx < rels.length; idx++) {
+    const r = rels[idx];
+    const relKey = firstNonEmptyString(r.eid) || `rel_${idx}`;
+    let sSet = incidentRelIdsByEid.get(r.start);
+    if (!sSet) {
+      sSet = new Set<string>();
+      incidentRelIdsByEid.set(r.start, sSet);
+    }
+    sSet.add(relKey);
+    let eSet = incidentRelIdsByEid.get(r.end);
+    if (!eSet) {
+      eSet = new Set<string>();
+      incidentRelIdsByEid.set(r.end, eSet);
+    }
+    eSet.add(relKey);
+  }
+
+  const piecesIdByEid = new Map<string, string>();
+  const nodesById = new Map<string, PiecesGraphNodeEntry>();
+
+  // Sort input nodes deterministically by eid first so collision disambiguation is order-independent.
+  const candidateNodes = raw.nodes
+    .filter((n) => n.labels.includes("PiecesRecord") || n.labels.includes("Doc"))
+    .sort((a, b) => cmp(a.eid, b.eid));
+
+  for (const n of candidateNodes) {
+    const p = n.props ?? {};
+    const baseId = firstNonEmptyString(p.piecesId, p.id, p.hash, p.path, n.eid);
+    if (!baseId) continue;
+
+    let id = baseId;
+    if (nodesById.has(id)) {
+      id = `${baseId}#${n.eid}`;
+    }
+
+    const sortedSecondaryLabels = n.labels
+      .filter((l) => l !== "PiecesRecord" && l !== "Doc")
+      .sort(cmp);
+    const kind =
+      firstNonEmptyString(p.kind) ||
+      sortedSecondaryLabels[0] ||
+      firstNonEmptyString(p.type) ||
+      "Other";
+
+    const path = firstNonEmptyString(p.piecesId, p.path, p.id);
+    const name = firstNonEmptyString(p.name, p.pageTitle, p.text, p.readable, p.url, p.path, p.piecesId, p.id).slice(
+      0,
+      MAX_PIECES_NAME_CHARS,
+    );
+    const ref = firstNonEmptyString(p.ref, p.text, p.readable, p.url, p.category).slice(0, MAX_PIECES_REF_CHARS);
+    const created = firstNonEmptyString(p.created);
+    const links = incidentRelIdsByEid.get(n.eid)?.size ?? 0;
+
+    piecesIdByEid.set(n.eid, id);
+    nodesById.set(id, { id, kind, name, ref, path, created, links });
+  }
+
+  const edgeMap = new Map<string, PiecesGraphEdgeEntry>();
+  for (const r of rels) {
+    const source_id = piecesIdByEid.get(r.start);
+    const target_id = piecesIdByEid.get(r.end);
+    if (!source_id || !target_id) continue;
+    const type = firstNonEmptyString(r.type) || "RELATED";
+    const edgeKey = JSON.stringify([source_id, type, target_id]);
+    edgeMap.set(edgeKey, { type, source_id, target_id });
+  }
+
+  return {
+    version: 1,
+    nodes: [...nodesById.values()].sort((a, b) => cmp(a.id, b.id)),
+    relationships: [...edgeMap.values()].sort(
+      (a, b) => cmp(a.source_id, b.source_id) || cmp(a.type, b.type) || cmp(a.target_id, b.target_id),
+    ),
   };
 }

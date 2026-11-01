@@ -66,7 +66,7 @@ export interface ServerConfig {
    * (null = archive search disabled; the response then has no `archive` field).
    */
   archiveClient?: ArchiveClient | null;
-  /** Neo4j knowledge-graph client. Omit to read NEO4J_* on first use (null = graph search disabled). */
+  /** Local Pieces knowledge-graph client. Omit to read PIECES_GRAPH_EXPORT_PATH / EXOCORTEX_DB_PATH on first use (null = graph search disabled). */
   graphClient?: GraphClient | null;
   /** Mem0 recall via the Mem0 CLI. Omit to read MEM0_CLI on first use (null = Mem0 search disabled). */
   mem0Client?: Mem0Client | null;

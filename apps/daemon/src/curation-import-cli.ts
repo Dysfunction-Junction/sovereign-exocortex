@@ -1,8 +1,7 @@
 /**
  * @file curation-import-cli.ts
- * Admin command to import curated world-model artifacts (vocabulary, entity-rule links,
- * path-rule links, and file-tree) into the SQLite ledger via `artifacts` + `curation_import`
- * events (PLAN_WORLD_MODEL_STORE_2026-10-31 §4.2 & §7).
+ * Admin command to import curated world-model and Pieces memory-graph artifacts into the SQLite
+ * ledger via `artifacts` + `curation_import` events (PLAN_WORLD_MODEL_STORE_2026-10-31 §4.2, §7, §8).
  *
  * Defaults to dry-run (`--apply` required to write to the ledger).
  * Usage:
@@ -17,9 +16,12 @@ import { canonicalJsonStringify, HOST_DEVICE_ID } from "@exocortex/core";
 import { ExocortexDatabase } from "@exocortex/core/db";
 import {
   buildFileTreeArtifact,
+  buildPiecesGraphArtifact,
   buildRuleLinksArtifacts,
   buildVocabularyArtifact,
   FILE_TREE_MEDIA_TYPE,
+  MAX_PIECES_GRAPH_BYTES,
+  PIECES_GRAPH_MEDIA_TYPE,
   RULE_LINKS_MEDIA_TYPE,
   VOCABULARY_MEDIA_TYPE,
   type RawNeo4jExport,
@@ -27,14 +29,22 @@ import {
 import { getDefaultDbPath } from "./db-host.js";
 import { ShadowRecorder } from "./shadow-recorder.js";
 
+export type CurationArtifactName =
+  | "vocabulary"
+  | "entity-rule"
+  | "path-rule"
+  | "file-tree"
+  | "pieces-graph";
+
 export interface CurationArtifactSummary {
-  name: "vocabulary" | "entity-rule" | "path-rule" | "file-tree";
+  name: CurationArtifactName;
   eventId: string;
   mediaType: string;
   ruleSource?: "entity-rule" | "path-rule";
   sha256: string;
   bytes: number;
   count: number;
+  relationshipCount?: number;
   artifactPresent: boolean;
   eventPresent: boolean;
 }
@@ -85,6 +95,17 @@ function checkExistingInRawDb(
   return { artifactPresent, eventPresent };
 }
 
+interface ArtifactSpec {
+  name: CurationArtifactName;
+  mediaType: string;
+  ruleSource?: "entity-rule" | "path-rule";
+  count: number;
+  relationshipCount?: number;
+  maxBytes?: number;
+  value: unknown;
+  prefix: string;
+}
+
 export function importCurationArtifacts(
   rawExport: RawNeo4jExport,
   options: {
@@ -92,60 +113,87 @@ export function importCurationArtifacts(
     dbPath?: string;
     apply?: boolean;
     tsDeviceMs?: number;
+    maxPiecesGraphBytes?: number;
   } = {},
 ): CurationImportResult {
   const apply = options.apply === true;
   const baseTs = options.tsDeviceMs ?? Date.now();
+  const maxPgBytes = options.maxPiecesGraphBytes ?? MAX_PIECES_GRAPH_BYTES;
 
   const vocab = buildVocabularyArtifact(rawExport);
   const { entityRules, pathRules } = buildRuleLinksArtifacts(rawExport);
   const fileTree = buildFileTreeArtifact(rawExport);
+  const piecesGraph = buildPiecesGraphArtifact(rawExport);
 
-  const specs = [
+  const specs: ArtifactSpec[] = [
     {
-      name: "vocabulary" as const,
+      name: "vocabulary",
       mediaType: VOCABULARY_MEDIA_TYPE,
-      ruleSource: undefined,
       count: vocab.topics.length,
       value: vocab,
       prefix: "curation_import_vocab_",
     },
     {
-      name: "entity-rule" as const,
+      name: "entity-rule",
       mediaType: RULE_LINKS_MEDIA_TYPE,
-      ruleSource: "entity-rule" as const,
+      ruleSource: "entity-rule",
       count: entityRules.links.length,
       value: entityRules,
       prefix: "curation_import_entity_rule_",
     },
     {
-      name: "path-rule" as const,
+      name: "path-rule",
       mediaType: RULE_LINKS_MEDIA_TYPE,
-      ruleSource: "path-rule" as const,
+      ruleSource: "path-rule",
       count: pathRules.links.length,
       value: pathRules,
       prefix: "curation_import_path_rule_",
     },
     {
-      name: "file-tree" as const,
+      name: "file-tree",
       mediaType: FILE_TREE_MEDIA_TYPE,
-      ruleSource: undefined,
       count: fileTree.nodes.length,
       value: fileTree,
       prefix: "curation_import_file_tree_",
     },
   ];
 
+  if (piecesGraph.nodes.length > 0) {
+    specs.push({
+      name: "pieces-graph",
+      mediaType: PIECES_GRAPH_MEDIA_TYPE,
+      count: piecesGraph.nodes.length,
+      relationshipCount: piecesGraph.relationships.length,
+      maxBytes: maxPgBytes,
+      value: piecesGraph,
+      prefix: "curation_import_pieces_graph_",
+    });
+  }
+
+  const zeroPiecesWarning =
+    piecesGraph.nodes.length === 0
+      ? " Warning: export contained 0 PiecesRecord/Doc nodes; pieces-graph was not imported."
+      : "";
+
   if (!apply) {
     let roDb: DatabaseSync | null = null;
     try {
       if (!options.db && options.dbPath && existsSync(options.dbPath)) {
-        roDb = new DatabaseSync(options.dbPath);
+        try {
+          roDb = new DatabaseSync(options.dbPath, { readOnly: true });
+        } catch {
+          roDb = new DatabaseSync(options.dbPath);
+        }
         roDb.exec("PRAGMA busy_timeout = 5000; PRAGMA query_only = ON;");
       }
       const rawReader = options.db?.raw ?? roDb;
       const summaries: CurationArtifactSummary[] = specs.map((spec) => {
         const { sha256, size } = computeCanonicalArtifactHash(spec.value);
+        if (spec.maxBytes !== undefined && size > spec.maxBytes) {
+          throw new Error(
+            `${spec.name} artifact (${size} bytes) exceeds cap (${spec.maxBytes} bytes); store in databank instead (§8.2)`,
+          );
+        }
         const eventId = `${spec.prefix}${sha256.slice(0, 16)}`;
         const existing = rawReader
           ? checkExistingInRawDb(rawReader, sha256, eventId)
@@ -158,6 +206,7 @@ export function importCurationArtifacts(
           sha256,
           bytes: size,
           count: spec.count,
+          ...(spec.relationshipCount !== undefined ? { relationshipCount: spec.relationshipCount } : {}),
           artifactPresent: existing.artifactPresent,
           eventPresent: existing.eventPresent,
         };
@@ -167,7 +216,7 @@ export function importCurationArtifacts(
         artifacts: summaries,
         acceptedEvents: 0,
         duplicateEvents: 0,
-        note: "Dry run only; pass --apply to store artifacts and append curation_import events.",
+        note: `Dry run only; pass --apply to store artifacts and append curation_import events.${zeroPiecesWarning}`,
       };
     } finally {
       roDb?.close();
@@ -192,6 +241,11 @@ export function importCurationArtifacts(
     for (let i = 0; i < specs.length; i++) {
       const spec = specs[i];
       const prelimHash = computeCanonicalArtifactHash(spec.value);
+      if (spec.maxBytes !== undefined && prelimHash.size > spec.maxBytes) {
+        throw new Error(
+          `${spec.name} artifact (${prelimHash.size} bytes) exceeds cap (${spec.maxBytes} bytes); store in databank instead (§8.2)`,
+        );
+      }
       const eventId = `${spec.prefix}${prelimHash.sha256.slice(0, 16)}`;
       const before = checkExistingInRawDb(db.raw, prelimHash.sha256, eventId);
 
@@ -211,6 +265,7 @@ export function importCurationArtifacts(
         sha256: stored.sha256,
         bytes: stored.size,
         count: spec.count,
+        ...(spec.relationshipCount !== undefined ? { relationshipCount: spec.relationshipCount } : {}),
         artifactPresent: before.artifactPresent,
         eventPresent: before.eventPresent,
       });
@@ -246,7 +301,7 @@ export function importCurationArtifacts(
       artifacts: summaries,
       acceptedEvents: batchRes.insertedCount,
       duplicateEvents: batchRes.duplicateCount,
-      note: "Events appended to ledger; running exocortexd picks them up within 1s via IngestConsumer poll, or on next boot.",
+      note: `Events appended to ledger; running exocortexd picks them up within 1s via IngestConsumer poll, or on next boot.${zeroPiecesWarning}`,
     };
   } finally {
     if (ownsDb) db.close();
@@ -309,11 +364,11 @@ function isExecutedDirectly(): boolean {
 function main(): void {
   try {
     const { exportPath, dbPath, apply } = parseCurationImportArgs(process.argv.slice(2));
-    const rawExport = JSON.parse(readFileSync(exportPath, "utf8")) as RawNeo4jExport;
-    const result = importCurationArtifacts(rawExport, { dbPath, apply });
-    console.log(JSON.stringify({ dbPath, exportPath, ...result }, null, 2));
+    const raw = JSON.parse(readFileSync(exportPath, "utf8")) as RawNeo4jExport;
+    const result = importCurationArtifacts(raw, { dbPath, apply });
+    process.stdout.write(JSON.stringify({ dbPath, exportPath, ...result }, null, 2) + "\n");
   } catch (err) {
-    console.error("[curation-import]", err instanceof Error ? err.message : String(err));
+    process.stderr.write(`[curation-import] ${err instanceof Error ? err.message : String(err)}\n`);
     process.exitCode = 1;
   }
 }

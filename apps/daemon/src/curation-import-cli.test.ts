@@ -1,11 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ExocortexDatabase } from "@exocortex/core/db";
 import { HOST_DEVICE_ID } from "@exocortex/core";
-import type { RawNeo4jExport } from "@exocortex/world-model";
+import {
+  GraphClient,
+  PIECES_GRAPH_MEDIA_TYPE as CLIENT_PIECES_GRAPH_MEDIA_TYPE,
+  type PiecesGraphArtifact as ClientPiecesGraphArtifact,
+} from "@exocortex/memory/graph-client";
+import {
+  PIECES_GRAPH_MEDIA_TYPE as WM_PIECES_GRAPH_MEDIA_TYPE,
+  type PiecesGraphArtifact as WorldModelPiecesGraphArtifact,
+  type RawNeo4jExport,
+} from "@exocortex/world-model";
 import { importCurationArtifacts, parseCurationImportArgs } from "./curation-import-cli.js";
 import { WorldModelHost } from "./world-model-host.js";
 import { IngestConsumer } from "./ingest-consumer.js";
+
+// Compile-time cross-package contract equality check (Phase 5)
+const _assertClientAssignableFromWm: ClientPiecesGraphArtifact =
+  null as unknown as WorldModelPiecesGraphArtifact;
+const _assertWmAssignableFromClient: WorldModelPiecesGraphArtifact =
+  null as unknown as ClientPiecesGraphArtifact;
+void _assertClientAssignableFromWm;
+void _assertWmAssignableFromClient;
 
 const SAMPLE_EXPORT: RawNeo4jExport = {
   nodes: [
@@ -94,6 +114,7 @@ test("curation-import: dry-run computes canonical SHA-256 hashes identical to --
     assert.equal(dry.dryRun, true);
     assert.equal(dry.acceptedEvents, 0);
     assert.equal(dry.artifacts.length, 4);
+    assert.match(dry.note, /0 PiecesRecord\/Doc nodes/);
     assert.equal(db.listEvents().length, 0);
 
     const artifactCount = (db.raw.prepare("SELECT COUNT(*) AS n FROM artifacts").get() as { n: number }).n;
@@ -161,6 +182,68 @@ test("curation-import: --apply stores artifacts first, appends idempotent curati
     assert.equal(restarted.graphStore.status().entityRuleLinkCount, 1);
   } finally {
     db.close();
+  }
+});
+
+test("curation-import: emits pieces-graph curation_import event and rejects oversize pieces-graph (§8.2)", async () => {
+  const withPieces: RawNeo4jExport = {
+    nodes: [
+      ...SAMPLE_EXPORT.nodes,
+      {
+        eid: "d1",
+        labels: ["Doc", "Summaries"],
+        props: { id: "pieces_sum_1", name: "Pieces Export Summary", path: "summaries/1.json" },
+      },
+    ],
+    relationships: SAMPLE_EXPORT.relationships,
+  };
+
+  const db = new ExocortexDatabase({ path: ":memory:" });
+  try {
+    assert.throws(
+      () => importCurationArtifacts(withPieces, { db, apply: false, maxPiecesGraphBytes: 32 }),
+      /pieces-graph artifact .* exceeds cap/i,
+    );
+    assert.throws(
+      () => importCurationArtifacts(withPieces, { db, apply: true, maxPiecesGraphBytes: 32 }),
+      /pieces-graph artifact .* exceeds cap/i,
+    );
+
+    const res = importCurationArtifacts(withPieces, { db, apply: true, tsDeviceMs: 1_700_000_000_000 });
+    assert.equal(res.acceptedEvents, 5);
+    assert.equal(res.artifacts.some((a) => a.name === "pieces-graph"), true);
+    assert.deepEqual(db.verifyCurationArtifacts(), {
+      ok: true,
+      checked: 5,
+      missing: [],
+      altered: [],
+    });
+
+    const host = WorldModelHost.createIsolatedForTest();
+    host.rehydrate(db);
+    assert.equal(host.graphServing, true);
+    assert.equal(host.getStoreStatus().unclassified.total, 0);
+  } finally {
+    db.close();
+  }
+
+  // Real ExocortexDatabase on-disk -> importCurationArtifacts -> @exocortex/memory GraphClient recall
+  assert.equal(CLIENT_PIECES_GRAPH_MEDIA_TYPE, WM_PIECES_GRAPH_MEDIA_TYPE);
+  const dir = mkdtempSync(join(tmpdir(), "exo-curation-p5-"));
+  try {
+    const dbPath = join(dir, "exocortex.db");
+    importCurationArtifacts(withPieces, { dbPath, apply: true, tsDeviceMs: 1_700_000_000_000 });
+    const graphClient = GraphClient.fromEnv({ EXOCORTEX_DB_PATH: dbPath });
+    assert.ok(graphClient);
+    const searchRes = await graphClient.search("Pieces Export", 5);
+    assert.equal(searchRes.available, true);
+    if (searchRes.available) {
+      assert.equal(searchRes.hits.length, 1);
+      assert.equal(searchRes.hits[0]?.title, "Pieces Export Summary");
+      assert.equal(searchRes.hits[0]?.untrusted, true);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

@@ -11,7 +11,8 @@
     "./server": "./server.ts",
     "./embeddings": "./embeddings.ts",
     "./archive-client": "./archive-client.ts",
-    "./memories": "./memories.ts"
+    "./memories": "./memories.ts",
+    "./graph-client": "./graph-client.ts"
   },
   "scripts": {
     "build": "tsc",

@@ -58,6 +58,14 @@ describe("provenanceOf", () => {
     const vocab = { artifact_sha256: "a".repeat(64), media_type: "application/json", count: 1 };
     expect(provenanceOf({ kind: "curation_import", device_id: host, payload: vocab }).class).toBe("user_label");
     expect(provenanceOf({ kind: "curation_import", device_id: host, payload: { ...vocab, rule_source: "entity-rule" } }).class).toBe("derived");
+    const pg = provenanceOf({
+      kind: "curation_import",
+      device_id: host,
+      payload: { ...vocab, media_type: "application/vnd.exocortex.pieces-graph+json" },
+    });
+    expect(pg.class).toBe("derived");
+    expect(pg.imported).toBe(true);
+    expect(pg.untrusted).toBe(true);
     expect(provenanceOf({ kind: "curation_import", device_id: phone, payload: vocab }).class).toBe("unclassified");
     expect(provenanceOf({ kind: "entity_merge", device_id: host, payload: {} }).class).toBe("user_label");
     expect(provenanceOf({ kind: "assertion_retract", device_id: phone, payload: {} }).class).toBe("unclassified");
