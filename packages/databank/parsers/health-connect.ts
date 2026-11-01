@@ -207,8 +207,8 @@ function processJsonRecord(record: Record<string, unknown>, buckets: Map<string,
   }
 
   // 2. Sleep
-  if (recType.includes("sleep")) {
-    let durMin = Number(record.durationMinutes ?? record.duration_minutes ?? record.minutes ?? 0);
+  if (recType.includes("sleep") || "sleepMinutes" in record || "sleep" in record) {
+    let durMin = Number(record.sleepMinutes ?? record.durationMinutes ?? record.duration_minutes ?? record.minutes ?? 0);
     if ((!durMin || durMin === 0) && startTime && endTime) {
       const s = parseTimestamp(String(startTime)).ms;
       const e = parseTimestamp(String(endTime)).ms;
@@ -259,11 +259,13 @@ function processJsonRecord(record: Record<string, unknown>, buckets: Map<string,
   }
 
   // 4. Calories / Active Energy
-  if (recType.includes("calorie") || recType.includes("energy")) {
-    const cal = Number(record.calories ?? record.value ?? record.energy ?? 0);
-    if (cal > 0) {
-      if (recType.includes("active")) bucket.activeCalories += cal;
-      else bucket.totalCalories += cal;
+  if (recType.includes("calorie") || recType.includes("energy") || "totalCalories" in record || "calories" in record || "activeCalories" in record) {
+    const totalCal = Number(record.totalCalories ?? record.calories ?? record.value ?? record.energy ?? 0);
+    const activeCal = Number(record.activeCalories ?? 0);
+    if (activeCal > 0) bucket.activeCalories += activeCal;
+    if (totalCal > 0) {
+      if (recType.includes("active")) bucket.activeCalories += totalCal;
+      else bucket.totalCalories += totalCal;
     }
   }
 }
@@ -396,7 +398,26 @@ export function parseHealthConnect(
         const data = JSON.parse(trimmed);
         processJsonData(data, buckets, options?.device);
       } catch (err) {
-        throw new Error(`Failed to parse Health Connect JSON: ${err instanceof Error ? err.message : String(err)}`);
+        if (trimmed.includes("\n")) {
+          const lines = trimmed.split(/\r?\n/);
+          let parsedCount = 0;
+          for (const line of lines) {
+            const l = line.trim();
+            if (!l) continue;
+            try {
+              const row = JSON.parse(l);
+              processJsonData(row, buckets, options?.device);
+              parsedCount++;
+            } catch {
+              // skip non-json line in jsonl stream
+            }
+          }
+          if (parsedCount === 0) {
+            throw new Error(`Failed to parse Health Connect JSON: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        } else {
+          throw new Error(`Failed to parse Health Connect JSON: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     } else {
       // CSV format

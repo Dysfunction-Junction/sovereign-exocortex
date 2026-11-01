@@ -405,7 +405,7 @@ Gate: P5-G1.
 | P1-G1..P1-G5 | PASS | `docs/evidence/world-model-store/P1-G1.json`..`P1-G5.json`, [PR #79](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/79) (`738314c`) |
 | P2-G1..P2-G5 | PASS | `docs/evidence/world-model-store/P2-G1.json`..`P2-G5.json`, [PR #81](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/81) |
 | P3-G2 | PASS | `docs/evidence/world-model-store/P3-G2.json`, [PR #82](https://github.com/Dysfunction-Junction/sovereign-exocortex/pull/82) (`4d8938f`) |
-| P3-G1 | PENDING | Smoke test on `SM-S948U1` after PR #82 merge + live `curation-import --apply` |
+| P3-G1 | PASS | `docs/evidence/world-model-store/P3-G1.json` (SM-S948U1 phone smoke test, status/analytics/NL query verified, user confirmed) |
 | P3-G3 | PENDING | 3-day daemon soak post-cutover |
 | P3-G4 | PENDING | Rollback drill (`pre-world-model-store-cutover` + P0-2 copy) |
 | P4-G1 | PENDING | After P3-G3, P3-G4, 30-day retention window, and explicit user confirmation (S4) |

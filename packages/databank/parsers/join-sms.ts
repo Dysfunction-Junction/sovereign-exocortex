@@ -60,19 +60,37 @@ export interface NormalizedSmsMessage {
 }
 
 function normalizeMessage(raw: RawJoinMessage, fallbackDevice?: string): NormalizedSmsMessage | null {
-  const body = (raw.body ?? raw.text ?? raw.message ?? raw.msg ?? "").trim();
-  const rawDate = raw.date ?? raw.timestamp ?? raw.date_sent ?? raw.time;
-  const { ms: timestamp, temporal } = parseTimestamp(rawDate);
+  const data = (raw as Record<string, unknown>).data && typeof (raw as Record<string, unknown>).data === "object"
+    ? ((raw as Record<string, unknown>).data as Record<string, unknown>)
+    : {};
+  const contacts = Array.isArray((raw as Record<string, unknown>)._contacts)
+    ? ((raw as Record<string, unknown>)._contacts as Array<Record<string, unknown>>)
+    : [];
+  const contactObj = contacts[0] || {};
+  const attachments = Array.isArray((raw as Record<string, unknown>).attachments)
+    ? ((raw as Record<string, unknown>).attachments as Array<{ data?: { text?: string } }>)
+    : [];
+  let attachmentText = "";
+  for (const a of attachments) {
+    if (a?.data?.text) attachmentText += (attachmentText ? " " : "") + String(a.data.text);
+  }
+
+  const rawBodyVal = raw.body ?? raw.text ?? raw.message ?? raw.msg ?? data.body ?? attachmentText ?? "";
+  const body = String(rawBodyVal).trim();
+  const rawDate = raw.date ?? raw.timestamp ?? raw.date_sent ?? raw.time ?? data.date ?? data.date_sent;
+  const rawDateVal = typeof rawDate === "string" || typeof rawDate === "number" ? rawDate : undefined;
+  const { ms: timestamp, temporal } = parseTimestamp(rawDateVal);
 
   const device =
     raw.device || raw.deviceName || raw.model || fallbackDevice;
 
-  // Direction: type 1 = incoming/inbox, type 2 = sent
+  // Direction: type 1 = incoming/inbox, type 2 = sent (msg_box 1 = inbox, 2 = sent)
+  const dirType = raw.type ?? data.msg_box ?? data.type;
   let isIncoming = true;
-  if (typeof raw.type === "number") {
-    isIncoming = raw.type === 1;
-  } else if (typeof raw.type === "string") {
-    isIncoming = raw.type === "1" || raw.type.toLowerCase() === "inbox";
+  if (typeof dirType === "number") {
+    isIncoming = dirType === 1;
+  } else if (typeof dirType === "string") {
+    isIncoming = dirType === "1" || dirType.toLowerCase() === "inbox";
   } else if (raw.sent === true) {
     isIncoming = false;
   } else if (raw.incoming === false || raw.received === false) {
@@ -81,8 +99,8 @@ function normalizeMessage(raw: RawJoinMessage, fallbackDevice?: string): Normali
     isIncoming = false;
   }
 
-  let contactName = raw.contact_name ?? raw.contactName ?? raw.name ?? raw.contact ?? "";
-  let contactPhone = "";
+  let contactName = String(raw.contact_name ?? raw.contactName ?? raw.name ?? raw.contact ?? contactObj.name ?? "");
+  let contactPhone = String(contactObj.phone ?? "");
 
   let sender: string;
   let senderNumber = "";
@@ -322,7 +340,7 @@ async function walkSmsDir(
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       await walkSmsDir(full, items, options);
-    } else if (e.isFile() && e.name.toLowerCase().endsWith(".json")) {
+    } else if (e.isFile() && (e.name.toLowerCase().endsWith(".json") || e.name.toLowerCase().endsWith(".smsbackup"))) {
       try {
         const raw = await readFile(full, "utf8");
         items.push(...parseJoinSms(raw, { ...options, filePath: full }));

@@ -1,0 +1,29 @@
+{
+  "gate": "P3-G1",
+  "git_sha": "5c545abe3021c7781c0a470b646f9c2744c29b0d",
+  "command": "user verification on SM-S948U1 + automated /v3/world-model/graph/{status,analytics,query} test",
+  "ran_at": "2026-11-01T05:09:19.000Z",
+  "host_state": {
+    "commit_used_gb": 28.77,
+    "llama_server_running": true,
+    "llama_server_processes": 3
+  },
+  "measured": {
+    "device_model": "SM-S948U1",
+    "daemon_status_http": 200,
+    "analytics_http": 200,
+    "nl_query_http": 200,
+    "graph_nodes_serving": 789,
+    "graph_edges_serving": 1041,
+    "vocabulary_topics": 8157,
+    "entity_rule_links": 44,
+    "user_confirmed": true
+  },
+  "threshold": {
+    "status_ok": true,
+    "serving": true,
+    "query_success": true
+  },
+  "pass": true,
+  "notes": "Status, analytics, and natural-language query verified on SM-S948U1 with installed build. Zero Neo4j dependency."
+}
