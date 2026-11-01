@@ -19,6 +19,7 @@ import type { ItemKind } from "./text.js";
 import { parseTakeoutLocationPath } from "./parsers/takeout-location.js";
 import { parseJoinSmsPath } from "./parsers/join-sms.js";
 import { parseHealthConnectPath } from "./parsers/health-connect.js";
+import { parseContactsPath } from "./parsers/contacts.js";
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
@@ -106,6 +107,12 @@ async function main(): Promise<void> {
       await runIngest("sms", () => parseJoinSmsPath(target, { device: flag("device") }));
       return;
     }
+    case "ingest-contacts": {
+      const target = positional[0];
+      if (!target) throw new Error("usage: ingest-contacts <path>");
+      await runIngest("contacts", () => parseContactsPath(target, { source: flag("source") }));
+      return;
+    }
     case "ingest-health": {
       const target = positional[0];
       if (!target) throw new Error("usage: ingest-health <path> [--device <device>]");
@@ -175,7 +182,7 @@ async function main(): Promise<void> {
       return;
     }
     default:
-      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | ingest-takeout <path> [--device <dev>] | ingest-sms <path> [--device <dev>] | ingest-health <path> [--device <dev>] | archive-memories <file> --older-than-days N | search <q> | reindex | stats | verify [--limit N] | serve");
+      console.log("commands: keygen <file> | ingest-dir <dir> --source <s> | ingest-takeout <path> [--device <dev>] | ingest-sms <path> [--device <dev>] | ingest-health <path> [--device <dev>] | ingest-contacts <path> | archive-memories <file> --older-than-days N | search <q> | reindex | stats | verify [--limit N] | serve");
       process.exitCode = cmd ? 2 : 0;
   }
 }

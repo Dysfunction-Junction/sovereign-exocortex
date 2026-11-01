@@ -6,3 +6,4 @@
 export * from "./takeout-location.js";
 export * from "./join-sms.js";
 export * from "./health-connect.js";
+export * from "./contacts.js";

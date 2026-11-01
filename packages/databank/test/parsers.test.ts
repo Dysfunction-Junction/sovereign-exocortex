@@ -18,6 +18,7 @@ import {
   parseHealthConnect,
   parseHealthConnectPath,
 } from "../parsers/health-connect.js";
+import { parseContacts, parseContactsPath } from "../parsers/contacts.js";
 
 class SimpleEmbedder implements Embedder {
   readonly model = "mock-embedder";
@@ -486,6 +487,55 @@ describe("Domain Parsers", () => {
 
       v1Bank.close();
       rmSync(v1Root, { recursive: true, force: true });
+    });
+  });
+
+  describe("Contacts Parser", () => {
+    it("parses Samsung Contacts CSV export", async () => {
+      const csv = `"Display name","Name","Last name","Company name","Job title","Phone number1(Type)","Phone number1(Phone number)","Email1(Type)","Email1(Address)","Memo"
+"John Doe","John","Doe","Acme Inc","Engineer","Mobile","+1 555-123-4567","Work","john@acme.com","Met at conference"`;
+
+      const items = parseContacts(csv, { source: "contacts" });
+      assert.equal(items.length, 1);
+      const item = items[0];
+      assert.equal(item.kind, "note");
+      assert.equal(item.source, "contacts");
+      assert.equal(item.title, "Contact: John Doe");
+      assert.ok(item.text.includes("Acme Inc"));
+      assert.ok(item.text.includes("+1 555-123-4567"));
+      assert.ok(item.text.includes("john@acme.com"));
+      assert.equal(((item.meta?.phones as Array<{ number: string }>)?.[0])?.number, "+1 555-123-4567");
+
+      const res = await bank.ingestText(item);
+      assert.ok(res.itemId);
+      assert.equal(res.existed, false);
+    });
+
+    it("parses Google Contacts CSV export", async () => {
+      const csv = `Name,Given Name,Family Name,Organization 1 - Name,Organization 1 - Title,Phone 1 - Type,Phone 1 - Value,E-mail 1 - Type,E-mail 1 - Value,Notes
+Alice Smith,Alice,Smith,Globex,Manager,Mobile,(555) 987-6543,Home,alice@example.com,Team lead`;
+
+      const items = parseContacts(csv);
+      assert.equal(items.length, 1);
+      const item = items[0];
+      assert.equal(item.title, "Contact: Alice Smith");
+      assert.ok(item.text.includes("Globex"));
+      assert.ok(item.text.includes("(555) 987-6543"));
+      assert.ok(item.text.includes("alice@example.com"));
+    });
+
+    it("parses Contact files from disk", async () => {
+      const testDir = join(root, "contacts-test");
+      mkdirSync(testDir, { recursive: true });
+      writeFileSync(
+        join(testDir, "Contact_test@example.com.csv"),
+        `"Display name","Phone number1(Phone number)"\n"Bob Jones","555-000-1111"`
+      );
+
+      const items = await parseContactsPath(testDir);
+      assert.equal(items.length, 1);
+      assert.equal(items[0]?.title, "Contact: Bob Jones");
+      assert.equal(items[0]?.meta?.account, "test@example.com");
     });
   });
 });
