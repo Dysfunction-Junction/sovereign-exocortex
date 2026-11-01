@@ -1,7 +1,11 @@
 # Agent queue
 
-Single source of truth for who builds what next. Any agent (Claude Code, agy) can work from this file with no relay.
-Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and the code disagree, the code wins.
+Single source of truth for who builds what next. Any agent (Claude Code, agy, Warp) can work from this file with no relay.
+If this file and the code disagree, the code wins.
+
+**Active track (2026-11-01):** world-model store cutover and Neo4j retirement. Spec and frozen gates: [`docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md`](PLAN_WORLD_MODEL_STORE_2026-10-31.md). Evidence: `docs/evidence/world-model-store/`. Continuation brief: [`docs/WARP_HANDOFF_2026-11-01.md`](WARP_HANDOFF_2026-11-01.md).
+
+The finish-line builder run (`docs/FINISH_LINE_PLAN_2026-10-28.md`, `docs/REMAINING_WORK.md`) is complete for all agent rows. Remaining finish-line items are **owner-only** (section 6 of `REMAINING_WORK.md`): labels, weekly shadow gate, device revoke, channel resync, Ollama uninstall confirmation, go-live.
 
 ## How to pick work
 1. `git fetch origin` and `gh pr list` first.
@@ -12,14 +16,30 @@ Row numbers come from `docs/FINISH_LINE_PLAN_2026-10-28.md`. If this file and th
 6. Stop. One row per session.
 
 ## Rules
-- Node 24. Windows shell is PowerShell 5.1 (no `&&`, write files as UTF-8).
+- Node 24. Windows shell is PowerShell 5.1 / 7 (no bash `&&` assumptions; write files as UTF-8).
 - Never turn SHADOW off. Never loosen `/network/delegate`, approval, attestation or the event log.
-- Anything touching the event schema, event log, replay, approvals or SHADOW: stop, write the design, get Opus review first.
+- Anything touching the event schema, event log, replay, approvals or SHADOW: stop, write the design, get review first.
+- World-model store stop rules S1–S7 in the plan are binding. Never write synthetic events to `%LOCALAPPDATA%\exocortex.db`. Never delete Neo4j data or credentials without explicit user confirmation (S4).
 - Do not push to main. Do not force-push. Do not add servers or change model sizes without asking.
 
-## Queue
+## Active queue (world-model store)
 
-Full specs for every remaining row: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md). Builders: agy and Codex. Reviews: section 4 of that file.
+| Row | Work | Tool | Status |
+| --- | --- | --- | --- |
+| WM-P0..P2 | Backups, provenance, GraphStore, gates P0–P2 | merged | Done |
+| WM-P3.1-3.3 | Daemon graph routes, Living Brain cutover, curation-import CLI, P3-G2 | merged #80 #82 | Done |
+| WM-P3-G1 | Phone smoke on SM-S948U1 | owner + evidence | Done |
+| WM-P5-G1 | Aura retired, local pieces-graph export, networkless memory.search | merged #83 | Done |
+| WM-LIVE | Confirm live daemon serves GraphStore vocabulary; `curation-import --apply` on live ledger only with owner OK | implementer + owner | Ready |
+| WM-P3-G3 | 3-day daemon soak, zero graph errors | owner/implementer | Ready |
+| WM-P3-G4 | Rollback drill: tag `pre-world-model-store-cutover` + P0-2 Neo4j copy | implementer | Ready |
+| WM-CREDS | User-confirmed removal of any remaining Neo4j/Aura keys in local `.env` files | owner | Ready |
+| WM-P4-G1 | After P3-G3, P3-G4, 30-day retention, user confirm: retire local Neo4j | owner | Blocked |
+| DB-PARSERS | Databank domain parsers (Takeout, Join SMS, Health Connect, contacts) on `main` | merged | Done |
+
+## Finish-line queue (historical, all Done)
+
+Full specs: [`docs/REMAINING_WORK.md`](REMAINING_WORK.md). Builders were agy and Codex.
 
 | Row | Work | Tool | Status |
 | --- | --- | --- | --- |

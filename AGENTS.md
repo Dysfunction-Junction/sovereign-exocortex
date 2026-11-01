@@ -26,7 +26,7 @@ Open [`README.md`](README.md) for status, the package table, how to run, and kno
 
 | Path | Open when the question is about |
 |---|---|
-| [`apps/daemon`](apps/daemon) | gateway, auth, shadow, channels, Neo4j sync, push |
+| [`apps/daemon`](apps/daemon) | gateway, auth, shadow, channels, graph routes, legacy neo4j-sync helpers, push |
 | [`apps/mobile`](apps/mobile) | Android companion and the UI the desktop shell loads |
 | [`apps/desktop`](apps/desktop) | Tauri shell (`get_local_config` is in `src-tauri/src/lib.rs`) |
 | [`apps/cli`](apps/cli) | `exo` commands |
@@ -45,11 +45,14 @@ Open [`README.md`](README.md) for status, the package table, how to run, and kno
 | Doc | Use it for |
 |---|---|
 | [`README.md`](README.md) | current status, setup, honest limits |
+| [`docs/WARP_HANDOFF_2026-11-01.md`](docs/WARP_HANDOFF_2026-11-01.md) | current continuation brief (read first if cold-starting) |
+| [`docs/AGENT_QUEUE.md`](docs/AGENT_QUEUE.md) | what to build next, how to claim a row, the rules |
+| [`docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md`](docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md) | active Neo4j→GraphStore plan, stop rules, frozen gates |
 | [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md) | event schema and world-model math |
 | [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md) | phone-to-approval hardware test |
 | [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md) | shadow calibration before a tier goes live |
-| [`docs/AGENT_QUEUE.md`](docs/AGENT_QUEUE.md) | what to build next, how to claim a row, the rules |
-| [`docs/CODEX_HANDOFF.md`](docs/CODEX_HANDOFF.md), [`docs/AGY_HANDOFF.md`](docs/AGY_HANDOFF.md) | per-agent instruction sets for the finish line |
+| [`docs/REMAINING_WORK.md`](docs/REMAINING_WORK.md) | finish-line specs (agent rows Done; owner checklist remains) |
+| [`docs/CODEX_HANDOFF.md`](docs/CODEX_HANDOFF.md), [`docs/AGY_HANDOFF.md`](docs/AGY_HANDOFF.md) | historical per-agent finish-line prompts |
 | [`docs/DATABANK_ARCHITECTURE.md`](docs/DATABANK_ARCHITECTURE.md) | cold archive |
 | [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md) | older audit follow-ups; the date is part of the name |
 

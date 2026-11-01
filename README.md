@@ -62,7 +62,7 @@ Verified `wanted`/`not_wanted` tap labels teach proposal preferences, not action
 
 Full detail: [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md).
 
-The daemon also includes Obsidian, Notion, and Gmail channel adapters with privacy-preserving encryption and Neo4j synchronization. Channel ingestion records encrypted human-readable content to a local, crypto-shreddable `ChannelVault` and emits structured `channel.*` events (document, entity, link, disconnected) into the hash-chained event log with HMAC-SHA256 keyed IDs. Replaying the event log rebuilds the life graph, relational edges, and beliefs with full fidelity.
+The daemon also includes Obsidian, Notion, and Gmail channel adapters with privacy-preserving encryption. Channel ingestion records encrypted human-readable content to a local, crypto-shreddable `ChannelVault` and emits structured `channel.*` events (document, entity, link, disconnected) into the hash-chained event log with HMAC-SHA256 keyed IDs. Replaying the event log rebuilds the life graph, relational edges, and beliefs with full fidelity. The Living Brain UI reads the in-process GraphStore via `/v3/world-model/graph/*`; Neo4j is being retired under [`docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md`](docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md).
 
 ## Quick start
 Install Node 24+ and pnpm. Python tests require an activated virtual environment with `packages/triad` and its development dependencies installed. Desktop builds additionally require Rust and the Tauri prerequisites; Android builds require the Android toolchain.
@@ -146,14 +146,17 @@ Implemented components and remaining evaluation work:
 
 Alongside these, a **next-action prediction log** records guesses about what you will do next, scores them against the event log (misses keep the real action), and reports log loss, Brier score and calibration against a frequency baseline. See [`docs/superpowers/specs/2026-10-10-next-action-prediction-design.md`](docs/superpowers/specs/2026-10-10-next-action-prediction-design.md).
 
-Local models run on llama.cpp, one `llama-server` per role kept alive by `apps/daemon/ops/ensure-llama-server.ps1`: telemetry triage on `:8080` (`LLAMA_CPP_URL`), memory embeddings on `:8081` (`EXOCORTEX_EMBED_URL`; `EXOCORTEX_EMBED_BACKEND=ollama` restores Ollama), and test-screenshot vision on `:8082` (`EXOCORTEX_VISION_URL`). The triad local advisor (`packages/triad`) also uses the `:8080` server (`LLAMA_CPP_URL`); `EXOCORTEX_TRIAD_BACKEND=ollama` restores `ollama run` on `:11434`. The home proxy's `/mobile/ask` fallback (outside this repo) still uses Ollama. `apps/daemon/ops/export-ollama-models.ps1` copies already-pulled Ollama models into `%LOCALAPPDATA%\llama.cpp\models`. Other reasoning paths use subscription CLIs or OpenRouter; the embedded memory gateway defaults to OpenRouter unless configured otherwise. Offline behavior, model availability, and cost depend on configuration. This repository does not establish a universal zero-cloud-cost or VS Code provider guarantee.
+Local models run on llama.cpp, one `llama-server` per role kept alive by `apps/daemon/ops/ensure-llama-server.ps1`: telemetry triage on `:8080` (`LLAMA_CPP_URL`), memory embeddings on `:8081` (`EXOCORTEX_EMBED_URL`; `EXOCORTEX_EMBED_BACKEND=ollama` restores Ollama), and test-screenshot vision on `:8082` (`EXOCORTEX_VISION_URL`). The triad local advisor (`packages/triad`) also uses the `:8080` server (`LLAMA_CPP_URL`); `EXOCORTEX_TRIAD_BACKEND=ollama` restores `ollama run` on `:11434`. The home proxy `/mobile/ask` path was moved off Ollama to llama.cpp (finish-line R9, external repo); keep the env restore switches only as fallbacks. `apps/daemon/ops/export-ollama-models.ps1` copies already-pulled Ollama models into `%LOCALAPPDATA%\llama.cpp\models`. Other reasoning paths use subscription CLIs or OpenRouter; the embedded memory gateway defaults to OpenRouter unless configured otherwise. Offline behavior, model availability, and cost depend on configuration. This repository does not establish a universal zero-cloud-cost or VS Code provider guarantee.
 
 Audit history and follow-ups: [`docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md`](docs/AUDIT_FOLLOWUP_PLAN_2026-10-09.md).
 
 ## Docs
 
+- [`docs/WARP_HANDOFF_2026-11-01.md`](docs/WARP_HANDOFF_2026-11-01.md): current agent/engineer continuation brief (mission + operating procedure)
+- [`docs/AGENT_QUEUE.md`](docs/AGENT_QUEUE.md): what to build next
+- [`docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md`](docs/PLAN_WORLD_MODEL_STORE_2026-10-31.md): Neo4j→GraphStore plan, stop rules, frozen gates
 - [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md): start-from-nothing onboarding — install, configure, pair a phone, verify end-to-end, plus known pitfalls (port collisions, the retired duplicate mobile app)
-- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md): operator manual once the system is running — architecture, telemetry pipelines, cognitive core, security model, port/service health-check matrix, mesh supervisor
+- [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md): operator manual once the system is running — architecture, telemetry pipelines, cognitive core, security model, port/service health-check matrix, mesh supervisor (verify against daemon code; has drift)
 - [`docs/ARCHITECTURE_V3.md`](docs/ARCHITECTURE_V3.md): schema, event pipeline, world model math
 - [`docs/DEVICE_TEST_RUNBOOK.md`](docs/DEVICE_TEST_RUNBOOK.md): phone-to-triad approval test
 - [`docs/SHADOW_EVALUATION_RUNBOOK.md`](docs/SHADOW_EVALUATION_RUNBOOK.md): shadow mode calibration & baseline gap evaluation
