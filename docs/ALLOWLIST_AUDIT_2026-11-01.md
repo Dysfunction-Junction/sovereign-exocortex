@@ -1,7 +1,9 @@
 # Allowlist audit — `packages/allowlist` (T3, 2026-11-01)
 
 **Owner:** opencode · **Scope:** every import site, caller expectation vs. actual behavior, mismatches flagged.
-**No code was changed.** Two findings need a human/Claude call; both are flagged in §5, not fixed.
+**No code was changed.** Three findings need a human/Claude call; all are flagged, not fixed.
+
+> **Second pass (same day):** a cross-repo check against the sibling checkout `C:\Users\micha\Desktop\projects\pieces-android-shizuku-fix` superseded parts of §2, F1 and F2 and surfaced a new gap (F3, pairing). Corrections are marked inline; full evidence in **§9**.
 
 ---
 
@@ -33,7 +35,11 @@ None import `@pieces-android/allowlist`.
 - `apps/proxy` — **does not exist** (apps/: `cli`, `daemon`, `desktop`, `mobile`, `neo4j-import`)
 - `apps/pieces-gateway` — **does not exist**
 
-The daemon logs `pieces-gateway listening on 0.0.0.0:PORT` (`server.ts:2496`), so the *name* survives as a log string, but the directory the comment points at is gone. The "shared by two independently-deployed proxies" invariant is **not enforceable today** — there is one consumer. The comment's stated reason for existing ("two independently-maintained allowlists drift out of sync within a week") no longer describes a live risk.
+The daemon logs `pieces-gateway listening on 0.0.0.0:PORT` (`server.ts:2496`), so the *name* survives as a log string, but the directory the comment points at is gone **from this repo**.
+
+> **Correction (second pass):** `apps/proxy` and `apps/pieces-gateway` **do exist** — in the sibling checkout `pieces-android-shizuku-fix`, and both import this module (via their own physical copy of it, `file:../../packages/allowlist`). The header comment describes cross-repo reality accurately; what failed is the rule it states ("Import this, do not copy it"). The drift the comment warns about **has already happened** — see §9.
+
+The "shared by two independently-deployed proxies" invariant is enforceable in principle — there are three consumers across two repos — but it is **not enforced in practice**, because the sibling repo vendored its own copy instead of importing this one.
 
 ## 3. `docs/ALLOWED_ROUTES.md` does not exist
 
@@ -122,6 +128,10 @@ And the reverse — paths the phone *does* call that are **not** in the table (h
 
 The module has no independent guard: a typo'd route, a broken `findAllowedRoute` match, or a removed deny branch would not fail any test.
 
+**`packages/allowlist` is the only TypeScript in the workspace that no typecheck ever covers.** Three projects lack a `typecheck` script (`packages/allowlist`, `apps/desktop`, `apps/neo4j-import`), but the other two contain zero `.ts`/`.tsx` files — `apps/desktop` is a Tauri shell and `apps/neo4j-import` is plain `.js` — so neither has anything to check. That leaves this package alone: 1 `.ts` file, no script, no test.
+
+Repo-wide typecheck was run after this audit and **passes** (`pnpm -r --stream typecheck`, all 9 script-bearing projects `Done`, including `apps/daemon`). The green result does not cover this package, which is the point — a passing `pnpm -r typecheck` says nothing about the module that gates gateway request forwarding.
+
 ## 8. Summary
 
 | # | Finding | Severity |
@@ -130,7 +140,7 @@ The module has no independent guard: a typo'd route, a broken `findAllowedRoute`
 | F2 | 2 prefix bypasses forward arbitrary suffixes with gateway token | **Needs decision** |
 | 3 | `docs/ALLOWED_ROUTES.md` missing — provenance rule unverifiable | Process gap |
 | 6 | 2 of 5 table routes never called by mobile | Dead config |
-| 7 | No tests, no typecheck script — invisible to CI | Coverage gap |
+| 7 | Sole unchecked TypeScript in the workspace; no tests, no typecheck script | Coverage gap |
 | 2 | Header comment cites two non-existent programs | Stale doc |
 | 1 | Plan's grep target (`@exocortex/allowlist`) matches nothing | Wrong doc |
 
@@ -147,4 +157,5 @@ grep -r "piecesPath"                      # only the type def + the unused bindi
 ls docs/ALLOWED_ROUTES*                   # not found
 ls apps/                                  # no proxy, no pieces-gateway
 ls packages/allowlist/                    # package.json + src/index.ts only
+pnpm -r --stream typecheck                # passes; does NOT cover packages/allowlist
 ```
