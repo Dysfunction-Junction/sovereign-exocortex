@@ -37,6 +37,7 @@ The finish-line builder run (`docs/FINISH_LINE_PLAN_2026-10-28.md`, `docs/REMAIN
 | WM-P4-G1 | After P3-G3, P3-G4, 30-day retention, user confirm: retire local Neo4j | owner | Blocked |
 | DB-PARSERS | Databank domain parsers (Takeout, Join SMS, Health Connect, contacts) on `main` | merged | Done |
 | DB-SENSITIVITY | Databank sensitivity schema v3, rule classifier and retrieval gates (`SPEC_SENSITIVITY_TIERS_2026-11-01.md`) | Codex / Antigravity | Done (`live-v2-to-v3.json` verified on Lubuntu) |
+| DB-DOWNLOADS-INGEST | Ingest Downloads batch into live databank (T0, 320 items, 0 failures, vault 5,989 items) | agy | Done |
 
 ## Finish-line queue (historical, all Done)
 
